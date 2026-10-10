@@ -64,6 +64,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { toast } from "@/components/ui/toast";
 import { mailErrorKind, mailErrorText } from "@/lib/mail/error-text";
 import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
+import { insertByListOrder } from "@/lib/mail/order";
 import { JUNK_UNDO_WINDOW_MS } from "@/lib/mail/undo";
 import type {
   MailAccount,
@@ -549,6 +550,9 @@ export function MailClient({
         append: opts?.append,
         folders,
       });
+      // 整表重取成功 → 列表已经是服务端的真实状态，乐观操作留下的过期标记（stale）清空。
+      // ⚠ 续页（append）不清：那一页是追加在旧数据后面的，已存在的 stale 行还没被换掉。
+      if (!opts?.append) setStaleIds(new Set());
     },
     [accountFilter, view, unseenActive, flaggedActive, q, load, junkFolders],
   );
@@ -902,6 +906,41 @@ export function MailClient({
   }, []);
 
   /**
+   * 乐观 UI 的两个基本动作（2026-10-10 用户要求「乐观 UI」）。
+   *
+   * 背景：整理类动作（标为垃圾 / 移出垃圾 / 删除 / 撤销）的真实耗时是**一次 IMAP
+   * 往返**（建连 + SELECT + 命令，实测约 1 秒，撞上后台同步还要等锁）。等它回来再改
+   * 界面，用户点下去就是"卡一下"。改成**点下去立刻改列表**——用户的"完成"信号就是
+   * 那一行消失/回来——请求在后台跑，失败再用原数据放回原位并报错。
+   *
+   * ⚠ 放回必须按**服务端同一排序**插回（`insertByListOrder`），不是 push 到末尾：
+   *   顺序错乱比"慢"更糟。
+   * ⚠ 插回前查重：这期间用户可能刷新过列表，那一行可能已经在了。
+   * ⚠ 回滚只回列表，**不回服务端**——服务端本来就没被改动（请求失败了），列表现状
+   *   才是真实状态的偏离方。
+   */
+  /**
+   * 数据可能已过期的行（`MailRow` 的 `stale`）：乐观放回时手里那份 `copies` 是
+   * **操作之前**的（uid 可能已失效），所以先不给行内操作条——否则用户再点一下就会
+   * 拿着过期 uid 去搬**别的邮件**。下一次整表重取时清空。
+   */
+  const [staleIds, setStaleIds] = useState<Set<string>>(new Set());
+
+  const removeRow = useCallback((messageId: string) => {
+    setItems((prev) => prev.filter((x) => x.messageId !== messageId));
+    setStaleIds((prev) => {
+      if (!prev.has(messageId)) return prev;
+      const next = new Set(prev);
+      next.delete(messageId);
+      return next;
+    });
+  }, []);
+  const restoreRow = useCallback((m: MailListItem, stale = false) => {
+    setItems((prev) => insertByListOrder(prev, m));
+    if (stale) setStaleIds((prev) => new Set(prev).add(m.messageId));
+  }, []);
+
+  /**
    * 一格状态变更的统一落地（2026-10-06）：刷新未读计数（h1 角标 / 未读开关上标 /
    * 底栏 / 账号菜单）+ 更新列表行。详情页（MAIL_ITEM_CHANGED_EVENT）与列表行内
    * 快捷操作都走这里，两处不再各自漏刷。
@@ -1028,20 +1067,12 @@ export function MailClient({
           return;
         }
         toast.add({ title: t("junkUndone"), type: "success" });
-        // 乐观放回：撤销后这封信回到了原文件夹，列表里该重新出现它。
-        // ⚠ 不置回列表就只能等完同步再整表重取（`POST /sync` 同步等待，十秒起步）——
-        //   toast 已经说"已移回收件箱"了，列表里却还空着，就差这一下。
-        setItems((prev) => {
-          if (prev.some((x) => x.messageId === m.messageId)) return prev;
-          const next = [...prev, m];
-          // 与服务端列表同一排序：`ORDER BY m.date DESC, m.message_id DESC`
-          next.sort(
-            (a, b) =>
-              (b.date ?? "").localeCompare(a.date ?? "") ||
-              b.messageId.localeCompare(a.messageId),
-          );
-          return next;
-        });
+        // **乐观放回**：撤销后这封信回到了原文件夹，列表里该重新出现它（"已移回收件箱"
+        // 的完成信号就是它回来）。
+        // ⚠ 标记 `stale`：手里这份 `m.copies` 是**搬走前**的垃圾夹副本（uid 已失效），
+        //   放回的那一行数据是过期的——操作条先不给，免得用户再点一下就把信搬到别的
+        //   邮件上（见 `MailRow` 的 `stale`）。下一次整表重取会换成服务端的真实数据。
+        restoreRow(m, true);
         void (async () => {
           await Promise.all(
             accountIds.map((accountId) =>
@@ -1062,7 +1093,7 @@ export function MailClient({
         });
       }
     },
-    [reload, t],
+    [reload, t, restoreRow],
   );
 
   /**
@@ -1086,6 +1117,8 @@ export function MailClient({
   const notJunkFromList = useCallback(
     async (m: MailListItem) => {
       const accountIds = [...new Set(m.copies.map((c) => c.accountId))];
+      // 乐观：立刻摘行
+      removeRow(m.messageId);
       try {
         const res = await fetch("/api/mail/move", {
           method: "POST",
@@ -1095,6 +1128,7 @@ export function MailClient({
         if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
         const data = (await res.json()) as { affected: number; skipped?: { reason: string }[] };
         if (data.affected === 0) {
+          restoreRow(m);
           toast.add({
             title: t("notJunkFailed"),
             description: data.skipped?.[0]?.reason,
@@ -1102,7 +1136,6 @@ export function MailClient({
           });
           return;
         }
-        setItems((prev) => prev.filter((x) => x.messageId !== m.messageId));
         toast.add({ title: t("notJunkDone"), type: "success" });
         void (async () => {
           await Promise.all(
@@ -1117,6 +1150,7 @@ export function MailClient({
           await reload();
         })();
       } catch (err) {
+        restoreRow(m);
         toast.add({
           title: t("notJunkFailed"),
           description: err instanceof Error ? err.message : String(err),
@@ -1124,7 +1158,7 @@ export function MailClient({
         });
       }
     },
-    [reload, t],
+    [reload, t, removeRow, restoreRow],
   );
 
   /**
@@ -1139,6 +1173,8 @@ export function MailClient({
    */
   const markJunkFromList = useCallback(
     async (m: MailListItem) => {
+      // 乐观：立刻摘行（"已标为垃圾"的完成信号就是它消失），请求在后台跑
+      removeRow(m.messageId);
       try {
         const res = await fetch("/api/mail/move", {
           method: "POST",
@@ -1149,16 +1185,20 @@ export function MailClient({
         const data = (await res.json()) as { affected: number; skipped?: { reason: string }[] };
         const skipped = data.skipped ?? [];
         if (data.affected === 0) {
+          // 服务端一个副本都没动（本来就在垃圾里 / 该账号没有垃圾夹）→ 行放回去
+          restoreRow(m);
           if (skipped.length === 0) toast.add({ title: t("moveSameFolder") });
           else toast.add({ title: t("junkFailed"), description: skipped[0].reason, type: "error" });
           return;
         }
         if (skipped.length > 0) {
+          // 部分账号没搬（没有垃圾夹）：那种情况下信还在别的文件夹里，摘行就成了
+          // 「界面说没了、刷新又回来」——放回去并按服务端重取
+          restoreRow(m);
           toast.add({ title: t("junkFailed"), description: skipped[0].reason, type: "error" });
           await reload();
           return;
         }
-        setItems((prev) => prev.filter((x) => x.messageId !== m.messageId));
         broadcastItemChange({ messageId: m.messageId, deleted: true, source: "list" });
         toast.add({
           title: t("junkDone"),
@@ -1177,6 +1217,7 @@ export function MailClient({
           }).catch(() => {});
         }
       } catch (err) {
+        restoreRow(m);
         toast.add({
           title: t("junkFailed"),
           description: err instanceof Error ? err.message : String(err),
@@ -1184,12 +1225,14 @@ export function MailClient({
         });
       }
     },
-    [loadAccounts, reload, t, undoJunk],
+    [loadAccounts, reload, t, undoJunk, removeRow, restoreRow],
   );
 
   const doDelete = useCallback(async () => {
     if (!pendingDelete) return;
     setDeleting(true);
+    // 乐观：立刻摘行（删除的"完成"信号就是它消失）
+    removeRow(pendingDelete.messageId);
     try {
       const res = await fetch("/api/mail/delete", {
         method: "POST",
@@ -1197,17 +1240,18 @@ export function MailClient({
         body: JSON.stringify({ copies: pendingDelete.copies }),
       });
       if (!res.ok) throw new Error();
-      setItems((prev) => prev.filter((m) => m.messageId !== pendingDelete.messageId));
       toast.add({ title: t("deleted"), type: "success" });
       // 删的正好是右栏正在看的那封：右栏退回占位态（否则会留着一封已删邮件的正文）
       if (activeMessageId === pendingDelete.messageId) router.push("/mail");
       setPendingDelete(null);
+      loadAccounts();
     } catch {
+      restoreRow(pendingDelete);
       toast.add({ title: t("actionFailed"), type: "error" });
     } finally {
       setDeleting(false);
     }
-  }, [pendingDelete, t, activeMessageId, router]);
+  }, [pendingDelete, t, activeMessageId, router, removeRow, restoreRow, loadAccounts]);
 
   /** 草稿删除（草稿箱行内操作，ConfirmDialog 确认后执行） */
   const doDeleteDraft = useCallback(async () => {
@@ -2034,6 +2078,7 @@ export function MailClient({
                   threadCount={members.length}
                   threadOpen={open}
                   onToggleThread={toggleThread}
+                  stale={staleIds.has(lead.messageId)}
                 />
                 {/* 就地展开（2026-10-10）：把组内**其它**几封排在代表行后面，
                     组内顺序 = 服务端给的 date DESC，故越往下越早 */}

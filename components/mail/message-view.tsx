@@ -283,6 +283,11 @@ export function MessageView({ messageId }: { messageId: string }) {
   const notJunk = useCallback(async () => {
     if (!detail) return;
     setActing(true);
+    // 乐观：**立刻**退出这封并通知左栏摘行（"已移出垃圾"的完成信号就是它），请求在
+    // 后台跑。⚠ 必须摘：留着那一行就是个能再点的「移出垃圾」，而它的 copies 已失效，
+    // 再点会搬到**别的邮件**上。失败时广播 refresh，让列表按服务端恢复。
+    broadcastItemChange({ messageId, deleted: true, source: "detail" });
+    router.push("/mail", mailNavOptions());
     try {
       const res = await fetch("/api/mail/move", {
         method: "POST",
@@ -292,24 +297,16 @@ export function MessageView({ messageId }: { messageId: string }) {
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
       const data = (await res.json()) as { affected: number; skipped?: { reason: string }[] };
       if (data.affected === 0) {
+        broadcastItemChange({ messageId, refresh: true, source: "detail" });
         toast.add({
           title: t("notJunkFailed"),
           description: data.skipped?.[0]?.reason,
           type: "error",
         });
-        setActing(false);
         return;
       }
-      // ⚠ **零等待**（2026-10-10 用户报「移出垃圾很慢」）：`/move` 已经把垃圾夹那一行从
-      //   本地索引删了，INBOX 里的新副本要等下一轮同步才发现。所以：
-      //   ① 立刻广播 `deleted` —— 左栏那行先摘掉（留着它就是个能再点的「移出垃圾」，
-      //      而手里的 copies 已失效，再点会搬到**别的邮件**上）；
-      //   ② 同步放后台，完了再广播 `refresh` 让列表重取（这封现在在收件箱，该回到
-      //      「全部」这类视图里）。
-      //   ⚠ 曾经广播 `refresh` 了事——列表当场重取时本地索引还没更新，看上去就是
-      //     “点了没反应”（要等下一轮 30s 轮询）。
-      broadcastItemChange({ messageId, deleted: true, source: "detail" });
       toast.add({ title: t("notJunkDone"), type: "success" });
+      // 同步放后台，完了再让列表重取（这封现在在收件箱，该回到「全部」这类视图里）
       void (async () => {
         await Promise.all(
           copyAccountIds.map((accountId) =>
@@ -322,8 +319,8 @@ export function MessageView({ messageId }: { messageId: string }) {
         );
         broadcastItemChange({ messageId, refresh: true, source: "detail" });
       })();
-      router.push("/mail", mailNavOptions());
     } catch (err) {
+      broadcastItemChange({ messageId, refresh: true, source: "detail" });
       toast.add({
         title: t("notJunkFailed"),
         description: err instanceof Error ? err.message : String(err),
@@ -337,9 +334,9 @@ export function MessageView({ messageId }: { messageId: string }) {
    * 撤销刚做完的「标为垃圾」（2026-10-10 用户要求）。
    *
    * 与列表那枚同源（见 `mail-client.tsx` 的 `undoJunk`）：MOVE 之后 UID 已变，得由
-   * 服务端在垃圾夹里 `SEARCH HEADER Message-ID` 现场定位再搬回来；本地索引要等一次
-   * 同步才会在原文件夹里重建副本行。这里比列表版多一件事——广播 `refresh` 让左栏
-   * 整表重取（`deleted` 那条广播已经把列表里那行摘掉了，摘完得让它回来）。
+   * 服务端在垃圾夹里拉一遍 Message-ID 头现场定位（见 `undoJunkMove`）再搬回来；本地
+   * 索引要等一次同步才会在原文件夹里重建副本行。这里比列表版多一件事——广播 `refresh`
+   * 让左栏整表重取（`deleted` 那条广播已经把列表里那行摘掉了，摘完得让它回来）。
    */
   const undoJunk = useCallback(async () => {
     if (!detail) return;
@@ -402,6 +399,10 @@ export function MessageView({ messageId }: { messageId: string }) {
   const markJunk = useCallback(async () => {
     if (!detail) return;
     setActing(true);
+    // 乐观：**立刻**退出这封并通知左栏摘行，请求在后台跑（一次 IMAP 往返 ≈ 1 秒，
+    // 等它回来才动界面就是“卡一下”）。失败时广播 refresh，让列表按服务端恢复。
+    broadcastItemChange({ messageId, deleted: true, source: "detail" });
+    router.push("/mail", mailNavOptions());
     try {
       const res = await fetch("/api/mail/move", {
         method: "POST",
@@ -412,14 +413,14 @@ export function MessageView({ messageId }: { messageId: string }) {
       const data = (await res.json()) as { affected: number; skipped?: { reason: string }[] };
       const skipped = data.skipped ?? [];
       if (skipped.length > 0) {
+        broadcastItemChange({ messageId, refresh: true, source: "detail" });
         toast.add({ title: t("junkFailed"), description: skipped[0].reason, type: "error" });
       }
       if (data.affected === 0) {
+        broadcastItemChange({ messageId, refresh: true, source: "detail" });
         if (skipped.length === 0) toast.add({ title: t("moveSameFolder") });
-        setActing(false);
         return;
       }
-      broadcastItemChange({ messageId, deleted: true, source: "detail" });
       toast.add({
         title: t("junkDone"),
         type: "success",
@@ -434,8 +435,8 @@ export function MessageView({ messageId }: { messageId: string }) {
           body: JSON.stringify({ accountId }),
         }).catch(() => {});
       }
-      router.push("/mail", mailNavOptions());
     } catch (err) {
+      broadcastItemChange({ messageId, refresh: true, source: "detail" });
       toast.add({
         title: t("junkFailed"),
         description: err instanceof Error ? err.message : String(err),
@@ -722,6 +723,10 @@ export function MessageView({ messageId }: { messageId: string }) {
   const doDelete = useCallback(async () => {
     if (!detail) return;
     setActing(true);
+    // 乐观：**立刻**退出这封并通知左栏移除该行（删除的“完成”信号就是它），请求在
+    // 后台跑；失败时广播 refresh 让列表按服务端恢复（那封信其实还在）。
+    broadcastItemChange({ messageId, deleted: true, source: "detail" });
+    router.push("/mail");
     try {
       const res = await fetch("/api/mail/delete", {
         method: "POST",
@@ -730,10 +735,8 @@ export function MessageView({ messageId }: { messageId: string }) {
       });
       if (!res.ok) throw new Error();
       toast.add({ title: t("deleted"), type: "success" });
-      // 左栏移除该行 + 未读计数回正（此前删完回列表，已删的行还留在列表上）
-      broadcastItemChange({ messageId, deleted: true, source: "detail" });
-      router.push("/mail");
     } catch {
+      broadcastItemChange({ messageId, refresh: true, source: "detail" });
       toast.add({ title: t("actionFailed"), type: "error" });
       setActing(false);
     }

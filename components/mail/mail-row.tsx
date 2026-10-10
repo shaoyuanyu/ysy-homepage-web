@@ -72,6 +72,16 @@ export interface MailRowProps {
   /** 这一行的会话已就地展开（子行由父组件渲染在它后面） */
   threadOpen: boolean;
   onToggleThread: (messageId: string) => void;
+  /**
+   * 这一行的**数据可能已过期**（乐观放回后还没跟服务端对齐，2026-10-10）→ 不渲染
+   * 行内操作条。
+   *
+   * 为什么必须有它在：乐观放回时手里那份 `copies` 是**操作之前**的（比如撤销后放回的
+   * 那一行，`copies` 还指着垃圾夹、uid 已经失效）。留着操作条，用户再点一下
+   * 「标为垃圾」，服务端就会拿着那个过期 uid 在**别的文件夹**里搬——搬错的是另一封。
+   * 下一次整表重取会把这一行换成服务端的真实数据，标记随之消除。
+   */
+  stale?: boolean;
 }
 
 function MailRowImpl({
@@ -94,6 +104,7 @@ function MailRowImpl({
   threadCount,
   threadOpen,
   onToggleThread,
+  stale = false,
 }: MailRowProps) {
   const t = useTranslations("mail");
   /** 有会话才给行尾留出箭头的位置（无会话时行布局与从前逐像素一致） */
@@ -248,7 +259,7 @@ function MailRowImpl({
             **钉在屏幕上**——鼠标移到别的行就两条并存。键盘 Tab 进这一行时按钮是
             `:focus-visible`，气泡栏照旧出现、可继续 Tab 进去，可达性不变。
             ⚠ 日期的 `invisible` 必须用**同一个触发条件**（否则鼠标点完那行的日期被永久藏掉） */}
-      {!selectMode && (
+      {!selectMode && !stale && (
         <span
           data-slot="mail-row-actions"
           className={cn(
@@ -331,7 +342,7 @@ function MailRowImpl({
       {/* 会话展开箭头（2026-10-10）：常驻在行尾、与行主按钮**平级**（不能嵌在按钮里
           ——HTML 不允许嵌套 button，读屏也会把两枚按钮的意思混在一起）。
           日期在悬浮时让位（与行内动作条同一规则），箭头始终可点。 */}
-      {!selectMode && showsThread && (
+      {!selectMode && showsThread && !stale && (
         <button
           type="button"
           data-slot="mail-thread-toggle"
