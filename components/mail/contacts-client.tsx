@@ -131,6 +131,26 @@ export function ContactsClient() {
       return;
     }
     setSaving(true);
+    /**
+     * 乐观（2026-10-10）：弹窗立刻关、这一条**立刻**进列表；请求在后台跑。
+     * ⚠ 新增用**临时 id**（`tmp-…`）：真 id 由服务端生成，完成后那次 `loadContacts`
+     *   会用服务端的真实数据整个换掉列表（临时项随之消失）。
+     * ⚠ 编辑沿用原 id（它就是同一条）。
+     */
+    const now = new Date().toISOString();
+    const optimistic: MailContact = {
+      id: dialog.mode === "add" ? `tmp-${Date.now()}` : dialog.contact!.id,
+      name: dialog.name.trim(),
+      email: dialog.email.trim(),
+      note: dialog.note.trim(),
+      account: dialog.contact?.account ?? "",
+      createdAt: dialog.contact?.createdAt ?? now,
+      updatedAt: now,
+    };
+    setDialog(null);
+    setContacts((prev) =>
+      prev ? [optimistic, ...prev.filter((c) => c.id !== optimistic.id)] : prev,
+    );
     try {
       const res =
         dialog.mode === "add"
@@ -147,10 +167,12 @@ export function ContactsClient() {
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error ?? `${res.status}`);
       toast.add({ title: t("contacts.saved"), type: "success" });
-      setDialog(null);
-      // 收录区也要刷新：刚保存的地址会从「自动收录」里消失
-      await Promise.all([loadContacts(q), loadKnown()]);
+      // 收录区也要刷新：刚保存的地址会从「自动收录」里消失（不阻塞——界面已经是新样子了）
+      void Promise.all([loadContacts(q), loadKnown()]);
     } catch (err) {
+      // 回滚：把乐观项拿掉，并按服务端重取（顺序与内容以服务端为准）
+      setContacts((prev) => (prev ? prev.filter((c) => c.id !== optimistic.id) : prev));
+      void loadContacts(q);
       toast.add({
         title: t("contacts.saveFailed"),
         description: err instanceof Error ? err.message : String(err),
@@ -163,18 +185,22 @@ export function ContactsClient() {
 
   const doDelete = useCallback(async () => {
     if (!pendingDelete) return;
+    const target = pendingDelete;
+    // 乐观：弹窗立刻关、这一行**立刻**消失（删失败再按服务端重取把它找回来）
+    setPendingDelete(null);
+    setContacts((prev) => (prev ? prev.filter((c) => c.id !== target.id) : prev));
     setDeleting(true);
     try {
-      const res = await fetch(`/api/mail/contacts/${encodeURIComponent(pendingDelete.id)}`, {
+      const res = await fetch(`/api/mail/contacts/${encodeURIComponent(target.id)}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error();
       toast.add({ title: t("contacts.deleted"), type: "success" });
-      setPendingDelete(null);
       // 删除后该地址可能重新出现在「自动收录」里
-      await Promise.all([loadContacts(q), loadKnown()]);
+      void Promise.all([loadContacts(q), loadKnown()]);
     } catch {
       toast.add({ title: t("actionFailed"), type: "error" });
+      void loadContacts(q);
     } finally {
       setDeleting(false);
     }
@@ -184,6 +210,28 @@ export function ContactsClient() {
   const saveKnown = useCallback(
     async (sender: MailKnownSender) => {
       setSavingKnown(sender.email);
+      /**
+       * 乐观：这一条**立刻**从「自动收录」移走、并放进上面那个通讯录列表。
+       * （临时 id 同上；后台那次 `loadContacts` 会用服务端的真实数据换掉。）
+       */
+      const now = new Date().toISOString();
+      setKnown((prev) => (prev ?? []).filter((k) => k.email !== sender.email));
+      setContacts((prev) =>
+        prev
+          ? [
+              {
+                id: `tmp-${Date.now()}`,
+                name: sender.name,
+                email: sender.email,
+                note: "",
+                account: "",
+                createdAt: now,
+                updatedAt: now,
+              },
+              ...prev,
+            ]
+          : prev,
+      );
       try {
         const res = await fetch("/api/mail/contacts", {
           method: "POST",
@@ -193,9 +241,11 @@ export function ContactsClient() {
         const data = await res.json().catch(() => null);
         if (!res.ok) throw new Error(data?.error ?? `${res.status}`);
         toast.add({ title: t("contacts.savedToast"), type: "success" });
-        setKnown((prev) => (prev ?? []).filter((k) => k.email !== sender.email));
-        await loadContacts(q);
+        void loadContacts(q);
       } catch (err) {
+        // 回滚：从通讯录里拿掉、让收录区按服务端重取（顺序是按通信次数排的，不手推）
+        void loadKnown();
+        void loadContacts(q);
         toast.add({
           title: t("contacts.saveFailed"),
           description: err instanceof Error ? err.message : String(err),
@@ -205,7 +255,7 @@ export function ContactsClient() {
         setSavingKnown(null);
       }
     },
-    [q, loadContacts, t],
+    [q, loadContacts, loadKnown, t],
   );
 
   return (
