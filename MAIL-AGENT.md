@@ -992,6 +992,7 @@ SnappyMail / Roundcube 都不用。前端要自己写：要 shadcn 风格、要�
 | 21 | 删 `messages` 行但**不删 `eml/` 里的原文文件** | 索引清了、磁盘不还：删掉一个 6700 封的账号后库里只剩 15 封，`eml/` 却仍留着 **6707 个文件 / 438MB**，而且永远不会再被引用 | 清理时用 `collectEml` 取出原文路径、**事务提交后**调 `removeEmlFiles()`（先删文件后提交会永久丢原文）；只接受库自己生成的 `eml/...` 路径 |
 | 23 | 例行元数据 FETCH 里带 `envelope`（或每条命令前重发一次 `EXAMINE`） | 同步悄无声息地慢 4~5 倍：真机实测 `envelope` 单项 ≈15ms/封（`flags+date+size` 合计 0.7ms/封），而按 UID 区间取元数据时**故意多取一倍** → 每块 400 封白花 6 秒；`mailboxOpen` 每次都真发命令，一块 80 封里能发近十条重复 EXAMINE。用户侧只表现为「怎么这么慢」，没有任何报错 | 例行元数据遍只要 `uid/flags/internalDate/size`，头部从**原文**解析（反正要下载）；没有原文的超大邮件用 `fetchEnvelopes()` 单独补信封。`openReadOnly` 用 `client.mailbox.path` 判断已经开着就跳过。回归：`mail/test/oversized.test.ts`（4.17.2） |
 | 22 | 删账号只清 `copies` / `messages`，**不清 `folders` 行**（水位线 + 回填游标） | 账号 id 由邮箱地址推导（`deriveId`）→「删掉再重加同一个邮箱」= 同一个 id = **继承旧水位线**：服务端几千封全被当成「早就抓过了」，`backfill_uid` 又是 NULL（不算「有待回填」）→ 既不抓也不回填、**界面无进度、无报错**（2026-10-08 用户报「加了账号毫无动静」） | `purgeAccountState()`（`webmail/src/accounts.ts`）把 folders 行与副本一起清，`deleteAccount` 与「新增账号前的兜底」共用；判据侧 `syncFolder` 再自愈一次（水位线 > 0 且本地 0 副本且无待回填 → 当作从未同步过重来）。回归：`mail/test/backfill.test.ts` + `webmail/test/account-state.test.ts`（4.17.1） |
+| 24 | 用 `SEARCH HEADER Message-ID <值>` 在服务端定位某一封 | **阿里云与 QQ 的个人邮箱对它一律返回空集且不报错**（2026-10-10 实测：裸值 / 带尖括号 / 只取 local part 三种形式，两家全部 `[]`，而同一封邮件的 `Message-Id:` 头就在那儿、同一连接 FETCH 得到）。上层代码走进「找不到这封邮件」的正常分支，表面上一切正常——「撤销标为垃圾」因此在真实邮箱上**永远失败**，而 E2E 全绿（`/api/mail/**` 整段打桩） | 定位改成 `SELECT` 后 `FETCH 1:*` 只取 `message-id` 头（每封约 100 字节）在**本地比对**；两边都过 `normalizeMessageId`（服务端写法不一，实测同一账号里有 `Message-ID:` 也有 `Message-Id:`）。**推论：任何"服务端搜索"能力（`SEARCH`、`THREAD`）在动手前都先在真实账号上实测一遍**，别拿 RFC 当保证——本地那份能力实测记录见第 4.6/九节 |
 
 ### 7.1 第 1 条单列（最严重）
 
@@ -1017,6 +1018,7 @@ IMAP 的规矩是：用不带 PEEK 的取法读正文，服务端会**顺手把�
 - [x] agent@ 凭据已生成并实测登录通过（2026-09-30 本机实测 IMAP/SMTP 均 OK；`mail/scripts/probe-imap.ts` 可复测，不打印凭据）；me@ 与学校邮箱凭据待补。**不要用主密码**（腾讯与开了专用密码的账号）
 - [ ] 从 VPS 用每个账号实测一次 IMAP 登录（agent@ 本机已实测，VPS 侧随部署验证）
 - [x] 阿里 IMAP 能力实测（2026-09-30，`agent@mail.shaoyuanyu.cn`）：**IDLE ✓**（5.1 事件驱动成立）；**`THREAD` ✗**（会话组装走 6.1 的本地 References 拼接）；**SPECIAL-USE ✗**（`\Sent` 走常见名回退——实际文件夹名「已发送」，已在回退链内）；**MOVE ✗**（imapflow 自动回退 COPY + `\Deleted` + EXPUNGE；阿里有 UIDPLUS，UID EXPUNGE 只清指定 UID）；文件夹 = INBOX / 已发送 / 草稿 / 垃圾邮件 / 已删除邮件。腾讯待实测
+- [x] **`SEARCH HEADER` 实测 ✗✗（2026-10-10，阿里云 `me` + QQ `shaoyuanyu` 两个真实账号）**：对**同一封确实存在**的邮件返回空集且**不报错**——三种形式（裸值 / 带尖括号 / 只取 local part）两家全部 `[]`。别用它做任何定位（见红线 24）。同一次实测顺带确认：**同一个账号里的 `Message-Id:` 头大小写不统一**（实测有 `Message-ID:` 也有 `Message-Id:`），比对前两边都要过 `normalizeMessageId`。⚠ **推论：`SEARCH`、`THREAD` 这类"服务端搜索"能力在这两家邮箱上都不可信**——动手前先在真实账号上实测，E2E 与单测都抓不到（前者整段打桩、后者的 dovecot 支持这些扩展）。
 
 ### 1. mailagentd：取信与索引
 
