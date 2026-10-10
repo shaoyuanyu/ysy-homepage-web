@@ -13,6 +13,7 @@ import {
 
 import { Link } from "@/lib/i18n/navigation";
 import { mailErrorText } from "@/lib/mail/error-text";
+import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
 import { useOwnAddresses } from "@/lib/mail/use-own-addresses";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -73,14 +74,14 @@ export function ContactsClient() {
   const loadContacts = useCallback(async (query: string) => {
     const params = new URLSearchParams();
     if (query.trim()) params.set("q", query.trim());
-    const res = await fetch(`/api/mail/contacts?${params}`);
+    const res = await fetchWithTimeout(`/api/mail/contacts?${params}`);
     if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
     const data = (await res.json()) as { items: MailContact[] };
     setContacts(data.items);
   }, []);
 
   const loadKnown = useCallback(async () => {
-    const res = await fetch("/api/mail/contacts/known?limit=30");
+    const res = await fetchWithTimeout("/api/mail/contacts/known?limit=30");
     if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
     const data = (await res.json()) as { items: MailKnownSender[] };
     setKnown(data.items);

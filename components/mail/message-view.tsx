@@ -310,12 +310,16 @@ export function MessageView({ messageId }: { messageId: string }) {
   const fetchSourceNow = useCallback(async () => {
     setFetchingSource(true);
     try {
-      const res = await fetch(`/api/mail/message/${encodeURIComponent(messageId)}/source`, {
-        method: "POST",
-      });
+      // 取原文要连一次 IMAP 把整封拉回来（几秒），给一个比普通读路径更宽的上限；
+      // 没有上限时请求卡住会让按钮永远转圈（见 lib/mail/fetch-timeout.ts）
+      const res = await fetchWithTimeout(
+        `/api/mail/message/${encodeURIComponent(messageId)}/source`,
+        { method: "POST" },
+        60_000,
+      );
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
       // 取回后重新拉详情：正文、附件、头部一次到位
-      const detailRes = await fetch(`/api/mail/message/${encodeURIComponent(messageId)}`);
+      const detailRes = await fetchWithTimeout(`/api/mail/message/${encodeURIComponent(messageId)}`);
       if (detailRes.ok) setDetail((await detailRes.json()) as MailDetail);
       toast.add({ title: t("sourceFetched"), type: "success" });
     } catch (err) {
@@ -381,7 +385,7 @@ export function MessageView({ messageId }: { messageId: string }) {
     // （用户上一次拨动开关的意志不跨邮件延续）
     setThreadOpen(true);
     setThreadTouched(false);
-    fetch(`/api/mail/message/${encodeURIComponent(messageId)}/thread`)
+    fetchWithTimeout(`/api/mail/message/${encodeURIComponent(messageId)}/thread`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { items: MailListItem[] } | null) => {
         if (!cancelled && d) setThread(d.items);

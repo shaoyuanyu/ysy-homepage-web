@@ -6,6 +6,7 @@ import { CircleAlertIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { mailErrorKind } from "@/lib/mail/error-text";
+import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
 import { Spinner } from "@/components/ui/spinner";
 import { MAIL_ACCOUNTS_CHANGED_EVENT } from "@/components/mail/accounts-dialog";
 
@@ -157,7 +158,7 @@ export function useSyncStatus(): {
   // 名称映射：挂载时取一次，账号增删后（同一事件源，见下）再取一次
   useEffect(() => {
     const loadNames = () => {
-      fetch("/api/mail/accounts", { cache: "no-store" })
+      fetchWithTimeout("/api/mail/accounts", { cache: "no-store" })
         .then((r) => (r.ok ? r.json() : []))
         .then((list: { id: string; displayName?: string }[]) =>
           setNames(Object.fromEntries(list.map((a) => [a.id, a.displayName?.trim() || a.id]))),
@@ -185,8 +186,8 @@ export function useSyncStatus(): {
       !iso || Date.now() - new Date(iso).getTime() > STALE_MS;
 
     const [mailagentdRes, webmailRes] = await Promise.allSettled([
-      fetch("/api/mail/agent/health", { cache: "no-store" }),
-      fetch("/api/mail/health", { cache: "no-store" }),
+      fetchWithTimeout("/api/mail/agent/health", { cache: "no-store" }),
+      fetchWithTimeout("/api/mail/health", { cache: "no-store" }),
     ]);
     const mailagentdUp = mailagentdRes.status === "fulfilled" && mailagentdRes.value.ok;
     const webmailUp = webmailRes.status === "fulfilled" && webmailRes.value.ok;

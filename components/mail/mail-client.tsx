@@ -12,9 +12,6 @@ import {
 import { useLocale, useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
 import {
-  ArrowDownLeftIcon,
-  ArrowLeftRightIcon,
-  ArrowUpRightIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -23,13 +20,9 @@ import {
   InboxIcon,
   LogInIcon,
   MailCheckIcon,
-  MailIcon,
-  MailOpenIcon,
-  OctagonAlertIcon,
   PaperclipIcon,
   RefreshCwIcon,
   SearchIcon,
-  SquareCheckBigIcon,
   SquarePenIcon,
   StarIcon,
   Trash2Icon,
@@ -37,8 +30,8 @@ import {
 
 import { cn } from "@/lib/utils";
 import { Link, usePathname, useRouter } from "@/lib/i18n/navigation";
-import { encodeMessageId, MAIL_LIST_ORDER_KEY } from "@/lib/mail/id";
-import { isSentItem } from "@/lib/mail/kind";
+import { decodeMessageId, encodeMessageId, MAIL_LIST_ORDER_KEY } from "@/lib/mail/id";
+import { formatDate } from "@/lib/mail/format";
 import { mailNavOptions } from "@/lib/mail/nav";
 import { useOwnAddresses } from "@/lib/mail/use-own-addresses";
 import { MAIL_ACCOUNTS_CHANGED_EVENT } from "@/components/mail/accounts-dialog";
@@ -46,7 +39,8 @@ import { MAIL_DRAFTS_CHANGED_EVENT } from "@/components/mail/compose-form";
 import { broadcastItemChange, MAIL_ITEM_CHANGED_EVENT, type MailItemChange } from "@/components/mail/message-view";
 import { MAIL_UNREAD_EVENT } from "@/components/mail/new-mail-notifier";
 import { AccountMenu } from "@/components/mail/account-menu";
-import { MailBatchBar, MailRowCheckbox } from "@/components/mail/mail-batch-bar";
+import { MailBatchBar } from "@/components/mail/mail-batch-bar";
+import { MailRow } from "@/components/mail/mail-row";
 import { accountDotProps } from "@/components/mail/account-dot";
 import { MOTION_SIZE, TOOLBAR_MS } from "@/components/mail/motion";
 import { usePublishMailBar } from "@/components/mail/mail-statusbar";
@@ -76,16 +70,6 @@ import type {
   MailListItem,
   MailListResponse,
 } from "@/lib/mail/types";
-
-function formatDate(dateIso: string | null, locale: string): string {
-  if (!dateIso) return "";
-  const d = new Date(dateIso);
-  const now = new Date();
-  const sameDay = d.toDateString() === now.toDateString();
-  return d.toLocaleString(locale, sameDay
-    ? { hour: "2-digit", minute: "2-digit" }
-    : { month: "short", day: "numeric" });
-}
 
 /**
  * 视图切换（2026-10-05 微调，用户定稿）：下划线 Tabs「全部 / 收件（默认）/ 发件 / 草稿 / 垃圾」——
@@ -173,6 +157,19 @@ export function MailClient({
     () => (pathname.startsWith("/mail/message/") ? pathname.slice("/mail/message/".length) : null),
     [pathname],
   );
+  /**
+   * 右栏正在看的那一封的 **messageId**（`activeId` 是 base64url 编码形式，见 lib/mail/id）。
+   * 列表行按它算一个 boolean 传下去——若把编码串直接传给每一行，任一次切换都会让
+   * 全部行重渲（见 mail-row.tsx 的 memo 说明）。
+   */
+  const activeMessageId = useMemo(() => {
+    if (!activeId) return null;
+    try {
+      return decodeMessageId(activeId);
+    } catch {
+      return null;
+    }
+  }, [activeId]);
 
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   // 自己的地址（收件人视角的「双向邮件」判定：发件人与收件人都是我的账号，2026-10-06）
@@ -416,7 +413,7 @@ export function MailClient({
 
   // 账号列表（筛选 chips、色点与未读数徽章）
   const loadAccounts = useCallback(() => {
-    fetch("/api/mail/accounts")
+    fetchWithTimeout("/api/mail/accounts")
       .then((r) => (r.ok ? r.json() : []))
       .then((data: MailAccount[]) => setAccounts(data.filter((a) => a.enabled)))
       .catch(() => {});
@@ -426,7 +423,7 @@ export function MailClient({
   const loadDrafts = useCallback(async () => {
     // ① 本地缓存先出列表（快、断网也能看）
     try {
-      const r = await fetch("/api/mail/drafts");
+      const r = await fetchWithTimeout("/api/mail/drafts");
       const data = (await r.json()) as { items?: MailDraft[]; errors?: { error: string }[] };
       setDrafts(data.items ?? []);
       setDraftErrors((data.errors ?? []).map((e) => e.error));
@@ -437,7 +434,8 @@ export function MailClient({
     // ② 再去服务商草稿箱对一遍（手机写的草稿由此进来）。TTL 在后端，来回切 tab 不会再刷。
     setDraftsSyncing(true);
     try {
-      const r = await fetch("/api/mail/drafts?refresh=1");
+      // 跨境 IMAP 核对可能要十几秒，给比普通读路径更宽的上限
+      const r = await fetchWithTimeout("/api/mail/drafts?refresh=1", undefined, 60_000);
       const data = (await r.json()) as { items?: MailDraft[]; errors?: { error: string }[] };
       setDrafts(data.items ?? []);
       setDraftErrors((data.errors ?? []).map((e) => e.error));
@@ -510,7 +508,7 @@ export function MailClient({
     for (const id of ids) {
       let hit = junkCacheRef.current.get(id);
       if (!hit) {
-        const res = await fetch(`/api/mail/folders?account=${encodeURIComponent(id)}`);
+        const res = await fetchWithTimeout(`/api/mail/folders?account=${encodeURIComponent(id)}`);
         if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
         const data = (await res.json()) as { folders: MailFolder[]; synced: string[] };
         const paths = data.folders
@@ -1054,14 +1052,14 @@ export function MailClient({
       setItems((prev) => prev.filter((m) => m.messageId !== pendingDelete.messageId));
       toast.add({ title: t("deleted"), type: "success" });
       // 删的正好是右栏正在看的那封：右栏退回占位态（否则会留着一封已删邮件的正文）
-      if (activeId === encodeMessageId(pendingDelete.messageId)) router.push("/mail");
+      if (activeMessageId === pendingDelete.messageId) router.push("/mail");
       setPendingDelete(null);
     } catch {
       toast.add({ title: t("actionFailed"), type: "error" });
     } finally {
       setDeleting(false);
     }
-  }, [pendingDelete, t, activeId, router]);
+  }, [pendingDelete, t, activeMessageId, router]);
 
   /** 草稿删除（草稿箱行内操作，ConfirmDialog 确认后执行） */
   const doDeleteDraft = useCallback(async () => {
@@ -1088,28 +1086,28 @@ export function MailClient({
   }, [accounts]);
 
   /**
-   * 列表首行名字位显示的「对方」：收件 = 发件人；发件 = 收件人（多人补「等 N 人」）。
-   * 方向由头像右下角的箭头角标（↙ 收件 / ↗ 发件）表达，名字位只放名字——
-   * 不再带「发给 」前缀（2026-10-04 用户反馈：文字前缀让列表密密麻麻，改用视觉语言）。
+   * 列表行要用的账号索引。`MailRow` 是 memo 组件，传给它的每个 prop 都必须是稳定引用；
+   * 行只读 `displayName` / `color`，故按「id + 显示名 + 颜色」组键缓存——未读数的
+   * 轮询刷新会换掉 `accounts` 数组，但不该换掉这个 Map（否则每 30 秒全部行重渲一次）。
    */
-  const peerName = (m: MailListItem) =>
-    isSentItem(m.copies) && m.to?.length ? m.to[0].name || m.to[0].address || "" : m.fromName || m.fromAddr;
-  const peerLabel = (m: MailListItem) =>
-    isSentItem(m.copies) && m.to?.length
-      ? (m.to[0].name || m.to[0].address || "") +
-        (m.to.length > 1 ? ` ${t("andOthers", { count: m.to.length })}` : "")
-      : m.fromName || m.fromAddr;
-
-  /**
-   * 双向邮件判定（2026-10-06 用户需求）：发件人与收件人**都是我的账号**——
-   * 多为「自己给自己另一个账号发信」，方向角标改用双色双向箭头表示
-   * （左半 emerald = 收件色，右半 amber = 发件色）。
-   */
-  const isDualDirection = (m: MailListItem): boolean => {
-    if (!ownReady) return false;
-    if (!ownEmails.has(m.fromAddr.toLowerCase())) return false;
-    return (m.to ?? []).some((a) => !!a.address && ownEmails.has(a.address.toLowerCase()));
-  };
+  const accountsByColorKey = useMemo(
+    () => accounts.map((a) => `${a.id}:${a.displayName}:${a.color}`).join("|"),
+    [accounts],
+  );
+  const accountsById = useMemo(() => {
+    const map = new Map<string, MailAccount>();
+    for (const a of accounts) map.set(a.id, a);
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 键已覆盖行用到的字段，见上
+  }, [accountsByColorKey]);
+  const openItem = useCallback(
+    (m: MailListItem) => {
+      router.push(`/mail/message/${encodeMessageId(m.messageId)}`, mailNavOptions());
+    },
+    [router],
+  );
+  const deleteRow = useCallback((m: MailListItem) => setPendingDelete(m), []);
+  const enterSelectMode = useCallback(() => setSelectMode(true), []);
 
   /**
    * 底栏右侧统计 + 「未读」开关上的数字 + 大标题角标（unreadAll）：**同一个数字** =
@@ -1824,208 +1822,26 @@ export function MailClient({
             )}
             data-slot="mail-list"
           >
-          {items.map((m) => {
-            const sent = isSentItem(m.copies);
-            const dual = isDualDirection(m);
-            return (
-            <li key={m.messageId} className="group/row relative">
-              <button
-                type="button"
-                data-mail-row
-                aria-current={activeId === encodeMessageId(m.messageId) || undefined}
-                aria-pressed={selectMode ? selected.has(m.messageId) : undefined}
-                onClick={() =>
-                  selectMode
-                    ? toggleSelect(m.messageId)
-                    : router.push(`/mail/message/${encodeMessageId(m.messageId)}`, mailNavOptions())
-                }
-                className={cn(
-                  "flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none",
-                  activeId === encodeMessageId(m.messageId) && "bg-accent/60",
-                )}
-              >
-                {/* 选择模式：行首一个复选框（纯视觉，勾选由整行按钮承担——触屏上点整行
-                    比点 16px 的方框可靠得多；`aria-pressed` 在按钮上，读屏与 E2E 用它） */}
-                {selectMode && <MailRowCheckbox checked={selected.has(m.messageId)} />}
-                {/* 左列：发件人头像（每行都有，结构整齐）+ 两个角标，各占一角互不重叠：
-                    - 右上 = 未读蓝点（勿改回 bg-primary 灰点、勿改回独立圆点列）
-                    - 右下 = 方向角标（2026-10-04 用户定稿）：↙ 收件 / ↗ 发件，双向都标
-                      （用户指定「收件也需要标记」）；徽章底中性，箭头按方向着色
-                      （收件 emerald / 发件 amber，与 tab 下划线、agent 页徽章同色） */}
-                <span className="relative shrink-0 self-center">
-                  <Avatar>
-                    <AvatarFallback>
-                      {peerName(m).charAt(0).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  {!m.seen && (
-                    <span
-                      data-slot="mail-unread-badge"
-                      aria-label={t("filterUnseen")}
-                      className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-blue-600 ring-2 ring-background dark:bg-blue-400"
-                    />
-                  )}
-                  <span
-                    data-slot="mail-direction-badge"
-                    data-direction={dual ? "both" : sent ? "sent" : "received"}
-                    role="img"
-                    aria-label={dual ? t("directionBoth") : sent ? t("filterSent") : t("filterReceived")}
-                    className="absolute -right-1 -bottom-1 flex size-3.5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground"
-                  >
-                    {dual ? (
-                      /* 双向（收 / 发都是我的账号，2026-10-06 用户指定）：双色双向箭头——
-                         同一枚 ArrowLeftRight 叠两次，**按横向中线**切（上支 = 收件色 / 下支 = 发件色），
-                         每支箭头各自保持单色；整体再 **-45° 斜过来**，与单箭头角标同斜向
-                         （转后 = 绿 ↙ 收件 + 橙 ↗ 发件，与 ArrowDownLeft / ArrowUpRight 一致）。
-                         ⚠ 勿改回「按竖向中线」切：图标是上下两支箭头组成（上支 y∈[2,12]、
-                            下支 y∈[12,22]，中线 y=12 恰好是两支之间的空白），竖向切会把
-                            两支箭头各自劈成半绿半橙（绿头橙尾 / 橙头绿尾），14px 下像一张
-                            颜色断开的坏图（2026-10-06 用户报障，截图取证后修正）。
-                         ⚠ 旋转必须 -45°（逆时针）：+45° 会转成绿 ↖ / 橙 ↘，与「收到 ↙ /
-                            发出 ↗」反向；转后两支箭头墨迹 9.2px、间距 5px，均在 12px 盒内不溢出 */
-                      <span className="relative block size-3 -rotate-45" aria-hidden>
-                        <ArrowLeftRightIcon
-                          className="absolute inset-0 size-3 text-emerald-600 dark:text-emerald-400"
-                          style={{ clipPath: "inset(0 0 50% 0)" }}
-                        />
-                        <ArrowLeftRightIcon
-                          className="absolute inset-0 size-3 text-amber-600 dark:text-amber-400"
-                          style={{ clipPath: "inset(50% 0 0 0)" }}
-                        />
-                      </span>
-                    ) : sent ? (
-                      <ArrowUpRightIcon className="size-2.5 text-amber-600 dark:text-amber-400" aria-hidden />
-                    ) : (
-                      <ArrowDownLeftIcon className="size-2.5 text-emerald-600 dark:text-emerald-400" aria-hidden />
-                    )}
-                  </span>
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-baseline gap-2">
-                    {/* 已读/未读三通道区分（勿只靠颜色）：未读 = 蓝角标 + 加粗 + 前景色时间；已读整行次要色退到背景。
-                        ⚠ 首行名字位永远是「对方」：收件 = 发件人、发件 = 收件人（方向看头像角标，见 peerLabel） */}
-                    <span className={cn("truncate text-sm", m.seen ? "text-muted-foreground" : "font-semibold")}>
-                      {peerLabel(m)}
-                    </span>
-                    {accounts.length > 1 && (
-                      <span
-                        className="flex shrink-0 items-center gap-0.5"
-                        title={m.accounts.map((id) => accountName(id)?.displayName ?? id).join("、")}
-                      >
-                        {m.accounts.map((id) => (
-                          <span
-                            key={id}
-                            className={cn("inline-block size-1.5 rounded-full", accountDotProps(accountName(id)?.color ?? "").className)}
-                            style={accountDotProps(accountName(id)?.color ?? "").style}
-                          />
-                        ))}
-                      </span>
-                    )}
-                    {m.flagged && <StarIcon className="size-3.5 shrink-0 fill-foreground" aria-label={t("flagged")} />}
-                    {m.hasAttach && <PaperclipIcon className="size-3.5 shrink-0 text-muted-foreground" aria-label={t("hasAttachment")} />}
-                    <span
-                      className={cn(
-                        "ml-auto shrink-0 text-xs tabular-nums group-hover/row:invisible group-has-[:focus-visible]/row:invisible",
-                        m.seen ? "text-muted-foreground" : "font-medium text-foreground",
-                      )}
-                    >
-                      {formatDate(m.date, t("localeTag"))}
-                    </span>
-                  </span>
-                  <span className={cn("block truncate text-sm", m.seen ? "text-muted-foreground" : "font-semibold")}>
-                    {m.subject || t("noSubject")}
-                  </span>
-                  <span className="block truncate text-xs text-muted-foreground">{m.snippet}</span>
-                </span>
-              </button>
-              {/* 行内快捷操作（4.9）：hover / 键盘聚焦时显现（日期同时让位）；
-                  与行主按钮是兄弟节点，避免嵌套交互元素。
-                  ⚠ 「选择」（多选批量）2026-10-08 按用户要求从工具栏行 1 **搬到这里**
-                    （行 1 那 28px 挤掉了账号选择器里的邮箱地址）——**它只是入口**，
-                    退出在批量条最右端那枚 ✕。
-                  ⚠ **选择模式下整条气泡栏不渲染**（含这里的 ☑ 与星标/已读/删除）：此刻整行
-                    点击 = 勾选，摆一排行内动作会打架。⚠ 曾试过「选中模式只留 ☑ 当出口」——
-                    那个位置是 **per-row** 的：桌面端「点进来那行保有焦点 + 鼠标移到另一行」
-                    会同时冒两枚，触屏端气泡栏常显、每行一枚（6 行 = 6 枚「退出多选」），
-                    用户 2026-10-08 截图报障。单例动作必须挂在单例容器里。
-                    ⚠ 用条件渲染而非 `hidden` 属性：`globals.css` 里那条
-                    `[data-slot="mail-row-actions"][hidden] { display: none !important }`
-                    已随之删除（类选择器优先级高于 `[hidden]` 的 UA 规则，属性写法压不住
-                    hover），**别改回属性写法**。`@media (hover:none)` 的常显规则与结构无关，
-                    仍然有效（触屏上这条气泡栏一直可见，也是触屏进多选的入口）。
-                  ⚠ **显现条件是 `:focus-visible` 而不是 `:focus-within`**（2026-10-10 第十一轮
-                    用户截图报障「对一行操作之后，悬浮另一行会出现两条悬浮操作条」）：鼠标点过的按钮
-                    **仍持有焦点**（实测 `document.activeElement` 就是那一行的按钮、且
-                    `matches(":focus-visible") === false`），`focus-within` 把那一行的气泡栏
-                    **钉在屏幕上**——鼠标移到别的行就两条并存。键盘 Tab 进这一行时按钮是
-                    `:focus-visible`，气泡栏照旧出现、可继续 Tab 进去，可达性不变。
-                    ⚠ 日期的 `invisible` 必须用**同一个触发条件**（否则鼠标点完那行的日期被永久藏掉） */}
-              {!selectMode && (
-                <span
-                  data-slot="mail-row-actions"
-                  className="absolute top-2 right-3 hidden items-center gap-0.5 rounded-lg border border-border bg-background p-0.5 shadow-sm group-hover/row:flex group-has-[:focus-visible]/row:flex"
-                >
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={t("batchEnter")}
-                    title={t("batchEnter")}
-                    onClick={() => setSelectMode(true)}
-                  >
-                    <SquareCheckBigIcon />
-                  </Button>
-                  {/* 分隔线：把「选择」（模式的开关，作用于整张列表）与后面几个**作用于本行**
-                      的动作分开——否则图标并排，☑ 会被读成「又一个行内动作」。
-                      形态抄批量条里「计数 | 动作」那道分隔线（h-4 w-px bg-border）
-                      ⚠ 分隔线之后四个动作的顺序与详情页工具栏**逐字一致**（2026-10-10 第七轮
-                      用户指定）：加星标 → 标为未读/已读 → 标为垃圾 → 删除。
-                      改这里必须同步改 `message-view.tsx` 的详情动作栏。 */}
-                  <span className="h-4 w-px shrink-0 bg-border" aria-hidden />
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={m.flagged ? t("unflag") : t("flag")}
-                    aria-pressed={m.flagged}
-                    onClick={() => postFlags(m, { flagged: !m.flagged })}
-                  >
-                    <StarIcon className={cn(m.flagged && "fill-foreground")} />
-                  </Button>
-                  {/* 已读/未读：**只在有 INBOX 副本时才渲染**（「未读」仅针对正常收件箱，
-                      垃圾 / 发件 / 归档没有已读语义，服务端也不会写它们——用户 2026-10-10
-                      定稿：「垃圾邮件不需要已读/未读的概念」） */}
-                  {m.hasReadState !== false && (
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={m.seen ? t("markUnread") : t("markRead")}
-                      title={m.seen ? t("markUnread") : t("markRead")}
-                      onClick={() => postFlags(m, { seen: !m.seen })}
-                    >
-                      {m.seen ? <MailOpenIcon /> : <MailIcon />}
-                    </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={t("moveToJunk")}
-                    title={t("moveToJunk")}
-                    onClick={() => void markJunkFromList(m)}
-                  >
-                    <OctagonAlertIcon />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={t("delete")}
-                    onClick={() => setPendingDelete(m)}
-                  >
-                    <Trash2Icon />
-                  </Button>
-                </span>
-              )}
-            </li>
-            );
-          })}
+          {items.map((m) => (
+            <MailRow
+              key={m.messageId}
+              item={m}
+              active={activeMessageId === m.messageId}
+              selected={selected.has(m.messageId)}
+              selectMode={selectMode}
+              showAccountDots={accounts.length > 1}
+              accountsById={accountsById}
+              ownEmails={ownEmails}
+              ownReady={ownReady}
+              localeTag={t("localeTag")}
+              onOpen={openItem}
+              onToggleSelect={toggleSelect}
+              onFlag={postFlags}
+              onJunk={markJunkFromList}
+              onDelete={deleteRow}
+              onEnterSelectMode={enterSelectMode}
+            />
+          ))}
           </ul>
         )}
 

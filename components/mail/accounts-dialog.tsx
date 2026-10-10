@@ -31,6 +31,7 @@ import { toast } from "@/components/ui/toast";
 import { accountDotProps } from "@/components/mail/account-dot";
 import { cn } from "@/lib/utils";
 import { mailErrorText } from "@/lib/mail/error-text";
+import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
 import type { MailAccount, MailFolder } from "@/lib/mail/types";
 
 /**
@@ -243,13 +244,13 @@ export function AccountsDialog() {
   const [domainSaving, setDomainSaving] = useState(false);
 
   const load = useCallback(async () => {
-    const res = await fetch("/api/mail/accounts");
+    const res = await fetchWithTimeout("/api/mail/accounts");
     if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
     setAccounts((await res.json()) as MailAccount[]);
   }, []);
 
   const loadDomains = useCallback(async () => {
-    const res = await fetch("/api/mail/remote-image-domains");
+    const res = await fetchWithTimeout("/api/mail/remote-image-domains");
     if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
     setDomains(((await res.json()) as { domains: string[] }).domains);
   }, []);
@@ -395,7 +396,7 @@ export function AccountsDialog() {
       setFolderError(null);
       try {
         const res = acct
-          ? await fetch(`/api/mail/folders?account=${encodeURIComponent(acct.id)}`)
+          ? await fetchWithTimeout(`/api/mail/folders?account=${encodeURIComponent(acct.id)}`)
           : await fetch("/api/mail/folders", {
               method: "POST",
               headers: { "content-type": "application/json" },

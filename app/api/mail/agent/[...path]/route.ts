@@ -11,6 +11,11 @@ export const dynamic = "force-dynamic";
  * 注意静态段 `agent` 优先于兄弟 `[...path]` 代理（后者去 webmaild）。
  */
 const MAIL_AGENT_URL = process.env.MAIL_AGENT_URL ?? "http://127.0.0.1:9711";
+/**
+ * 与 mailagentd 共享的内部密钥（mailagentd 侧读 MAIL_AGENT_INTERNAL_KEY）：转发时以
+ * `x-internal-key` 注入。mailagentd 绑非回环地址时缺了它就会拒绝启动。
+ */
+const INTERNAL_KEY = process.env.MAIL_AGENT_INTERNAL_KEY ?? "";
 
 async function proxy(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   if (!(await isOwner())) {
@@ -23,7 +28,10 @@ async function proxy(req: NextRequest, { params }: { params: Promise<{ path: str
   try {
     upstream = await fetch(target, {
       method: req.method,
-      headers: { "content-type": req.headers.get("content-type") ?? "application/json" },
+      headers: {
+        "content-type": req.headers.get("content-type") ?? "application/json",
+        ...(INTERNAL_KEY ? { "x-internal-key": INTERNAL_KEY } : {}),
+      },
       body: req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer(),
       // @ts-expect-error Node fetch 需要 duplex 才能带 body 流
       duplex: "half",

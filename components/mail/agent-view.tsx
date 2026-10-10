@@ -32,6 +32,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/toast";
 import { mailErrorKind, mailErrorText } from "@/lib/mail/error-text";
 import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
+import { formatDate, formatDateTime } from "@/lib/mail/format";
 import { Link } from "@/lib/i18n/navigation";
 
 /**
@@ -136,25 +137,6 @@ interface PendingItem {
 }
 
 // ---------- 展示辅助 ----------
-
-function formatDate(dateIso: string | null, locale: string): string {
-  if (!dateIso) return "";
-  const d = new Date(dateIso);
-  const sameDay = d.toDateString() === new Date().toDateString();
-  return d.toLocaleString(locale, sameDay
-    ? { hour: "2-digit", minute: "2-digit" }
-    : { month: "short", day: "numeric" });
-}
-
-function formatDateTime(dateIso: string | null, locale: string): string {
-  if (!dateIso) return "";
-  return new Date(dateIso).toLocaleString(locale, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -343,7 +325,7 @@ function TimelineTab() {
     async (index: number) => {
       if (!openId) return;
       setRfc822Data((prev) => ({ ...prev, [index]: "loading" }));
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `/api/mail/agent/message/${encodeURIComponent(openId)}/rfc822/${index}`
       );
       if (res.ok) {
@@ -619,7 +601,7 @@ function PendingSection() {
   const [busy, setBusy] = useState<number | null>(null);
 
   const load = useCallback(async () => {
-    const res = await fetch("/api/mail/agent/pending-sends");
+    const res = await fetchWithTimeout("/api/mail/agent/pending-sends");
     if (res.ok) setItems(((await res.json()) as { items: PendingItem[] }).items);
   }, []);
   useEffect(() => {
@@ -685,7 +667,7 @@ function ReasoningList({ messageId }: { messageId: string }) {
   const [items, setItems] = useState<ReasoningItem[] | null>(null);
 
   useEffect(() => {
-    fetch(`/api/mail/agent/reasoning?message=${encodeURIComponent(messageId)}`)
+    fetchWithTimeout(`/api/mail/agent/reasoning?message=${encodeURIComponent(messageId)}`)
       .then((r) => (r.ok ? r.json() : { items: [] }))
       .then((d) => setItems((d as { items: ReasoningItem[] }).items));
   }, [messageId]);
@@ -729,7 +711,7 @@ function JudgmentsSection() {
   const [items, setItems] = useState<JudgmentItem[]>([]);
 
   useEffect(() => {
-    fetch("/api/mail/agent/judgments?limit=100")
+    fetchWithTimeout("/api/mail/agent/judgments?limit=100")
       .then((r) => (r.ok ? r.json() : { items: [] }))
       .then((d) => setItems((d as { items: JudgmentItem[] }).items));
   }, []);
@@ -777,7 +759,7 @@ function LedgerSection() {
   const [items, setItems] = useState<LedgerItem[]>([]);
 
   useEffect(() => {
-    fetch("/api/mail/agent/ledger?limit=100")
+    fetchWithTimeout("/api/mail/agent/ledger?limit=100")
       .then((r) => (r.ok ? r.json() : { items: [] }))
       .then((d) => setItems((d as { items: LedgerItem[] }).items));
   }, []);

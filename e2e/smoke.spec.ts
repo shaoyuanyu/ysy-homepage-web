@@ -4363,6 +4363,8 @@ test.describe("站内邮件（/mail）", () => {
       await inboxRow.locator("[data-mail-row]").click();
       await expect(page).toHaveURL(/\/mail\/message\//);
       const detailBar = page.locator('[data-slot="message-actions"]');
+      // ⚠ 工具栏要点开邮件之后才渲染，而 `evaluateAll` 不自动重试——不等它出现就会读到空集
+      await expect(detailBar.getByRole("button", { name: "更多" })).toBeVisible();
       const detailLabels = await labels(detailBar.locator("button"));
       expect(
         detailLabels.filter((l) => ["加星标", "取消星标", "标为未读", "标为已读", "标为垃圾", "删除"].includes(l)),
@@ -5743,6 +5745,8 @@ test.describe("站内邮件（/mail）", () => {
       await expect(page).toHaveURL(/\/mail\/message\//);
 
       const bar = page.locator('[data-slot="message-actions"]');
+      // ⚠ 工具栏要点开邮件之后才渲染，而 `evaluateAll` 不自动重试——不等它出现就会量到空集
+      await expect(bar.getByRole("button", { name: "更多" })).toBeVisible();
       // 判据是「可见动作的垂直位置只有一组」（同排 = 一行），不锁具体坐标：
       // 换字号 / 换行高都不会误报，多摆一个按钮立刻红
       const tops = await bar.locator("a, button").evaluateAll((els) =>
@@ -6735,7 +6739,8 @@ test.describe("站内邮件（/mail）", () => {
       const status = page.locator('[data-slot="mail-sync-status"]');
       const primary = status.locator('[data-slot="mail-sync-primary"]');
       const alertText = status.locator('[data-slot="mail-sync-alert-text"]');
-      await expect(alertText).toHaveText("acc1 合并视图同步失败：IMAP 连接被重置");
+      // 账号在底栏统一用**备注名**（与同一行的 agent 图标同一个称呼，见 useSyncStatus 的 names）
+      await expect(alertText).toHaveText("主账号 合并视图同步失败：IMAP 连接被重置");
       // 邮件同步的告警是主状态时视觉：琥珀（色调在主状态容器上）
       await expect(primary).toHaveClass(/text-amber-700/);
       // agent 的问题缩成一枚图标，文案在 aria-label / 悬浮弹窗里
@@ -7160,6 +7165,42 @@ test.describe("站内邮件（/mail）", () => {
         page.locator('[data-slot="message-actions"]').getByRole("link", { name: "回复", exact: true }),
       ).toBeVisible();
       await expect(page.locator('[data-slot="mail-pane-detail"] [data-slot="mail-sent-badge"]')).toHaveCount(0);
+    });
+
+    /**
+     * 发件判定的**首选依据是服务端随 copies 给出的 `specialUse`**（RFC 6154 标志位），
+     * 文件夹名字只在服务端也给不出标志位时才作回退（lib/mail/kind.ts）。
+     * 这里用一个**自定义名字**的文件夹（Outbox，不在任何常见名单里）验证：
+     * 只看名字会判成收件，靠 specialUse 才判成发件。
+     */
+    test("发件判定优先用 specialUse：自定义文件夹名也识别为发件", async ({ page }) => {
+      const calls = { flags: [], send: [], delete: [], listStore: undefined as unknown[] | undefined };
+      await stubMailApi(page, calls);
+      calls.listStore = [
+        mailItem({
+          messageId: "mid:outbox@test.local",
+          subject: "自定义发件箱里的信",
+          fromAddr: "me@mail.example.cn",
+          fromName: "我",
+          to: [{ name: "张老师", address: "zhang@example.com" }],
+          snippet: "这封信发自一个自定义命名的发件箱",
+          seen: true,
+          copies: [{ accountId: "acc1", folder: "Outbox", uid: 77, specialUse: "\\Sent" }],
+          accounts: ["acc1"],
+        }),
+      ];
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+      await gotoReady(page, "/mail");
+
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      await expect(rows).toHaveCount(1);
+      // 发件：名字位显示收件人「张老师」，角标方向 = sent
+      await expect(rows.nth(0)).toContainText("张老师");
+      await expect(rows.nth(0).locator('[data-slot="mail-direction-badge"]')).toHaveAttribute(
+        "data-direction",
+        "sent",
+      );
     });
 
     test("写邮件：?to= 预填收件人 + 通讯录自动补全选中", async ({ page }) => {

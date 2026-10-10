@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { BookUserIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
 import { Input } from "@/components/ui/input";
 import type { MailContactSuggest, MailOwnAddress } from "@/lib/mail/types";
 
@@ -81,7 +82,7 @@ export function RecipientInput({
       fetchTimer.current = setTimeout(async () => {
         const mySeq = ++seq.current;
         try {
-          const res = await fetch(`/api/mail/contacts/suggest?q=${encodeURIComponent(token)}`);
+          const res = await fetchWithTimeout(`/api/mail/contacts/suggest?q=${encodeURIComponent(token)}`);
           if (!res.ok) return;
           const data = (await res.json()) as MailContactSuggest;
           if (mySeq !== seq.current) return; // 只采纳最后一次查询（防抖外的乱序保护）

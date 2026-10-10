@@ -29,6 +29,13 @@ export interface MailCopyRef {
   accountId: string;
   folder: string;
   uid: number;
+  /**
+   * 该文件夹的 RFC 6154 特殊用途（`\Sent` / `\Junk` / `\Archive` …，含反斜杠的原文）。
+   * 服务端同步时从 IMAP LIST 的标志位记下并随 copies 返回；空串 = 服务端也不知道
+   * （老库尚未回填、或服务端不支持 SPECIAL-USE 且名字也认不出）。
+   * 前端据此判定「这封是不是我发出的」，不再依赖文件夹名字（见 lib/mail/kind.ts）。
+   */
+  specialUse?: string;
 }
 
 export interface MailListItem {

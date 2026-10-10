@@ -5,8 +5,13 @@ import { isOwner } from "@/lib/auth/owner";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** webmaild 只绑回环、无认证（MAIL-AGENT.md 4.6：信任边界在本机），守卫在这一层 */
+/** webmaild 绑回环或容器网络、不对公网开放（MAIL-AGENT.md 4.6：信任边界在本机/网络隔离），守卫在这一层 */
 const WEBMAIL_URL = process.env.WEBMAIL_URL ?? "http://127.0.0.1:9710";
+/**
+ * 与 webmaild 共享的内部密钥（webmaild 侧读 WEBMAIL_INTERNAL_KEY）：转发时以
+ * `x-internal-key` 注入。两侧同一个值；webmaild 绑非回环地址时缺了它就会拒绝启动。
+ */
+const INTERNAL_KEY = process.env.WEBMAIL_INTERNAL_KEY ?? "";
 
 async function proxy(
   req: NextRequest,
@@ -22,7 +27,10 @@ async function proxy(
   try {
     upstream = await fetch(target, {
       method: req.method,
-      headers: { "content-type": req.headers.get("content-type") ?? "application/json" },
+      headers: {
+        "content-type": req.headers.get("content-type") ?? "application/json",
+        ...(INTERNAL_KEY ? { "x-internal-key": INTERNAL_KEY } : {}),
+      },
       body: req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer(),
       // @ts-expect-error Node fetch 需要 duplex 才能带 body 流
       duplex: "half",

@@ -30,6 +30,9 @@ services:
       # ⚠ mail-agent 尚未部署：MAIL_AGENT_URL 保持缺省（127.0.0.1 不可达），前端
       #   按设计显示「agent 邮件后台不可达」；第二台 VPS 上线后在 .env 补值。
       - WEBMAIL_URL=http://webmail:9710
+      # 与后端共享的内部密钥：代理转发时以 x-internal-key 注入（两侧同值，见 .env.example）
+      - WEBMAIL_INTERNAL_KEY=${WEBMAIL_INTERNAL_KEY}
+      - MAIL_AGENT_INTERNAL_KEY=${MAIL_AGENT_INTERNAL_KEY}
     volumes:
       # 主人私有数据（想法速记等），挂载宿主机目录便于直接查看/备份
       - ./data:/app/data
@@ -38,8 +41,9 @@ services:
 
   webmail:
     # 站内邮箱后端（webmaild）：IMAP 同步 + 收发 / 通讯录 / 账号管理的 HTTP API。
-    # 与 web 同网络、不发布任何宿主端口——只有 compose 网络内的 web 容器可达
-    # （后端自身无认证，信任边界 = 网络隔离 + 站点代理层的 isOwner 守卫）。
+    # 与 web 同网络、不发布任何宿主端口——只有 compose 网络内的 web 容器可达。
+    # 后端另有一道与部署方式无关的门：代理注入 `x-internal-key`，与 WEBMAIL_INTERNAL_KEY
+    # 比对；绑非回环地址（WEBMAIL_HOST=0.0.0.0）时缺了它就拒绝启动。
     # ⚠ 源码已拆分至独立仓库 ysy-homepage-webmail（2026-10-07）：根 Dockerfile
     #   即其构建文件、由 ACR 构建；本服务只消费镜像，无本地 build。
     image: ${WEBMAIL_IMAGE:-crpi-pko4rr79dtavwpp5.cn-shanghai.personal.cr.aliyuncs.com/shaoyuanyu/ysy-homepage-webmail:latest}
@@ -51,6 +55,8 @@ services:
       - WEBMAIL_DATA_DIR=/data
       # 容器内监听全部地址（端口不发布到宿主，仅在 compose 网络内可达）
       - WEBMAIL_HOST=0.0.0.0
+      # 内部密钥（必填）：与 web 服务同一个值，用于校验代理注入的 x-internal-key
+      - WEBMAIL_INTERNAL_KEY=${WEBMAIL_INTERNAL_KEY}
     volumes:
       # 私有数据：accounts.json / credentials.json（600）/ webmail.db / eml/
       # ⚠ 首次部署：宿主机 mkdir webmail-data 后 chown 到同一 uid（见 user:，VPS 为 1002）

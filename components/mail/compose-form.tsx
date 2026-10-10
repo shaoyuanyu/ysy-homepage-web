@@ -8,6 +8,7 @@ import { ArrowLeftIcon, PaperclipIcon, SendIcon, XIcon } from "lucide-react";
 import { Link, useRouter } from "@/lib/i18n/navigation";
 import { useOwnAddresses } from "@/lib/mail/use-own-addresses";
 import { cn } from "@/lib/utils";
+import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
 import { usePublishDraftBar, type MailDraftBarState } from "@/components/mail/mail-statusbar";
 import { senderLabel } from "@/components/mail/account-label";
 import { RecipientInput } from "@/components/mail/recipient-input";
@@ -215,7 +216,7 @@ export function ComposeForm() {
   }, [attachments]);
 
   useEffect(() => {
-    fetch("/api/mail/accounts")
+    fetchWithTimeout("/api/mail/accounts")
       .then((r) => (r.ok ? r.json() : []))
       .then((data: MailAccount[]) => {
         const enabled = data.filter((a) => a.enabled);
@@ -280,16 +281,16 @@ export function ComposeForm() {
         //      envelope（主题/收件人/时间）。漏了这一步就会出现"草稿有内容，写信页却是空白"。
         let hit: MailDraft | null = null;
         if (urlDraftId) {
-          const res = await fetch(`/api/mail/drafts/${encodeURIComponent(urlDraftId)}`);
+          const res = await fetchWithTimeout(`/api/mail/drafts/${encodeURIComponent(urlDraftId)}`);
           if (res.ok) hit = (await res.json()) as MailDraft;
         } else {
           const params = new URLSearchParams({ kind: draftKind, kindRef: draftKindRef });
-          const res = await fetch(`/api/mail/drafts?${params}`);
+          const res = await fetchWithTimeout(`/api/mail/drafts?${params}`);
           if (res.ok) {
             const data = (await res.json()) as { items?: MailDraft[] };
             const first = data.items?.[0];
             if (first) {
-              const one = await fetch(`/api/mail/drafts/${encodeURIComponent(first.id)}`);
+              const one = await fetchWithTimeout(`/api/mail/drafts/${encodeURIComponent(first.id)}`);
               if (one.ok) hit = (await one.json()) as MailDraft;
             }
           }
@@ -457,7 +458,7 @@ export function ComposeForm() {
   useEffect(() => {
     if (!replyTo) return;
     if (replyAll && !ownReady) return;
-    fetch(`/api/mail/message/${encodeURIComponent(replyTo)}`)
+    fetchWithTimeout(`/api/mail/message/${encodeURIComponent(replyTo)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data: MailDetail | null) => {
         if (!data) return;
@@ -514,7 +515,7 @@ export function ComposeForm() {
       return lines.join("\n");
     };
     void (async () => {
-      const res = await fetch(`/api/mail/message/${encodeURIComponent(forwardId)}`).catch(() => null);
+      const res = await fetchWithTimeout(`/api/mail/message/${encodeURIComponent(forwardId)}`).catch(() => null);
       if (!res?.ok || cancelled) return;
       const data = (await res.json()) as MailDetail;
       if (cancelled) return;
@@ -526,7 +527,7 @@ export function ComposeForm() {
       const fetched = await Promise.all(
         wanted.map(async (a): Promise<SendAttachmentInput | null> => {
           try {
-            const r = await fetch(
+            const r = await fetchWithTimeout(
               `/api/mail/message/${encodeURIComponent(forwardId)}/attachment/${a.index}`,
             );
             if (!r.ok) return null;

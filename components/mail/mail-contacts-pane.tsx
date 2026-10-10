@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { BookUserIcon, CheckIcon, MailsIcon, PlusIcon, SearchIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
 import { Link } from "@/lib/i18n/navigation";
 import { useOwnAddresses } from "@/lib/mail/use-own-addresses";
 import { AccountMenu } from "@/components/mail/account-menu";
@@ -65,15 +66,15 @@ export function MailContactsPane() {
   const { ready: ownReady, emails: ownEmails } = useOwnAddresses();
 
   useEffect(() => {
-    fetch("/api/mail/accounts")
+    fetchWithTimeout("/api/mail/accounts")
       .then((r) => (r.ok ? r.json() : []))
       .then((d: MailAccount[]) => setAccounts(d))
       .catch(() => {});
-    fetch("/api/mail/contacts")
+    fetchWithTimeout("/api/mail/contacts")
       .then((r) => (r.ok ? r.json() : { items: [] }))
       .then((d: { items: MailContact[] }) => setContacts(d.items))
       .catch(() => setContacts([]));
-    fetch("/api/mail/contacts/known?limit=200")
+    fetchWithTimeout("/api/mail/contacts/known?limit=200")
       .then((r) => (r.ok ? r.json() : { items: [] }))
       .then((d: { items: MailKnownSender[] }) => setKnown(d.items))
       .catch(() => setKnown([]));

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 
 import { cn } from "@/lib/utils";
+import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
 import { OWNER_AUTH_CHANGED_EVENT, OWNER_CACHE_KEY } from "@/lib/auth/events";
 import { toast } from "@/components/ui/toast";
 
@@ -88,8 +89,8 @@ export function MailNewMailWatcher() {
         // /accounts = 未读总数（角标）；/health =「真·新邮件」信号（见上方注释）。
         // health 失败不影响未读广播（角标仍要更新），只是本轮不做新邮件判定。
         const [accountsRes, healthRes] = await Promise.all([
-          fetch("/api/mail/accounts", { cache: "no-store" }),
-          fetch("/api/mail/health", { cache: "no-store" }).catch(() => null),
+          fetchWithTimeout("/api/mail/accounts", { cache: "no-store" }),
+          fetchWithTimeout("/api/mail/health", { cache: "no-store" }).catch(() => null),
         ]);
         if (disposed) return;
         // 游客 / 会话过期：停止轮询（登录后由 auth 事件重启）
