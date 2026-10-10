@@ -276,24 +276,22 @@ export function MessageView({ messageId }: { messageId: string }) {
   /**
    * 移出垃圾（2026-10-10）：这封只在垃圾夹里时，工具栏给的是这个而不是「标为垃圾」。
    *
-   * 与列表那枚同源，但**只给账号、不给目标文件夹**：详情页拿不到它的原文件夹
-   * （副本位置就是垃圾夹本身），由服务端缺省搬回 INBOX（见 `undoJunkMove` 的说明）。
+   * ⚠ **走普通的 `/move`、不用 `/unmove`**：详情页手里的 `copies` 就是**当前**垃圾夹里
+   *   那份副本，uid 有效——搬去 INBOX 而已。`/unmove` 那套「按 Message-ID 现场定位」是为
+   *   **撤销**准备的（那里 uid 已变），代价是拉整个垃圾夹的头。
    */
   const notJunk = useCallback(async () => {
     if (!detail) return;
     setActing(true);
     try {
-      const res = await fetch("/api/mail/unmove", {
+      const res = await fetch("/api/mail/move", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          messageId,
-          targets: copyAccountIds.map((accountId) => ({ accountId })),
-        }),
+        body: JSON.stringify({ copies: detail.copies, to: "INBOX" }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
-      const data = (await res.json()) as { restored: number; skipped?: { reason: string }[] };
-      if (data.restored === 0) {
+      const data = (await res.json()) as { affected: number; skipped?: { reason: string }[] };
+      if (data.affected === 0) {
         toast.add({
           title: t("notJunkFailed"),
           description: data.skipped?.[0]?.reason,

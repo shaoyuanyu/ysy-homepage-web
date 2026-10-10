@@ -4426,7 +4426,7 @@ test.describe("站内邮件（/mail）", () => {
      *   里也会出现，而动作取决于它现在在哪。「全部」视图里打开一封只存在于垃圾夹的邮件，
      *   给的动作同样应该是这个（否则点了没反应）。
      */
-    test("垃圾视图：动作是「移出垃圾」，走 /unmove 且不给目标文件夹", async ({ page }) => {
+    test("垃圾视图：动作是「移出垃圾」，走 /move 搬到 INBOX", async ({ page }) => {
       const calls = {
         flags: [],
         send: [],
@@ -4434,7 +4434,6 @@ test.describe("站内邮件（/mail）", () => {
         junkSynced: true,
         junkFolderItems: true,
         move: [] as unknown[],
-        unmove: [] as unknown[],
       };
       await stubMailApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
@@ -4449,12 +4448,13 @@ test.describe("站内邮件（/mail）", () => {
       await expect(row.getByRole("button", { name: "标为垃圾" })).toHaveCount(0);
 
       await row.getByRole("button", { name: "移出垃圾" }).click();
-      await expect.poll(() => calls.unmove.length).toBe(1);
-      // ⚠ 只给账号、**不给** folder：垃圾视图里前端不知道它的原文件夹（手里那份副本的
-      //   位置就是垃圾夹本身），由服务端缺省搬回 INBOX
-      expect(calls.unmove[0]).toEqual({
-        messageId: "mid:junk1@test.local",
-        targets: [{ accountId: "acc1" }],
+      await expect.poll(() => calls.move.length).toBe(1);
+      // ⚠ 用**普通的 /move**（不是 /unmove）：手里那份 copies 是垃圾夹里的**当前**副本，
+      //   uid 有效，搬去 INBOX 而已。/unmove 那套「按 Message-ID 现场定位」是给撤销用的
+      //   （那里 uid 已变），代价是拉整个垃圾夹的头。
+      expect(calls.move[0]).toEqual({
+        copies: [{ accountId: "acc1", folder: "垃圾邮件", uid: 42 }],
+        to: "INBOX",
       });
       await expect(page.locator('[data-slot="toast-title"]').first()).toContainText("已移出垃圾");
     });

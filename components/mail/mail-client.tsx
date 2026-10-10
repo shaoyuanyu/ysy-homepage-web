@@ -1052,8 +1052,10 @@ export function MailClient({
   /**
    * 「移出垃圾」（2026-10-10）：垃圾视图里那枚动作——把信从垃圾夹搬走。
    *
-   * 与 `undoJunk` 的差别：**只给账号、不给目标文件夹**（垃圾视图里前端不知道它的原文件夹，
-   * 手里那份副本的位置就是垃圾夹本身），由服务端缺省搬回 INBOX。
+   * ⚠ **走普通的 `POST /move`、不用 `/unmove`**：这里前端手里的 `copies` 就是**当前**
+   *   垃圾夹里那份副本，uid 是有效的——搬去 INBOX 而已。`/unmove` 那一套「按
+   *   Message-ID 在垃圾夹里现场定位」是为**撤销**场景准备的（那里 MOVE 之后 uid 已变、
+   *   前端手里的 copies 全是过期的），定位要拉整个垃圾夹的头，能不用就不用。
    *
    * ⚠ 成功后**不能摘行**（与「标为垃圾」刚好相反）：移出后这封邮件还在，只是换了文件夹——
    *   在「全部」「搜索」视图里它本来就该留着。整表重取、以服务端为准（等一次同步，
@@ -1063,17 +1065,14 @@ export function MailClient({
     async (m: MailListItem) => {
       const accountIds = [...new Set(m.copies.map((c) => c.accountId))];
       try {
-        const res = await fetch("/api/mail/unmove", {
+        const res = await fetch("/api/mail/move", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            messageId: m.messageId,
-            targets: accountIds.map((accountId) => ({ accountId })),
-          }),
+          body: JSON.stringify({ copies: m.copies, to: "INBOX" }),
         });
         if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
-        const data = (await res.json()) as { restored: number; skipped?: { reason: string }[] };
-        if (data.restored === 0) {
+        const data = (await res.json()) as { affected: number; skipped?: { reason: string }[] };
+        if (data.affected === 0) {
           toast.add({
             title: t("notJunkFailed"),
             description: data.skipped?.[0]?.reason,
