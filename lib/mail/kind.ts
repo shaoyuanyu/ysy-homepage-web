@@ -34,3 +34,37 @@ export function isSentItem(copies: MailCopyRef[] | undefined): boolean {
     c.specialUse ? c.specialUse === SENT_USE : SENT_FOLDER_NAMES.has(c.folder.trim().toLowerCase()),
   );
 }
+
+/**
+ * 「垃圾邮件」类文件夹名（回退名单，与 webmail 端 `JUNK_FOLDER_NAMES` 同一份，
+ * 见 webmail/src/write.ts）。回退条件同 `SENT_FOLDER_NAMES`。
+ */
+const JUNK_FOLDER_NAMES = new Set([
+  "junk",
+  "junk e-mail",
+  "spam",
+  "bulk mail",
+  "垃圾邮件",
+  "垃圾箱",
+]);
+
+/** RFC 6154 的「垃圾邮件」标志位（JSON 里是带一个反斜杠的字符串） */
+const JUNK_USE = "\\Junk";
+
+/**
+ * 这封邮件是不是「只躺在垃圾邮件夹里」——界面据此把整理动作从「标为垃圾」换成「移出垃圾」。
+ *
+ * 为什么按副本位置判而不看当前 tab：同一封邮件在「全部」「搜索」「垃圾」三个视图里都可能
+ * 出现，而**动作取决于它现在在哪**，不取决于用户从哪个入口点进来。按 tab 判还会漏掉
+ * 「在『全部』里打开一封只存在于垃圾夹的邮件」这种情形——那里显示「标为垃圾」是错的
+ * （点了是空操作，服务端会回「它本来就在垃圾邮件里」）。
+ *
+ * 注意是 **every 而不是 some**：同时有收件箱副本的邮件不算「在垃圾里」（它还在收件箱），
+ * 此时该给的动作仍是「标为垃圾」。
+ */
+export function isJunkOnly(copies: MailCopyRef[] | undefined): boolean {
+  if (!copies?.length) return false;
+  return copies.every((c) =>
+    c.specialUse ? c.specialUse === JUNK_USE : JUNK_FOLDER_NAMES.has(c.folder.trim().toLowerCase()),
+  );
+}

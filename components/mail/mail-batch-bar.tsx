@@ -3,11 +3,11 @@
 import { useTranslations } from "next-intl";
 import {
   CheckIcon,
-  MailCheckIcon,
   MailOpenIcon,
   SquareCheckBigIcon,
   SquareXIcon,
   Trash2Icon,
+  CheckCheckIcon,
   XIcon,
 } from "lucide-react";
 
@@ -43,9 +43,11 @@ import { Spinner } from "@/components/ui/spinner";
  * - 两个标记动作的**可用性跟着选中项走**（用户指定）：选中的全都已读 → 「标为已读」禁用；
  *   全都未读 → 「标为未读」禁用；混合选中时两个都可用（点哪个都是有意义的批量动作）。
  *   判据由调用方算好传进来（`allSeen` / `allUnseen`，空选中时为 false）。
- * - 图标语义对齐既有约定：「全部标为已读」用 `MailCheckIcon`，故这里「标为已读」同图标；
- *   「标为未读」用 `MailOpenIcon`——与列表行内、详情页工具栏那枚「标为未读」完全一致
+ * - 图标语义对齐既有约定：「全部标为已读」用 `CheckCheckIcon`（双勾），故这里「标为已读」
+ *   同图标；「标为未读」用 `MailOpenIcon`——与列表行内、详情页工具栏那枚「标为未读」完全一致
  *   （2026-10-07 用户指出此前两枚图标恰好装反了）。
+ *   ⚠ 2026-10-10：「全部标为已读」从单勾 `MailCheckIcon` 换成双勾 `CheckCheckIcon`——
+ *     单勾那枚要腾给「移出垃圾」（信封弧）；双勾本来就是「全部已读」的通用写法。
  * - 选中计数做成 primary 色调的胶囊：它是这个模式的**状态**，比一行灰字更该被一眼看到；
  *   计数为 0 时退回中性灰，避免"还没选就先喊"。
  * - 批量标记走 webmaild 的 `POST /flags {messageIds}`（每账号一次连接、每文件夹一次
@@ -120,7 +122,7 @@ export function MailBatchBar({
         disabled={busy || count === 0 || allSeen}
         onClick={onMarkSeen}
       >
-        <MailCheckIcon />
+        <CheckCheckIcon />
       </Button>
       <Button
         variant="ghost"

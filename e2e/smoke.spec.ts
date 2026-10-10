@@ -4419,6 +4419,47 @@ test.describe("站内邮件（/mail）", () => {
     });
 
     /**
+     * 「垃圾」tab 里的整理动作是「移出垃圾」（2026-10-10 用户要求）：邮件已经在垃圾夹里了，
+     * 那里再给一枚「标为垃圾」是空操作（服务端会回「它本来就在垃圾邮件里」）。
+     *
+     * ⚠ 判据是**副本位置**（副本全在垃圾夹），不是"当前 tab"：同一封邮件在「全部」「搜索」
+     *   里也会出现，而动作取决于它现在在哪。「全部」视图里打开一封只存在于垃圾夹的邮件，
+     *   给的动作同样应该是这个（否则点了没反应）。
+     */
+    test("垃圾视图：动作是「移出垃圾」，走 /unmove 且不给目标文件夹", async ({ page }) => {
+      const calls = {
+        flags: [],
+        send: [],
+        delete: [],
+        junkSynced: true,
+        junkFolderItems: true,
+        move: [] as unknown[],
+        unmove: [] as unknown[],
+      };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+      await gotoReady(page, "/mail?view=junk");
+
+      const row = page.locator('[data-slot="mail-list"] > li').first();
+      await expect(row).toContainText("中奖通知");
+      await row.hover();
+      // 给的是「移出垃圾」，「标为垃圾」不该出现
+      await expect(row.getByRole("button", { name: "移出垃圾" })).toHaveCount(1);
+      await expect(row.getByRole("button", { name: "标为垃圾" })).toHaveCount(0);
+
+      await row.getByRole("button", { name: "移出垃圾" }).click();
+      await expect.poll(() => calls.unmove.length).toBe(1);
+      // ⚠ 只给账号、**不给** folder：垃圾视图里前端不知道它的原文件夹（手里那份副本的
+      //   位置就是垃圾夹本身），由服务端缺省搬回 INBOX
+      expect(calls.unmove[0]).toEqual({
+        messageId: "mid:junk1@test.local",
+        targets: [{ accountId: "acc1" }],
+      });
+      await expect(page.locator('[data-slot="toast-title"]').first()).toContainText("已移出垃圾");
+    });
+
+    /**
      * 附件预览（2026-10-10）：图片给缩略图、纯文本可就地读；其余类型仍是下载链接
      * （后端只对图片与纯文本放行 inline，前端不越界）。
      */
@@ -4764,7 +4805,10 @@ test.describe("站内邮件（/mail）", () => {
 
       // 垃圾行**也有**已读/未读（2026-10-10 第九轮用户定稿「对齐协议」：协议上 `\Seen` 属于
       // **副本**，垃圾箱里那份也有自己的状态）——行内动作与收件行**逐字同序**，只多不少：
-      // 选择 | 加星标 | 标为已读 | 标为垃圾 | 删除
+      // 选择 | 加星标 | 标为已读 | 移出垃圾 | 删除
+      // ⚠ 这一格是「移出垃圾」不是「标为垃圾」（2026-10-10 用户要求）：这封只在垃圾夹里，
+      //   再给「标为垃圾」是空操作。判据是**副本位置**（见 lib/mail/kind.ts 的 isJunkOnly），
+      //   不是"当前 tab"。
       await rows.first().locator("[data-mail-row]").hover();
       await expect(rows.first().locator('[data-slot="mail-row-actions"]')).toBeVisible();
       expect(
@@ -4772,7 +4816,7 @@ test.describe("站内邮件（/mail）", () => {
           .first()
           .locator('[data-slot="mail-row-actions"] button')
           .evaluateAll((els) => els.map((el) => el.getAttribute("aria-label"))),
-      ).toEqual(["选择", "加星标", "标为已读", "标为垃圾", "删除"]);
+      ).toEqual(["选择", "加星标", "标为已读", "移出垃圾", "删除"]);
 
       /**
        * 「未读」在「垃圾」tab 里是**就地筛选**（2026-10-10 第九轮用户定稿）：筛的是垃圾箱里

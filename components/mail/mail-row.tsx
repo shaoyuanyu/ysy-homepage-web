@@ -7,9 +7,10 @@ import {
   ArrowLeftRightIcon,
   ArrowUpRightIcon,
   ChevronDownIcon,
+  MailCheckIcon,
   MailIcon,
   MailOpenIcon,
-  OctagonAlertIcon,
+  MailXIcon,
   PaperclipIcon,
   SquareCheckBigIcon,
   StarIcon,
@@ -18,7 +19,7 @@ import {
 
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/mail/format";
-import { isSentItem } from "@/lib/mail/kind";
+import { isJunkOnly, isSentItem } from "@/lib/mail/kind";
 import { accountDotProps } from "@/components/mail/account-dot";
 import { MailRowCheckbox } from "@/components/mail/mail-batch-bar";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -57,6 +58,8 @@ export interface MailRowProps {
   onToggleSelect: (messageId: string) => void;
   onFlag: (item: MailListItem, change: { seen?: boolean; flagged?: boolean }) => void;
   onJunk: (item: MailListItem) => void;
+  /** 这封**只躺在垃圾夹里**时的动作（标为垃圾的逆操作）；判断见 lib/mail/kind.ts 的 isJunkOnly */
+  onNotJunk: (item: MailListItem) => void;
   onDelete: (item: MailListItem) => void;
   onEnterSelectMode: () => void;
   /**
@@ -85,6 +88,7 @@ function MailRowImpl({
   onToggleSelect,
   onFlag,
   onJunk,
+  onNotJunk,
   onDelete,
   onEnterSelectMode,
   threadCount,
@@ -94,6 +98,8 @@ function MailRowImpl({
   const t = useTranslations("mail");
   /** 有会话才给行尾留出箭头的位置（无会话时行布局与从前逐像素一致） */
   const showsThread = threadCount > 1;
+  /** 这封只在垃圾夹里 → 整理动作换成「移出垃圾」（见 isJunkOnly 的注释） */
+  const junkOnly = isJunkOnly(m.copies);
   const sent = isSentItem(m.copies);
   const dual =
     ownReady &&
@@ -291,15 +297,32 @@ function MailRowImpl({
               {m.seen ? <MailOpenIcon /> : <MailIcon />}
             </Button>
           )}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={t("moveToJunk")}
-            title={t("moveToJunk")}
-            onClick={() => onJunk(m)}
-          >
-            <OctagonAlertIcon />
-          </Button>
+          {/* 「标为垃圾 ⇄ 移出垃圾」（2026-10-10）：这封**只在垃圾夹里**时给的是「移出垃圾」
+              ——按副本位置判，不按当前 tab（理由见 lib/mail/kind.ts 的 isJunkOnly）。
+              ⚠ 图标成对：信封打叉（标为垃圾）/ 信封打勾（移出垃圾），与相邻的「标为未读」
+                那枚普通信封同一视觉家族。此前的八边形感叹号只有“警告”的意思，看不出
+                “垃圾”这个语义（用户 2026-10-10 截图指出）。 */}
+          {junkOnly ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("notJunk")}
+              title={t("notJunk")}
+              onClick={() => onNotJunk(m)}
+            >
+              <MailCheckIcon />
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("moveToJunk")}
+              title={t("moveToJunk")}
+              onClick={() => onJunk(m)}
+            >
+              <MailXIcon />
+            </Button>
+          )}
           <Button variant="ghost" size="icon-sm" aria-label={t("delete")} onClick={() => onDelete(m)}>
             <Trash2Icon />
           </Button>

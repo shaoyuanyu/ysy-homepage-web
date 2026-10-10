@@ -14,7 +14,8 @@ import {
   FileCode2Icon,
   FileTextIcon,
   LogInIcon,
-  OctagonAlertIcon,
+  MailCheckIcon,
+  MailXIcon,
   ForwardIcon,
   MailOpenIcon,
   MailIcon,
@@ -33,7 +34,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Link, useRouter } from "@/lib/i18n/navigation";
 import { encodeMessageId, MAIL_LIST_ORDER_KEY } from "@/lib/mail/id";
-import { isSentItem } from "@/lib/mail/kind";
+import { isJunkOnly, isSentItem } from "@/lib/mail/kind";
 import { mailNavOptions } from "@/lib/mail/nav";
 import {
   isCalendarAttachment,
@@ -264,6 +265,64 @@ export function MessageView({ messageId }: { messageId: string }) {
 
   /** 正在预览的附件（null = 预览弹窗关着） */
   const [preview, setPreview] = useState<MailAttachmentMeta | null>(null);
+
+  /**
+   * 这封只在垃圾夹里 → 工具栏给的动作是「移出垃圾」而不是「标为垃圾」。
+   * 按**副本位置**判而不是看当前 tab：同一封邮件在「全部」「搜索」「垃圾」里都可能出现，
+   * 而动作取决于它现在在哪（详见 lib/mail/kind.ts 的 isJunkOnly）。
+   */
+  const junkOnly = detail ? isJunkOnly(detail.copies) : false;
+
+  /**
+   * 移出垃圾（2026-10-10）：这封只在垃圾夹里时，工具栏给的是这个而不是「标为垃圾」。
+   *
+   * 与列表那枚同源，但**只给账号、不给目标文件夹**：详情页拿不到它的原文件夹
+   * （副本位置就是垃圾夹本身），由服务端缺省搬回 INBOX（见 `undoJunkMove` 的说明）。
+   */
+  const notJunk = useCallback(async () => {
+    if (!detail) return;
+    setActing(true);
+    try {
+      const res = await fetch("/api/mail/unmove", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          messageId,
+          targets: copyAccountIds.map((accountId) => ({ accountId })),
+        }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
+      const data = (await res.json()) as { restored: number; skipped?: { reason: string }[] };
+      if (data.restored === 0) {
+        toast.add({
+          title: t("notJunkFailed"),
+          description: data.skipped?.[0]?.reason,
+          type: "error",
+        });
+        setActing(false);
+        return;
+      }
+      // ⚠ **不能广播 `deleted`**：移出垃圾后这封邮件还在（只是换了文件夹），在「全部」
+      //   视图里它本来就该留着。广播 `refresh` 让左栏整表重取，以服务端为准。
+      broadcastItemChange({ messageId, refresh: true, source: "detail" });
+      toast.add({ title: t("notJunkDone"), type: "success" });
+      for (const accountId of copyAccountIds) {
+        void fetch("/api/mail/sync", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ accountId }),
+        }).catch(() => {});
+      }
+      router.push("/mail", mailNavOptions());
+    } catch (err) {
+      toast.add({
+        title: t("notJunkFailed"),
+        description: err instanceof Error ? err.message : String(err),
+        type: "error",
+      });
+      setActing(false);
+    }
+  }, [detail, messageId, router, t, copyAccountIds]);
 
   /**
    * 撤销刚做完的「标为垃圾」（2026-10-10 用户要求）。
@@ -1045,26 +1104,41 @@ export function MessageView({ messageId }: { messageId: string }) {
               <ActionLabel>{seenLabel}</ActionLabel>
             </Button>
           )}
-          {/* 标为垃圾（2026-10-07 用户定稿）：文件夹视图删除后，菜单式「移动」等于盲选
-              （搬过去再也看不见），只留这一个语义明确的整理动作；目标文件夹由服务端自己
-              在账号里探测（见 markJunk 注释），前端不再需要文件夹清单。
+          {/* 「标为垃圾 ⇄ 移出垃圾」（2026-10-07 定稿、2026-10-10 改成按副本位置切换）：
+              文件夹视图删除后，菜单式「移动」等于盲选（搬过去再也看不见），只留这一个
+              语义明确的整理动作；目标文件夹由服务端自己在账号里探测（见 markJunk 注释），
+              前端不再需要文件夹清单。
               ⚠ 文案 2026-10-07 用户缩写为「标为垃圾」（原「标为垃圾邮件」）——
               主栏要在一行内放下，见同文件顶部与 MAIL-AGENT.md 4.9 的动作分级。
-              ⚠ 图标 2026-10-07 用户反馈后由 `FolderInputIcon` 换成 `OctagonAlertIcon`：
-              文件夹 + 入箭头读起来就是「移进某个文件夹」（被删掉的「移动」那套语义），
-              而八边形 + 感叹号在邮件客户端里就是「垃圾邮件」（Gmail 的举报垃圾邮件同形）。
-              候选对比图见 .acceptance/12-icon-options.png 与 MAIL-AGENT.md 4.9 */}
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={acting}
-            aria-label={t("moveToJunk")}
-            title={t("moveToJunk")}
-            onClick={() => void markJunk()}
-          >
-            <OctagonAlertIcon data-icon="default" />
-            <ActionLabel>{t("moveToJunk")}</ActionLabel>
-          </Button>
+              ⚠ 图标 2026-10-10 换成一对信封：信封打叉（标为垃圾）/ 信封打勾（移出垃圾）。
+              此前的八边形感叹号（2026-10-07 由 `FolderInputIcon` 换成它，理由是 Gmail
+              的「举报垃圾邮件」同形）用户截图指出“根本没有直观语义”——它只有“警告/
+              危险”的意思，看不出是“垃圾”，而且与相邻几枚信封图标不成一族。 */}
+          {junkOnly ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={acting}
+              aria-label={t("notJunk")}
+              title={t("notJunk")}
+              onClick={() => void notJunk()}
+            >
+              <MailCheckIcon data-icon="default" />
+              <ActionLabel>{t("notJunk")}</ActionLabel>
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={acting}
+              aria-label={t("moveToJunk")}
+              title={t("moveToJunk")}
+              onClick={() => void markJunk()}
+            >
+              <MailXIcon data-icon="default" />
+              <ActionLabel>{t("moveToJunk")}</ActionLabel>
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"

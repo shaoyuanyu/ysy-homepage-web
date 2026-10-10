@@ -13,6 +13,7 @@ import {
 import { useLocale, useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
 import {
+  CheckCheckIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -20,7 +21,6 @@ import {
   FilePenLineIcon,
   InboxIcon,
   LogInIcon,
-  MailCheckIcon,
   PaperclipIcon,
   RefreshCwIcon,
   SearchIcon,
@@ -1050,6 +1050,60 @@ export function MailClient({
   );
 
   /**
+   * 「移出垃圾」（2026-10-10）：垃圾视图里那枚动作——把信从垃圾夹搬走。
+   *
+   * 与 `undoJunk` 的差别：**只给账号、不给目标文件夹**（垃圾视图里前端不知道它的原文件夹，
+   * 手里那份副本的位置就是垃圾夹本身），由服务端缺省搬回 INBOX。
+   *
+   * ⚠ 成功后**不能摘行**（与「标为垃圾」刚好相反）：移出后这封邮件还在，只是换了文件夹——
+   *   在「全部」「搜索」视图里它本来就该留着。整表重取、以服务端为准（等一次同步，
+   *   否则本地索引还在旧位置）。
+   */
+  const notJunkFromList = useCallback(
+    async (m: MailListItem) => {
+      const accountIds = [...new Set(m.copies.map((c) => c.accountId))];
+      try {
+        const res = await fetch("/api/mail/unmove", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            messageId: m.messageId,
+            targets: accountIds.map((accountId) => ({ accountId })),
+          }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
+        const data = (await res.json()) as { restored: number; skipped?: { reason: string }[] };
+        if (data.restored === 0) {
+          toast.add({
+            title: t("notJunkFailed"),
+            description: data.skipped?.[0]?.reason,
+            type: "error",
+          });
+          return;
+        }
+        toast.add({ title: t("notJunkDone"), type: "success" });
+        await Promise.all(
+          accountIds.map((accountId) =>
+            fetch("/api/mail/sync", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ accountId }),
+            }).catch(() => {}),
+          ),
+        );
+        await reload();
+      } catch (err) {
+        toast.add({
+          title: t("notJunkFailed"),
+          description: err instanceof Error ? err.message : String(err),
+          type: "error",
+        });
+      }
+    },
+    [reload, t],
+  );
+
+  /**
    * 行内「标为垃圾」（2026-10-10 第七轮用户要求：列表悬浮操作条也要有这个动作）。
    *
    * 与详情页的 `markJunk` 同一套：整封（全部副本）搬进该账号的 `\Junk`（目标文件夹由
@@ -1534,7 +1588,7 @@ export function MailClient({
             aria-label={t("markAllRead")}
             title={markAllNothing ? t("markAllReadNone") : t("markAllRead")}
           >
-            {markingAll ? <Spinner /> : <MailCheckIcon data-icon="default" />}
+            {markingAll ? <Spinner /> : <CheckCheckIcon data-icon="default" />}
           </Button>
           <Button
             variant="ghost"
@@ -1950,6 +2004,7 @@ export function MailClient({
                   onToggleSelect={toggleSelect}
                   onFlag={postFlags}
                   onJunk={markJunkFromList}
+                  onNotJunk={notJunkFromList}
                   onDelete={deleteRow}
                   onEnterSelectMode={enterSelectMode}
                   threadCount={members.length}
