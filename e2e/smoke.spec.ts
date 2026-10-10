@@ -3078,6 +3078,35 @@ const MAIL_DETAIL_HTML = `<p>newsletter body</p>
 <img src="https://pics.edu.cn/logo.png" />
 <img src="/api/mail/message/mid%3Aw03%40test.local/attachment/0" />`;
 
+/**
+ * 邮件里的日历邀请原文（附件预览 / 加入日历用例）。
+ *
+ * ⚠ 故意带上 `RRULE` 与 `VALARM`：「加入日历」把原文**原样**上传（只摘 METHOD），
+ *   正是为了不把这俩丢掉——所以用例必须把「它们确实传到了服务端」也锁住，
+ *   否则哪天有人改成"解析重建"，测试会静默变绿（外部客户端里会议不再重复、不提醒）。
+ */
+const CALENDAR_INVITE_ICS = [
+  "BEGIN:VCALENDAR",
+  "VERSION:2.0",
+  "PRODID:-//Example Corp//Scheduler//EN",
+  "METHOD:REQUEST",
+  "BEGIN:VEVENT",
+  "UID:invite-2026-1103@example.com",
+  "DTSTART:20261103T060000Z",
+  "DTEND:20261103T070000Z",
+  "SUMMARY:项目评审会",
+  "LOCATION:线上会议室",
+  "DESCRIPTION:请提前准备材料",
+  "RRULE:FREQ=WEEKLY;COUNT=3",
+  "BEGIN:VALARM",
+  "TRIGGER:-PT15M",
+  "ACTION:DISPLAY",
+  "DESCRIPTION:提醒",
+  "END:VALARM",
+  "END:VEVENT",
+  "END:VCALENDAR",
+].join("\r\n");
+
 /** 自动收录桩数据：通信过但未保存的地址（accounts = 出现在哪些账号的往来里，4.14） */
 const KNOWN_SENDERS = [
   { name: "张老师", email: "zhang@example.com", times: 3, lastSeen: "2026-09-25T02:00:00.000Z", accounts: ["acc1"] },
@@ -3114,6 +3143,13 @@ function stubMailApi(
     /** 草稿桩的实时引用（用例可塞服务器草稿） */
     draftStore?: Record<string, unknown>[];
     move?: unknown[];
+    /** `POST /unmove`（撤销标为垃圾）的请求体 */
+    unmove?: unknown[];
+    /**
+     * 这些消息的详情返回「图片 + 纯文本 + ics 邀请」三件附件的样张（附件预览与
+     * 加入日历用例用）。附件字节按序号在这一支里单独给（见 `/attachment/` 分支）。
+     */
+    attachmentDemoIds?: string[];
     /** 按需取原文（POST /message/:id/source）的调用记录 */
     source?: unknown[];
     /** 这些消息的详情按「只入库索引」（truncated）返回：正文/附件为空（4.15 的按需取原文） */
@@ -3352,6 +3388,14 @@ function stubMailApi(
       // 账号。前端按这两个数决定提示与跳转（0 且无 skipped = 本来就在目标里）。
       return json({ affected: body.copies?.length ?? 0, skipped: [] });
     }
+    if (path === "/unmove") {
+      const body = route.request().postDataJSON() as { messageId?: string; targets?: unknown[] };
+      calls.unmove?.push(body);
+      // 服务端契约（2026-10-10）：MOVE 之后垃圾夹里那份的 UID 已经变了，故由服务端
+      // 按 `SEARCH HEADER Message-ID` 现场定位再搬回原文件夹。
+      // restored = 真正搬回去的账号数；skipped = 定不到位的账号。
+      return json({ restored: body.targets?.length ?? 0, skipped: [] });
+    }
     if (path === "/messages") {
       calls.listQueries?.push(url.search);
       /**
@@ -3537,6 +3581,34 @@ function stubMailApi(
     // 附件字节：转发用例要把原附件装回写信页。⚠ 必须在 /message/ 详情分发之前，
     // 否则 /message/:id/attachment/:i 会被详情桩当成详情请求吞掉。
     if (path.includes("/attachment/")) {
+      const idx = Number(path.split("/attachment/")[1]);
+      // 附件预览 / 日历邀请用例的样张（消息 id 里带 attach1）：按序号给不同 MIME，
+      // 其余路径一字不改（转发用例仍拿它那份 PDF 字节）
+      if (path.includes("attach1")) {
+        if (idx === 0) {
+          return route.fulfill({
+            status: 200,
+            contentType: "image/png",
+            // 1×1 透明 PNG：只要能被 <img> 解出来即可，不参与任何像素断言
+            body: Buffer.from(
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+              "base64",
+            ),
+          });
+        }
+        if (idx === 1) {
+          return route.fulfill({
+            status: 200,
+            contentType: "text/plain; charset=utf-8",
+            body: Buffer.from("纪要要点：\n1. 预算\n2. 排期\n"),
+          });
+        }
+        return route.fulfill({
+          status: 200,
+          contentType: "text/calendar; charset=utf-8",
+          body: Buffer.from(CALENDAR_INVITE_ICS),
+        });
+      }
       return route.fulfill({
         status: 200,
         contentType: "application/octet-stream",
@@ -3564,6 +3636,34 @@ function stubMailApi(
           status: calls.detailError,
           contentType: "application/json",
           body: JSON.stringify({ error: "webmaild_unreachable" }),
+        });
+      }
+      // 带附件的样张（附件预览 / 加入日历用例）：图片 + 纯文本 + ics 邀请
+      const demoHit = (calls.attachmentDemoIds ?? []).find(
+        (id) => path.includes(encodeURIComponent(id)) || path.includes(id),
+      );
+      if (demoHit && !path.endsWith("/thread") && !path.endsWith("/source")) {
+        return detailJson({
+          ...mailItem({
+            messageId: demoHit,
+            subject: "带附件的样张",
+            fromAddr: "attach@example.com",
+            snippet: "见附件",
+            copies: [{ accountId: "acc1", folder: "INBOX", uid: 7 }],
+            accounts: ["acc1"],
+          }),
+          truncated: false,
+          text: "见附件。",
+          html: "",
+          cc: [],
+          refs: [],
+          remoteBlocked: 0,
+          headers: [],
+          attachments: [
+            { index: 0, filename: "photo.png", contentType: "image/png", size: 2048, cid: null, inline: false, deferred: false },
+            { index: 1, filename: "notes.txt", contentType: "text/plain", size: 30, cid: null, inline: false, deferred: false },
+            { index: 2, filename: "invite.ics", contentType: "text/calendar", size: 300, cid: null, inline: false, deferred: false },
+          ],
         });
       }
       // 精简原文（附件门控）：正文在、附件 delayed（2026-10-08）
@@ -4203,12 +4303,200 @@ test.describe("站内邮件（/mail）", () => {
       const foreground = await page.evaluate(() => getComputedStyle(document.body).color);
       expect(starFill, "已加星的星标应为前景色（黑/白），而非琥珀色").toBe(foreground);
 
-      // 键盘导航（4.9）：j 下移一行，k 回移
+      // 键盘导航（4.9）：↓ 下移一行，↑ 回移
+      // ⚠ 2026-10-10 用户定稿：删掉 j / k（只保留方向键）——别按 vim 习惯改回来
       await rows.nth(0).locator("[data-mail-row]").focus();
-      await page.keyboard.press("j");
+      await page.keyboard.press("ArrowDown");
       await expect(rows.nth(1).locator("[data-mail-row]")).toBeFocused();
-      await page.keyboard.press("k");
+      await page.keyboard.press("ArrowUp");
       await expect(rows.nth(0).locator("[data-mail-row]")).toBeFocused();
+    });
+
+    /**
+     * 列表会话聚合（2026-10-10）：同一会话（服务端给的 `threadKey` 相同）只占一行，
+     * 行尾给「N 封」与展开箭头，点开**就地展开**成多行。
+     *
+     * ⚠ 选择模式下不聚合：多选要精确到某一封，5 封并成一行后「勾选这一行」选中了谁
+     *   就说不清了（后端批量操作按 messageId 走）。
+     */
+    test("列表：同一会话聚成一行、可就地展开；选择模式下不聚合", async ({ page }) => {
+      const calls = { flags: [], send: [], delete: [], listStore: undefined as unknown[] | undefined };
+      await stubMailApi(page, calls);
+      calls.listStore = [
+        mailItem({
+          messageId: "mid:th3@test.local",
+          date: "2026-09-25T05:00:00.000Z",
+          subject: "Re: 预算讨论",
+          fromAddr: "b@example.com",
+          threadKey: "mid:th-root@test.local",
+        }),
+        mailItem({
+          messageId: "mid:th2@test.local",
+          date: "2026-09-25T04:00:00.000Z",
+          subject: "Re: 预算讨论",
+          fromAddr: "a@example.com",
+          threadKey: "mid:th-root@test.local",
+        }),
+        mailItem({
+          messageId: "mid:th1@test.local",
+          date: "2026-09-25T03:00:00.000Z",
+          subject: "预算讨论",
+          fromAddr: "me@example.com",
+          threadKey: "mid:th-root@test.local",
+        }),
+        mailItem({
+          messageId: "mid:solo@test.local",
+          date: "2026-09-25T02:00:00.000Z",
+          subject: "独立的一封",
+          threadKey: "mid:solo@test.local",
+        }),
+      ];
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+      await gotoReady(page, "/mail");
+
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      // 会话一行 + 独立一行 = 2 行（聚合前是 4 行）
+      await expect(rows).toHaveCount(2);
+      const toggle = page.locator('[data-slot="mail-thread-toggle"]');
+      await expect(toggle).toHaveCount(1);
+      await expect(toggle).toContainText("3 封");
+      // 独立那封没有计数（不聚合的单封行与从前逐像素一致）
+      await expect(rows.nth(1).locator('[data-slot="mail-thread-toggle"]')).toHaveCount(0);
+
+      // 就地展开：多出组内其它两封
+      await toggle.click();
+      await expect(page.locator('[data-slot="mail-thread-child"]')).toHaveCount(2);
+      await expect(rows).toHaveCount(4);
+      await expect(rows.nth(1)).toContainText("Re: 预算讨论");
+
+      // 收起
+      await toggle.click();
+      await expect(page.locator('[data-slot="mail-thread-child"]')).toHaveCount(0);
+      await expect(rows).toHaveCount(2);
+
+      // 选择模式下不聚合：每封各占一行、计数消失
+      await rows.nth(0).hover();
+      await rows.nth(0).getByRole("button", { name: "选择" }).click();
+      await expect(rows).toHaveCount(4);
+      await expect(page.locator('[data-slot="mail-thread-toggle"]')).toHaveCount(0);
+    });
+
+    /**
+     * 「标为垃圾」的撤销（2026-10-10 用户要求）：这个动作此前既没有确认也没有撤销。
+     *
+     * 撤销走 `POST /unmove`——MOVE 之后垃圾夹里那份的 UID 已经变了，前端手里的 copies
+     * 全是过期的，只能由服务端按 Message-ID 现场定位再搬回**原文件夹**。
+     */
+    test("列表：标为垃圾后可从 toast 撤销（走 /unmove，按原文件夹搬回）", async ({ page }) => {
+      const calls = { flags: [], send: [], delete: [], move: [] as unknown[], unmove: [] as unknown[] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+      await gotoReady(page, "/mail");
+
+      const first = page.locator('[data-slot="mail-list"] > li').nth(0);
+      await first.hover();
+      await first.getByRole("button", { name: "标为垃圾" }).click();
+      await expect.poll(() => calls.move.length).toBe(1);
+      expect(calls.move[0]).toEqual({
+        copies: [{ accountId: "acc1", folder: "INBOX", uid: 1 }],
+        to: "\\Junk",
+      });
+
+      // 结果 toast 上挂着「撤销」
+      const undo = page.locator('[data-slot="toast-action"]').first();
+      await expect(undo).toHaveText("撤销");
+      await undo.click();
+
+      await expect.poll(() => calls.unmove.length).toBe(1);
+      // targets = **搬走前**那份 copies 的（账号, 文件夹）——即各自要回到的地方
+      expect(calls.unmove[0]).toEqual({
+        messageId: "mid:w04@test.local",
+        targets: [{ accountId: "acc1", folder: "INBOX" }],
+      });
+      await expect(page.locator('[data-slot="toast-title"]').first()).toContainText("已移回收件箱");
+    });
+
+    /**
+     * 附件预览（2026-10-10）：图片给缩略图、纯文本可就地读；其余类型仍是下载链接
+     * （后端只对图片与纯文本放行 inline，前端不越界）。
+     */
+    test("附件：图片给缩略图、纯文本就地读，点击开预览弹窗", async ({ page }) => {
+      const calls = {
+        flags: [],
+        send: [],
+        delete: [],
+        attachmentDemoIds: ["mid:attach1@test.local"],
+      };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+      await gotoReady(
+        page,
+        `/mail/message/${Buffer.from("mid:attach1@test.local", "utf8").toString("base64url")}`,
+      );
+
+      // 图片那一件是缩略图按钮（不是"下载"链接）
+      const thumb = page.locator('[data-slot="mail-attachment-thumb"]');
+      await expect(thumb).toHaveCount(1);
+      await expect(thumb.locator("img")).toHaveAttribute("src", /\/attachment\/0$/);
+
+      const dialog = page.locator('[data-slot="mail-attachment-preview"]');
+      await thumb.click();
+      await expect(dialog).toBeVisible();
+      await expect(dialog.locator("img")).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+
+      // 纯文本：点开就地读（内容来自 /attachment/1）
+      await page.getByRole("button", { name: /notes\.txt/ }).click();
+      await expect(dialog).toBeVisible();
+      await expect(dialog.locator('[data-slot="mail-attachment-text"]')).toContainText("纪要要点");
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+    });
+
+    /**
+     * 日历邀请一键加入（2026-10-10）：把邮件里的 .ics 接到已有的 CalDAV 写入上。
+     *
+     * ⚠ 锁「原样上传」：`RRULE` / `VALARM` 必须出现在请求体里——解析重建会静默丢掉它们，
+     *   用户的会议从此不重复、不提醒，而界面上完全看不出来。
+     */
+    test("日历邀请：解析出会议信息并可一键加入日历（原文原样上传）", async ({ page }) => {
+      const calls = {
+        flags: [],
+        send: [],
+        delete: [],
+        attachmentDemoIds: ["mid:attach1@test.local"],
+      };
+      await stubMailApi(page, calls);
+      const invites: { ics?: string }[] = [];
+      await page.route("**/api/calendar/events", (route) => {
+        invites.push(route.request().postDataJSON() as { ics?: string });
+        return route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, uid: "invite-2026-1103@example.com" }),
+        });
+      });
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+      await gotoReady(
+        page,
+        `/mail/message/${Buffer.from("mid:attach1@test.local", "utf8").toString("base64url")}`,
+      );
+
+      const section = page.locator('[data-slot="mail-calendar-invite"]');
+      await expect(section).toBeVisible();
+      // 解析出来的会议名与地点（给用户看清楚要加的是什么）
+      await expect(section).toContainText("项目评审会");
+
+      await section.getByRole("button", { name: "加入日历" }).click();
+      await expect.poll(() => invites.length).toBe(1);
+      expect(invites[0].ics).toContain("BEGIN:VEVENT");
+      expect(invites[0].ics).toContain("RRULE:FREQ=WEEKLY;COUNT=3");
+      expect(invites[0].ics).toContain("BEGIN:VALARM");
+      await expect(page.locator('[data-slot="toast-title"]').first()).toContainText("已加入日历");
     });
 
     /**

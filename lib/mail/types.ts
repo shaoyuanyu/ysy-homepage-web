@@ -67,6 +67,12 @@ export interface MailListItem {
   hasAttach: boolean;
   copies: MailCopyRef[];
   accounts: string[];
+  /**
+   * 会话键（2026-10-10 列表聚合）：同一会话的邮件共用一个键，列表据此合并成一行。
+   * 取值是会话根的库键（可能指向一封**不在本地库**的老邮件），前端只当不透明字符串。
+   * 详情页的 `MailDetail` 不带它（那边有 `refs` 与 `/thread` 接口）。
+   */
+  threadKey?: string;
 }
 
 export interface MailAddress {

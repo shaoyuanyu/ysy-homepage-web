@@ -6,6 +6,7 @@ import {
   ArrowDownLeftIcon,
   ArrowLeftRightIcon,
   ArrowUpRightIcon,
+  ChevronDownIcon,
   MailIcon,
   MailOpenIcon,
   OctagonAlertIcon,
@@ -58,6 +59,16 @@ export interface MailRowProps {
   onJunk: (item: MailListItem) => void;
   onDelete: (item: MailListItem) => void;
   onEnterSelectMode: () => void;
+  /**
+   * 同一会话在**已加载列表**里的封数（2026-10-10 列表聚合）。>1 时行尾出现计数与
+   * 展开箭头，`<=1` 时整行与从前逐像素一致（不占位、不动布局）。
+   * ⚠ 传的是**已加载**的封数而不是服务端总数：分页里更靠后的几封还没拿到，
+   *   数字会随滚动增长——这与列表本身是同一口径（"当前列表"）。
+   */
+  threadCount: number;
+  /** 这一行的会话已就地展开（子行由父组件渲染在它后面） */
+  threadOpen: boolean;
+  onToggleThread: (messageId: string) => void;
 }
 
 function MailRowImpl({
@@ -76,8 +87,13 @@ function MailRowImpl({
   onJunk,
   onDelete,
   onEnterSelectMode,
+  threadCount,
+  threadOpen,
+  onToggleThread,
 }: MailRowProps) {
   const t = useTranslations("mail");
+  /** 有会话才给行尾留出箭头的位置（无会话时行布局与从前逐像素一致） */
+  const showsThread = threadCount > 1;
   const sent = isSentItem(m.copies);
   const dual =
     ownReady &&
@@ -107,6 +123,8 @@ function MailRowImpl({
         onClick={() => (selectMode ? onToggleSelect(m.messageId) : onOpen(m))}
         className={cn(
           "flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none",
+          // 会话行尾要摆展开箭头，文字区让出它的宽度（无会话时不多占一像素）
+          showsThread && "pr-10",
           active && "bg-accent/60",
         )}
       >
@@ -227,7 +245,12 @@ function MailRowImpl({
       {!selectMode && (
         <span
           data-slot="mail-row-actions"
-          className="absolute top-2 right-3 hidden items-center gap-0.5 rounded-lg border border-border bg-background p-0.5 shadow-sm group-hover/row:flex group-has-[:focus-visible]/row:flex"
+          className={cn(
+            "absolute top-2 right-3 hidden items-center gap-0.5 rounded-lg border border-border bg-background p-0.5 shadow-sm group-hover/row:flex group-has-[:focus-visible]/row:flex",
+            // 会话行尾的展开箭头常驻在 right-3（同一块地方）——悬浮操作条整体
+            // 左移一档，两者不重叠（箭头右缘 right-3+20px < 操作条的 right-10）
+            showsThread && "right-10",
+          )}
         >
           <Button
             variant="ghost"
@@ -282,8 +305,89 @@ function MailRowImpl({
           </Button>
         </span>
       )}
+      {/* 会话展开箭头（2026-10-10）：常驻在行尾、与行主按钮**平级**（不能嵌在按钮里
+          ——HTML 不允许嵌套 button，读屏也会把两枚按钮的意思混在一起）。
+          日期在悬浮时让位（与行内动作条同一规则），箭头始终可点。 */}
+      {!selectMode && showsThread && (
+        <button
+          type="button"
+          data-slot="mail-thread-toggle"
+          aria-expanded={threadOpen}
+          aria-label={threadOpen ? t("threadCollapse") : t("threadExpand", { count: threadCount })}
+          onClick={() => onToggleThread(m.messageId)}
+          className={cn(
+            "absolute top-3 right-3 flex items-center gap-0.5 rounded-md px-1 py-0.5 text-xs tabular-nums",
+            "text-muted-foreground hover:bg-accent hover:text-foreground",
+            "focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+            threadOpen && "text-foreground",
+          )}
+        >
+          {t("threadBadge", { count: threadCount })}
+          <ChevronDownIcon
+            className={cn("size-3.5 transition-transform duration-300 ease-out", threadOpen && "rotate-180")}
+            aria-hidden
+          />
+        </button>
+      )}
     </li>
   );
 }
 
 export const MailRow = memo(MailRowImpl);
+
+/**
+ * 会话里的**其它**邮件（就地展开时渲染在代表行之后）。
+ *
+ * 有意做得比 `MailRow` 简单：只有「发件人 / 主题 / 时间」三个信息加整行点击——
+ * 就地展开是快速扫一眼，真要整理还得进详情页（那里有完整工具栏与会话区块）。
+ * 不做行内动作条，也就不必再吵“悬浮条互推”那一堆细节。
+ */
+export interface ThreadChildRowProps {
+  item: MailListItem;
+  localeTag: string;
+  showAccountDots: boolean;
+  accountsById: Map<string, MailAccount>;
+  onOpen: (item: MailListItem) => void;
+}
+
+function ThreadChildRowImpl({ item: m, localeTag, showAccountDots, accountsById, onOpen }: ThreadChildRowProps) {
+  const t = useTranslations("mail");
+  const sent = isSentItem(m.copies);
+  const peer = sent && m.to?.length ? m.to[0].name || m.to[0].address || "" : m.fromName || m.fromAddr;
+  return (
+    <li data-slot="mail-thread-child" className="bg-accent/20">
+      <button
+        type="button"
+        data-mail-row
+        onClick={() => onOpen(m)}
+        className="flex w-full items-center gap-3 py-2 pr-4 pl-16 text-left text-sm transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none"
+      >
+        <span className={cn("shrink-0 truncate", m.seen ? "text-muted-foreground" : "font-semibold")}>
+          {peer}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground">
+          {m.subject || t("noSubject")}
+        </span>
+        {showAccountDots && (
+          <span className="flex shrink-0 items-center gap-0.5">
+            {m.accounts.map((id) => (
+              <span
+                key={id}
+                className={cn(
+                  "inline-block size-1.5 rounded-full",
+                  accountDotProps(accountsById.get(id)?.color ?? "").className,
+                )}
+                style={accountDotProps(accountsById.get(id)?.color ?? "").style}
+              />
+            ))}
+          </span>
+        )}
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          {formatDate(m.date, localeTag)}
+        </span>
+      </button>
+    </li>
+  );
+}
+
+export const ThreadChildRow = memo(ThreadChildRowImpl);

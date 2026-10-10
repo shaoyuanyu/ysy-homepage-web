@@ -12,6 +12,7 @@ import {
   CircleAlertIcon,
   DownloadIcon,
   FileCode2Icon,
+  FileTextIcon,
   LogInIcon,
   OctagonAlertIcon,
   ForwardIcon,
@@ -34,6 +35,14 @@ import { Link, useRouter } from "@/lib/i18n/navigation";
 import { encodeMessageId, MAIL_LIST_ORDER_KEY } from "@/lib/mail/id";
 import { isSentItem } from "@/lib/mail/kind";
 import { mailNavOptions } from "@/lib/mail/nav";
+import {
+  isCalendarAttachment,
+  isPreviewImage,
+  isPreviewText,
+} from "@/lib/mail/attachment";
+import { formatSize } from "@/lib/mail/format";
+import { attachmentUrl, AttachmentPreview } from "@/components/mail/attachment-preview";
+import { CalendarInviteSection } from "@/components/mail/calendar-invite";
 import { MOTION_SIZE, TOOLBAR_MS } from "@/components/mail/motion";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -66,8 +75,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/toast";
 import { mailErrorText, mailErrorKind } from "@/lib/mail/error-text";
 import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
+import { JUNK_UNDO_WINDOW_MS } from "@/lib/mail/undo";
 import type {
   MailAddress,
+  MailAttachmentMeta,
   MailDetail,
   MailListItem,
 } from "@/lib/mail/types";
@@ -99,6 +110,12 @@ export interface MailItemChange {
   flagged?: boolean;
   /** 删除 / 搬进垃圾：列表直接移除该行；详情页若正看着它则退出 */
   deleted?: boolean;
+  /**
+   * 服务端做过**本地补不了**的变动（目前只有「撤销标为垃圾」的反向搬迁）：
+   * 列表收到就整表重取——那封信回到了原文件夹，行该重新出现，而 `deleted` 只能
+   * 摘行、表达不了「又回来了」。
+   */
+  refresh?: boolean;
   /** 发起方（两端各自忽略自己发的事件，见上） */
   source?: "list" | "detail";
 }
@@ -109,12 +126,6 @@ export function broadcastItemChange(change: MailItemChange): void {
 
 function fmtAddress(list: MailAddress[]): string {
   return list.map((a) => (a.name ? `${a.name} <${a.address}>` : (a.address ?? ""))).join(", ");
-}
-
-function fmtSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 /**
@@ -242,6 +253,68 @@ export function MessageView({ messageId }: { messageId: string }) {
   );
 
   /**
+   * 附件区要列出的项（2026-10-10）：非内嵌的 + **内嵌的日历邀请**。
+   * 邀请部件在 MIME 里往往就是正文的 `inline` 替代表示，按老口径（只列 `!inline`）
+   * 会被过滤掉，「加入日历」在那些邮件上根本没有入口。
+   */
+  const visibleAttachments = useMemo(
+    () => (detail?.attachments ?? []).filter((a) => !a.inline || isCalendarAttachment(a)),
+    [detail?.attachments],
+  );
+
+  /** 正在预览的附件（null = 预览弹窗关着） */
+  const [preview, setPreview] = useState<MailAttachmentMeta | null>(null);
+
+  /**
+   * 撤销刚做完的「标为垃圾」（2026-10-10 用户要求）。
+   *
+   * 与列表那枚同源（见 `mail-client.tsx` 的 `undoJunk`）：MOVE 之后 UID 已变，得由
+   * 服务端在垃圾夹里 `SEARCH HEADER Message-ID` 现场定位再搬回来；本地索引要等一次
+   * 同步才会在原文件夹里重建副本行。这里比列表版多一件事——广播 `refresh` 让左栏
+   * 整表重取（`deleted` 那条广播已经把列表里那行摘掉了，摘完得让它回来）。
+   */
+  const undoJunk = useCallback(async () => {
+    if (!detail) return;
+    try {
+      const res = await fetch("/api/mail/unmove", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          messageId,
+          targets: detail.copies.map((c) => ({ accountId: c.accountId, folder: c.folder })),
+        }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
+      const data = (await res.json()) as { restored: number; skipped?: { reason: string }[] };
+      if (data.restored === 0) {
+        toast.add({
+          title: t("junkUndoFailed"),
+          description: data.skipped?.[0]?.reason,
+          type: "error",
+        });
+        return;
+      }
+      toast.add({ title: t("junkUndone"), type: "success" });
+      await Promise.all(
+        copyAccountIds.map((accountId) =>
+          fetch("/api/mail/sync", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ accountId }),
+          }).catch(() => {}),
+        ),
+      );
+      broadcastItemChange({ messageId, refresh: true, source: "detail" });
+    } catch (err) {
+      toast.add({
+        title: t("junkUndoFailed"),
+        description: err instanceof Error ? err.message : String(err),
+        type: "error",
+      });
+    }
+  }, [detail, messageId, copyAccountIds, t]);
+
+  /**
    * 标为垃圾邮件（2026-10-07 用户定稿：详情页只保留这一个整理动作）。
    *
    * - 目标给的是**特殊用途记号** `\Junk`，不是路径：各家叫法不同（阿里云「垃圾邮件」、
@@ -275,7 +348,13 @@ export function MessageView({ messageId }: { messageId: string }) {
         return;
       }
       broadcastItemChange({ messageId, deleted: true, source: "detail" });
-      toast.add({ title: t("junkDone"), type: "success" });
+      toast.add({
+        title: t("junkDone"),
+        type: "success",
+        // 撤销窗口比默认的 5 秒宽（见 lib/mail/undo.ts）
+        timeout: JUNK_UNDO_WINDOW_MS,
+        actionProps: { children: t("junkUndo"), onClick: () => void undoJunk() },
+      });
       for (const accountId of copyAccountIds) {
         void fetch("/api/mail/sync", {
           method: "POST",
@@ -292,7 +371,7 @@ export function MessageView({ messageId }: { messageId: string }) {
       });
       setActing(false);
     }
-  }, [detail, messageId, router, t, copyAccountIds]);
+  }, [detail, messageId, router, t, copyAccountIds, undoJunk]);
 
   /**
    * 原始邮件（2026-10-07，取证用）：工具栏「原始邮件」打开对话框，展示**原始头部行**
@@ -1211,42 +1290,102 @@ export function MessageView({ messageId }: { messageId: string }) {
         </div>
       )}
 
-      {/* 附件 */}
-      {detail.attachments.filter((a) => !a.inline).length > 0 && (
+      {/* 附件（2026-10-10：图片与纯文本可就地预览，其余类型仍是下载。
+          ⚠ 推迟的附件（`deferred`）**不给缩略图**：缩略图会让这一屏对每个附件各发一次
+            请求，而推迟的附件每取一次都要连邮箱（几秒），几张大图就能把页面卡住。
+            这些行照旧标着「未下载，点击取回」。 */}
+      {visibleAttachments.length > 0 && (
         <section className="flex flex-col gap-2">
           <h2 className="text-sm font-medium text-muted-foreground">
-            {t("attachments", { count: detail.attachments.filter((a) => !a.inline).length })}
+            {t("attachments", { count: visibleAttachments.length })}
           </h2>
           <ul className="flex flex-wrap gap-2">
-            {detail.attachments
-              .filter((a) => !a.inline)
-              .map((a) => (
-                <li key={a.index}>
-                  <a
-                    href={`/api/mail/message/${encodeURIComponent(messageId)}/attachment/${a.index}`}
-                    download={a.filename}
-                    data-slot="button"
-                    // 推迟的附件：点下去服务端会先向邮箱取这一个部件（几秒），再回传
-                    title={a.deferred ? t("attachmentDeferred") : undefined}
-                    className={buttonVariants({ variant: "outline", size: "sm" })}
-                  >
-                    <DownloadIcon data-icon="default" />
-                    {a.filename}
-                    <span className="text-xs text-muted-foreground tabular-nums">{fmtSize(a.size)}</span>
-                    {a.deferred && (
-                      <span
-                        data-slot="attachment-deferred"
-                        className="text-xs text-muted-foreground"
-                      >
-                        {t("attachmentDeferred")}
+            {visibleAttachments.map((a) => {
+              const url = attachmentUrl(messageId, a.index);
+              const image = isPreviewImage(a);
+              // 图片（已下载的那批）给缩略图，点开看大图
+              if (image && !a.deferred) {
+                return (
+                  <li key={a.index}>
+                    <button
+                      type="button"
+                      data-slot="mail-attachment-thumb"
+                      title={a.filename}
+                      onClick={() => setPreview(a)}
+                      className="flex w-28 flex-col gap-1 rounded-lg text-left focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                    >
+                      <span className="block overflow-hidden rounded-lg border border-border">
+                        {/* eslint-disable-next-line @next/next/no-img-element -- 附件字节来自认证过的
+                            代理端点（/api/mail/...），不是站内静态资源；next/image 的优化器在这里帮不上
+                            忙，反而会把请求再绕一层 */}
+                        <img
+                          src={url}
+                          alt={a.filename}
+                          loading="lazy"
+                          className="h-20 w-full object-cover transition-transform duration-300 ease-out hover:scale-[1.03]"
+                        />
                       </span>
-                    )}
-                  </a>
+                      <span className="truncate text-xs">{a.filename}</span>
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {formatSize(a.size)}
+                      </span>
+                    </button>
+                  </li>
+                );
+              }
+              // 其余：可预览的开弹窗，不可预览的仍是下载链接
+              const previewable = image || isPreviewText(a);
+              const inner = (
+                <>
+                  {previewable ? (
+                    <FileTextIcon data-icon="default" />
+                  ) : (
+                    <DownloadIcon data-icon="default" />
+                  )}
+                  {a.filename}
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {formatSize(a.size)}
+                  </span>
+                  {a.deferred && (
+                    <span data-slot="attachment-deferred" className="text-xs text-muted-foreground">
+                      {t("attachmentDeferred")}
+                    </span>
+                  )}
+                </>
+              );
+              return (
+                <li key={a.index}>
+                  {previewable ? (
+                    <button
+                      type="button"
+                      data-slot="button"
+                      // 推迟的附件：点下去服务端会先向邮箱取这一个部件（几秒），再回传
+                      title={a.deferred ? t("attachmentDeferred") : t("previewOpen")}
+                      onClick={() => setPreview(a)}
+                      className={buttonVariants({ variant: "outline", size: "sm" })}
+                    >
+                      {inner}
+                    </button>
+                  ) : (
+                    <a
+                      href={url}
+                      download={a.filename}
+                      data-slot="button"
+                      title={a.deferred ? t("attachmentDeferred") : undefined}
+                      className={buttonVariants({ variant: "outline", size: "sm" })}
+                    >
+                      {inner}
+                    </a>
+                  )}
                 </li>
-              ))}
+              );
+            })}
           </ul>
         </section>
       )}
+
+      {/* 日历邀请 → 「加入日历」（2026-10-10）：把邮件里的 .ics 接到已有的 CalDAV 写入上 */}
+      <CalendarInviteSection messageId={messageId} attachments={detail.attachments} />
 
       {/* 会话（4.7）：同一会话的其它邮件，按时间升序；当前封高亮不跳转。
           可折叠 + 可滚动（2026-10-09 用户要求）——优先级规则与实现见 `threadOpen` 的注释。
@@ -1472,6 +1611,13 @@ export function MessageView({ messageId }: { messageId: string }) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* 附件预览（2026-10-10）：图片 / 纯文本就地看，其余类型根本不会打开它 */}
+      <AttachmentPreview
+        messageId={messageId}
+        attachment={preview}
+        onClose={() => setPreview(null)}
+      />
     </div>
   );
 }

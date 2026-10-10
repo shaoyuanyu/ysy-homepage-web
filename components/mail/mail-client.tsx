@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -40,7 +41,7 @@ import { broadcastItemChange, MAIL_ITEM_CHANGED_EVENT, type MailItemChange } fro
 import { MAIL_UNREAD_EVENT } from "@/components/mail/new-mail-notifier";
 import { AccountMenu } from "@/components/mail/account-menu";
 import { MailBatchBar } from "@/components/mail/mail-batch-bar";
-import { MailRow } from "@/components/mail/mail-row";
+import { MailRow, ThreadChildRow } from "@/components/mail/mail-row";
 import { accountDotProps } from "@/components/mail/account-dot";
 import { MOTION_SIZE, TOOLBAR_MS } from "@/components/mail/motion";
 import { usePublishMailBar } from "@/components/mail/mail-statusbar";
@@ -63,6 +64,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { toast } from "@/components/ui/toast";
 import { mailErrorKind, mailErrorText } from "@/lib/mail/error-text";
 import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
+import { JUNK_UNDO_WINDOW_MS } from "@/lib/mail/undo";
 import type {
   MailAccount,
   MailDraft,
@@ -873,8 +875,10 @@ export function MailClient({
     [selectMode, exitSelectMode],
   );
 
-  // 键盘导航（4.9）：j / ↓ 下一行，k / ↑ 上一行；Enter 由按钮原生激活打开；
+  // 键盘导航（4.9）：↓ 下一行，↑ 上一行；Enter 由按钮原生激活打开；
   // Esc 退出选择模式（⚠ 弹窗打开时不抢：删除确认弹窗的 Esc 归弹窗自己）
+  // ⚠ **不支持 j / k**（2026-10-10 用户定稿：把它俩删掉，只留方向键）——E2E 里
+  //   「j / k 走一行」那条用例因此改成 ↓ / ↑，别再按 vim 习惯加回来。
   const onListKeyDown = useCallback((e: KeyboardEvent<HTMLUListElement>) => {
     if (e.key === "Escape" && selectMode) {
       if (typeof document !== "undefined" && document.querySelector('[role="dialog"]')) return;
@@ -882,7 +886,7 @@ export function MailClient({
       exitSelectMode();
       return;
     }
-    const delta = e.key === "j" || e.key === "ArrowDown" ? 1 : e.key === "k" || e.key === "ArrowUp" ? -1 : 0;
+    const delta = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
     if (delta === 0) return;
     const rows = Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-mail-row]") ?? []);
     const idx = rows.indexOf(document.activeElement as HTMLElement);
@@ -909,6 +913,12 @@ export function MailClient({
   const applyItemChange = useCallback(
     (change: MailItemChange) => {
       loadAccounts();
+      if (change.refresh) {
+        // 服务端做过本地补不了的变动（目前只有「撤销标为垃圾」的反向搬迁）：
+        // 那封信回到了原文件夹，行该重新出现——`deleted` 只能摘行，表达不了「又回来」
+        reload();
+        return;
+      }
       if (change.deleted) {
         setItems((prev) => prev.filter((m) => m.messageId !== change.messageId));
         return;
@@ -986,6 +996,60 @@ export function MailClient({
   );
 
   /**
+   * 撤销刚做完的「标为垃圾」（2026-10-10 用户要求：这个动作此前既没有确认也没有撤销）。
+   *
+   * 要点后端 `/unmove` 而不是反向调 `/move`：MOVE 之后那封邮件在垃圾夹里的 **UID 已变**，
+   * 手里的 `copies` 全是过期的；服务端用 `SEARCH HEADER Message-ID` 现场定位再搬回来。
+   * `targets` 取的是**搬走前**那份 copies 的（账号, 文件夹）——即各自要回到的地方。
+   *
+   * ⚠ 搬回来之后**必须等一次同步**再重取列表：本地索引要等同步才会在原文件夹里
+   *   建出那条副本行（`POST /sync` 是同步等待的，故这里 await 完再 reload）。
+   */
+  const undoJunk = useCallback(
+    async (m: MailListItem) => {
+      const accountIds = [...new Set(m.copies.map((c) => c.accountId))];
+      try {
+        const res = await fetch("/api/mail/unmove", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            messageId: m.messageId,
+            targets: m.copies.map((c) => ({ accountId: c.accountId, folder: c.folder })),
+          }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
+        const data = (await res.json()) as { restored: number; skipped?: { reason: string }[] };
+        if (data.restored === 0) {
+          toast.add({
+            title: t("junkUndoFailed"),
+            description: data.skipped?.[0]?.reason,
+            type: "error",
+          });
+          return;
+        }
+        toast.add({ title: t("junkUndone"), type: "success" });
+        await Promise.all(
+          accountIds.map((accountId) =>
+            fetch("/api/mail/sync", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ accountId }),
+            }).catch(() => {}),
+          ),
+        );
+        await reload();
+      } catch (err) {
+        toast.add({
+          title: t("junkUndoFailed"),
+          description: err instanceof Error ? err.message : String(err),
+          type: "error",
+        });
+      }
+    },
+    [reload, t],
+  );
+
+  /**
    * 行内「标为垃圾」（2026-10-10 第七轮用户要求：列表悬浮操作条也要有这个动作）。
    *
    * 与详情页的 `markJunk` 同一套：整封（全部副本）搬进该账号的 `\Junk`（目标文件夹由
@@ -1018,7 +1082,13 @@ export function MailClient({
         }
         setItems((prev) => prev.filter((x) => x.messageId !== m.messageId));
         broadcastItemChange({ messageId: m.messageId, deleted: true, source: "list" });
-        toast.add({ title: t("junkDone"), type: "success" });
+        toast.add({
+          title: t("junkDone"),
+          type: "success",
+          // 撤销窗口比默认的 5 秒宽（见 lib/mail/undo.ts）
+          timeout: JUNK_UNDO_WINDOW_MS,
+          actionProps: { children: t("junkUndo"), onClick: () => void undoJunk(m) },
+        });
         loadAccounts();
         // 目标文件夹由下一轮同步发现（与详情页一致：主动催一次这些账号的同步）
         for (const accountId of [...new Set(m.copies.map((c) => c.accountId))]) {
@@ -1036,7 +1106,7 @@ export function MailClient({
         });
       }
     },
-    [loadAccounts, reload, t],
+    [loadAccounts, reload, t, undoJunk],
   );
 
   const doDelete = useCallback(async () => {
@@ -1100,6 +1170,44 @@ export function MailClient({
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 键已覆盖行用到的字段，见上
   }, [accountsByColorKey]);
+  /**
+   * 列表分组（2026-10-10「列表会话聚合」）：同一会话的邮件只占一行，组内**最新**的那封
+   * 当代表。分组的键是服务端给的 `threadKey`（会话根，引用链推导），不是主题。
+   *
+   * ⚠ **选择模式下不聚合**：多选要精确到某一封，把 5 封并成一行之后「勾选这一行」
+   *   到底选中了谁就说不清了（后端批量操作是按 messageId 走的）。
+   * ⚠ 组内顺序沿用 `items`（服务端 `date DESC`），故 `members[0]` 天然是最新那封；
+   *   组的摆放位置也跟着它。新加载的一页里若有同会话的更早几封，会自动并进已有组。
+   */
+  const groupedItems = useMemo(() => {
+    if (selectMode) return items.map((m) => ({ key: m.messageId, lead: m, members: [m] }));
+    const groups = new Map<string, MailListItem[]>();
+    for (const m of items) {
+      const key = m.threadKey ?? m.messageId;
+      const arr = groups.get(key);
+      if (arr) arr.push(m);
+      else groups.set(key, [m]);
+    }
+    return [...groups.entries()].map(([key, members]) => ({ key, lead: members[0], members }));
+  }, [items, selectMode]);
+
+  /**
+   * 就地展开的会话（键 = **代表行的 messageId**）。
+   *
+   * 为什么不用 `threadKey`：那就要把 key 再传给 `MailRow`，而每行一个 `onToggleThread`
+   * 闭包会直接打掉 `memo`（父组件每渲染一次、全部行重渲一次）。代表行本身是稳定的——
+   * 它是会话里最新那封，新加载的一页里同会话的更早几封不会顶掉它。
+   */
+  const [expandedThreads, setExpandedThreads] = useState<Set<string>>(new Set());
+  const toggleThread = useCallback((messageId: string) => {
+    setExpandedThreads((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      return next;
+    });
+  }, []);
+
   const openItem = useCallback(
     (m: MailListItem) => {
       router.push(`/mail/message/${encodeMessageId(m.messageId)}`, mailNavOptions());
@@ -1822,26 +1930,48 @@ export function MailClient({
             )}
             data-slot="mail-list"
           >
-          {items.map((m) => (
-            <MailRow
-              key={m.messageId}
-              item={m}
-              active={activeMessageId === m.messageId}
-              selected={selected.has(m.messageId)}
-              selectMode={selectMode}
-              showAccountDots={accounts.length > 1}
-              accountsById={accountsById}
-              ownEmails={ownEmails}
-              ownReady={ownReady}
-              localeTag={t("localeTag")}
-              onOpen={openItem}
-              onToggleSelect={toggleSelect}
-              onFlag={postFlags}
-              onJunk={markJunkFromList}
-              onDelete={deleteRow}
-              onEnterSelectMode={enterSelectMode}
-            />
-          ))}
+          {groupedItems.map(({ lead, members }) => {
+            // 展开键用**代表行的 messageId**（与 toggleThread 收到的一致）——
+            // 分组的 key 是 threadKey，两者不是一回事，别混用
+            const open = expandedThreads.has(lead.messageId);
+            return (
+              <Fragment key={lead.messageId}>
+                <MailRow
+                  item={lead}
+                  active={activeMessageId === lead.messageId}
+                  selected={selected.has(lead.messageId)}
+                  selectMode={selectMode}
+                  showAccountDots={accounts.length > 1}
+                  accountsById={accountsById}
+                  ownEmails={ownEmails}
+                  ownReady={ownReady}
+                  localeTag={t("localeTag")}
+                  onOpen={openItem}
+                  onToggleSelect={toggleSelect}
+                  onFlag={postFlags}
+                  onJunk={markJunkFromList}
+                  onDelete={deleteRow}
+                  onEnterSelectMode={enterSelectMode}
+                  threadCount={members.length}
+                  threadOpen={open}
+                  onToggleThread={toggleThread}
+                />
+                {/* 就地展开（2026-10-10）：把组内**其它**几封排在代表行后面，
+                    组内顺序 = 服务端给的 date DESC，故越往下越早 */}
+                {open &&
+                  members.slice(1).map((m) => (
+                    <ThreadChildRow
+                      key={m.messageId}
+                      item={m}
+                      localeTag={t("localeTag")}
+                      showAccountDots={accounts.length > 1}
+                      accountsById={accountsById}
+                      onOpen={openItem}
+                    />
+                  ))}
+              </Fragment>
+            );
+          })}
           </ul>
         )}
 
