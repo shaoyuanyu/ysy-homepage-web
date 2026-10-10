@@ -606,7 +606,8 @@ API 形状（均 JSON，下划线端点为站内代理的转发对象）：
 
 **二、附件端点的安全加固（**曾是一个可被利用的存储型 XSS**）**
 - **问题**：附件响应把邮件里的 `Content-Type` **原样**回传，且 `Content-Disposition: inline` 的附件照发。发信人不受信任，于是可以投一封 `Content-Type: text/html` + `inline` 的邮件，站主在正文里点一下指向 `/api/mail/message/<id>/attachment/0` 的链接 → 浏览器在**站点源**上把这段 HTML 当文档渲染并执行脚本。会话 cookie 是 HttpOnly 读不到，但**同源 fetch 会自动带上它**——等于把站主 API 交出去。
-- **修法**（`webmail/src/attachment.ts`，纯函数、12 条单测）：只允许**图片（不含 SVG——SVG 顶层文档会执行脚本）与 `text/plain`** 保留原类型并可 inline；其余一律降级为 `application/octet-stream` + `attachment`（浏览器只下载不渲染）。所有附件响应补 `X-Content-Type-Options: nosniff` 与 `Content-Security-Policy: default-src 'none'; sandbox`；`filename` 的 ASCII 回退值剥掉控制字符与引号（`filename*` 走 `encodeURIComponent`，无 CRLF 注入）。
+- **修法**（`webmail/src/attachment.ts`，纯函数、13 条单测）：只允许**图片（不含 SVG——SVG 顶层文档会执行脚本）与 `text/plain`** 保留原类型并可 inline；其余一律降级为 `application/octet-stream` + `attachment`（浏览器只下载不渲染）。所有附件响应补 `X-Content-Type-Options: nosniff` 与 `Content-Security-Policy: default-src 'none'; sandbox`；`filename` 的 ASCII 回退值剥掉控制字符与引号（`filename*` 走 `encodeURIComponent`，无 CRLF 注入）。
+  - ⚠ **ASCII 回退位必须真的只剩可打印 ASCII**（2026-10-10 真机踩到）：`filename="…"` 是**回退位**，Node 的 http 模块对 header 值只接受 Latin-1 —— 只剥控制字符与引号是不够的，**全角字符**（`－` `（` `）` 这些 U+FF0x）会直接抛 `ERR_INVALID_CHAR`，响应发不出去、附件下载成 **500**。QQ 邮箱那封「2026－2027年度…军（警）官招录计划.xlsx」就是这么炸的。现在再补一道 `.replace(/[^\u0020-\u007e]/g, "_")`；真名不受影响（它由 `filename*=UTF-8''…` 承载，各客户端优先用它）。回归用例同时锁「构造 header 不抛」与「`filename*` 里的真名能解回来」。
 - ⚠ **代理层必须转发这几个头**（`app/api/mail/[...path]/route.ts` 只挑固定几个头转发）——漏转发等于加固没做。代理同时兜底补 `nosniff`。
 - `GET /message/:id/source`（.eml 原件）同样一律 `application/octet-stream` + `attachment`。
 
