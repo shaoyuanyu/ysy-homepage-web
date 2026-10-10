@@ -21,6 +21,7 @@ import {
   CircleAlertIcon,
   FilePenLineIcon,
   InboxIcon,
+  LogInIcon,
   MailCheckIcon,
   MailIcon,
   MailOpenIcon,
@@ -66,6 +67,8 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { toast } from "@/components/ui/toast";
+import { mailErrorKind, mailErrorText } from "@/lib/mail/error-text";
+import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
 import type {
   MailAccount,
   MailDraft,
@@ -387,7 +390,8 @@ export function MailClient({
         params.append("folder", f.account ? `${f.account}|${f.path}` : f.path);
       }
       if (opts.before) params.set("before", opts.before);
-      const res = await fetch(`/api/mail/messages?${params}`);
+      // 读路径统一 20s 超时（fetchWithTimeout）：服务半死时不能再无限转骨架
+      const res = await fetchWithTimeout(`/api/mail/messages?${params}`);
       if (seq !== loadSeqRef.current) return; // 过期响应：静默丢弃（连点筛选时的旧结果）
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
       const data = (await res.json()) as MailListResponse;
@@ -1231,6 +1235,11 @@ export function MailClient({
     unread: view === "drafts" ? 0 : unreadTotal,
     accounts,
     accountFilter,
+    // 列表**读不出来**（不是「刷新失败但旧数据还在」）时底栏要跟着变脸，
+    // 否则会出现「左栏写着『加载失败』、底栏一片绿点『上次收到新邮件 x 前』」的自相矛盾
+    // （2026-10-10 第十二轮，边界取证场景「半死：/health 活、列表接口死」）。
+    // ⚠ 传原始错误串：底栏要能区分「会话过期」与「服务不可达」（两者说法不同）
+    listFailed: view !== "drafts" && error && items.length === 0 ? error : null,
   });
 
   /**
@@ -1287,7 +1296,7 @@ export function MailClient({
                 {d.attachments?.length}
               </span>
             )}
-            <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground group-hover/row:invisible group-focus-within/row:invisible">
+            <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground group-hover/row:invisible group-has-[:focus-visible]/row:invisible">
               {formatDate(d.updatedAt, t("localeTag"))}
             </span>
           </span>
@@ -1297,10 +1306,12 @@ export function MailClient({
           </span>
         </span>
       </button>
-      {/* 行内操作：hover / 聚焦时显现的删除（草稿没有星标 / 已读状态） */}
+      {/* 行内操作：hover / 键盘聚焦时显现的删除（草稿没有星标 / 已读状态）。
+          ⚠ 与邮件列表行同款：条件用 `:focus-visible`（`:focus-within` 会被鼠标点过的按钮
+            钉住 → 悬浮别的行时两条并存），详见下方 mail-row-actions 的长注释 */}
       <span
         data-slot="mail-row-actions"
-        className="absolute top-2 right-3 hidden items-center gap-0.5 rounded-lg border border-border bg-background p-0.5 shadow-sm group-hover/row:flex group-focus-within/row:flex"
+        className="absolute top-2 right-3 hidden items-center gap-0.5 rounded-lg border border-border bg-background p-0.5 shadow-sm group-hover/row:flex group-has-[:focus-visible]/row:flex"
       >
         <Button variant="ghost" size="icon-sm" aria-label={t("deleteDraft")} onClick={() => setPendingDraftDelete(d)}>
           <Trash2Icon />
@@ -1665,6 +1676,28 @@ export function MailClient({
         data-slot="mail-list-scroll"
         className="flex min-h-0 flex-col lg:flex-1 lg:overflow-y-auto"
       >
+        {/*
+         * 「列表已在屏、这次刷新失败」（2026-10-10 第十二轮）：
+         * 旧行为是**把已经加载出来的邮件整个换成错误空态**——用户只是点了一下刷新（或后台
+         * 抖动了一下），正在读的列表就没了、滚动位置也丢了。现在改成「旧列表原地留着 +
+         * 头顶一条说明」，失败的影响面缩成一行；真的没有旧数据时才走整块错误空态。
+         */}
+        {view !== "drafts" && error && items.length > 0 && (
+          <p
+            data-slot="mail-list-stale"
+            className="mb-2 flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+          >
+            <CircleAlertIcon className="size-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1">{t("staleList")}</span>
+            <button
+              type="button"
+              onClick={reload}
+              className="shrink-0 rounded-sm font-medium underline underline-offset-4 hover:text-foreground"
+            >
+              {t("retry")}
+            </button>
+          </p>
+        )}
         {/* 加载态（2026-10-05 改）：骨架屏只用于**首次**加载；重载时保留旧列表并淡到 60%
             （与日历的更新中同一语言）——此前每次点 tab/开关都整个换成骨架、再换回来，
             用户报「列表闪烁抖动」；顺带把「加载中」的观感从「消失重来」变成「原地更新」 */}
@@ -1736,12 +1769,16 @@ export function MailClient({
           )
         ) : loading && !hasLoadedRef.current ? (
           <ListSkeleton />
-        ) : error ? (
+        ) : error && items.length === 0 ? (
           /*
-           * 加载失败（2026-10-04 用户反馈）：只给友好文案 + 重试，
+           * 加载失败（2026-10-04 用户反馈；2026-10-10 第十二轮补齐文案分档）：
            * **不回显 `webmaild_unreachable` 这类内部错误码**（用户看不懂也没法处理），
            * 也不能退化成「暂无邮件」空态——那会让人以为真的没有邮件。
-           * 全局服务健康由面板顶部的告警条负责，这里只解释「列表为什么空着」。
+           *
+           * ⚠ 文案必须走 `mailErrorText`（第十二轮修的洞）：此前硬编码 `loadFailedHint`
+           *   （「邮件服务暂时不可用」），于是**会话过期的 401 也被这么显示**——用户照着
+           *   「稍后重试」点一百次也不会好，因为真正要做的是重新登录。
+           * ⚠ 401 给「重新登录」而不是「重试」：重试对这个错误没有任何意义。
            */
           <Empty>
             <EmptyMedia variant="icon">
@@ -1749,12 +1786,23 @@ export function MailClient({
             </EmptyMedia>
             <EmptyHeader>
               <EmptyTitle>{t("loadFailed")}</EmptyTitle>
-              <EmptyDescription>{t("loadFailedHint")}</EmptyDescription>
+              <EmptyDescription>{mailErrorText(error, t)}</EmptyDescription>
             </EmptyHeader>
-            <Button variant="outline" size="sm" onClick={reload}>
-              <RefreshCwIcon data-icon="default" />
-              {t("retry")}
-            </Button>
+            {mailErrorKind(error) === "unauthorized" ? (
+              <Link
+                href="/login"
+                data-slot="button"
+                className={buttonVariants({ variant: "outline", size: "sm" })}
+              >
+                <LogInIcon data-icon="default" />
+                {t("relogin")}
+              </Link>
+            ) : (
+              <Button variant="outline" size="sm" onClick={reload}>
+                <RefreshCwIcon data-icon="default" />
+                {t("retry")}
+              </Button>
+            )}
           </Empty>
         ) : items.length === 0 ? (
           <Empty>
@@ -1877,7 +1925,7 @@ export function MailClient({
                     {m.hasAttach && <PaperclipIcon className="size-3.5 shrink-0 text-muted-foreground" aria-label={t("hasAttachment")} />}
                     <span
                       className={cn(
-                        "ml-auto shrink-0 text-xs tabular-nums group-hover/row:invisible group-focus-within/row:invisible",
+                        "ml-auto shrink-0 text-xs tabular-nums group-hover/row:invisible group-has-[:focus-visible]/row:invisible",
                         m.seen ? "text-muted-foreground" : "font-medium text-foreground",
                       )}
                     >
@@ -1904,11 +1952,18 @@ export function MailClient({
                     `[data-slot="mail-row-actions"][hidden] { display: none !important }`
                     已随之删除（类选择器优先级高于 `[hidden]` 的 UA 规则，属性写法压不住
                     hover），**别改回属性写法**。`@media (hover:none)` 的常显规则与结构无关，
-                    仍然有效（触屏上这条气泡栏一直可见，也是触屏进多选的入口） */}
+                    仍然有效（触屏上这条气泡栏一直可见，也是触屏进多选的入口）。
+                  ⚠ **显现条件是 `:focus-visible` 而不是 `:focus-within`**（2026-10-10 第十一轮
+                    用户截图报障「对一行操作之后，悬浮另一行会出现两条悬浮操作条」）：鼠标点过的按钮
+                    **仍持有焦点**（实测 `document.activeElement` 就是那一行的按钮、且
+                    `matches(":focus-visible") === false`），`focus-within` 把那一行的气泡栏
+                    **钉在屏幕上**——鼠标移到别的行就两条并存。键盘 Tab 进这一行时按钮是
+                    `:focus-visible`，气泡栏照旧出现、可继续 Tab 进去，可达性不变。
+                    ⚠ 日期的 `invisible` 必须用**同一个触发条件**（否则鼠标点完那行的日期被永久藏掉） */}
               {!selectMode && (
                 <span
                   data-slot="mail-row-actions"
-                  className="absolute top-2 right-3 hidden items-center gap-0.5 rounded-lg border border-border bg-background p-0.5 shadow-sm group-hover/row:flex group-focus-within/row:flex"
+                  className="absolute top-2 right-3 hidden items-center gap-0.5 rounded-lg border border-border bg-background p-0.5 shadow-sm group-hover/row:flex group-has-[:focus-visible]/row:flex"
                 >
                   <Button
                     variant="ghost"

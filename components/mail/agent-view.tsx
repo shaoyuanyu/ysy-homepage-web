@@ -5,10 +5,13 @@ import { useLocale, useTranslations } from "next-intl";
 import {
   ArrowDownLeftIcon,
   ArrowUpRightIcon,
+  CircleAlertIcon,
   DownloadIcon,
   FileTextIcon,
+  LogInIcon,
   MailIcon,
   PaperclipIcon,
+  RefreshCwIcon,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -23,10 +26,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from "@/components/ui/empty";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/toast";
+import { mailErrorKind, mailErrorText } from "@/lib/mail/error-text";
+import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
+import { Link } from "@/lib/i18n/navigation";
 
 /**
  * `/mail/agent` 只读入口（MAIL-AGENT.md 4.3 / 第八节第 5 步）：
@@ -271,34 +277,66 @@ function TimelineTab() {
   const [next, setNext] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState(false);
+  /**
+   * 时间线加载失败的原因（2026-10-10 第十二轮：由 boolean 改成原始错误串）。
+   * 旧实现只记「失败过」，界面是一行灰字「加载失败」——既不知道是谁挂了，也没有重试入口。
+   * 现在带着原始错误走 `mailErrorText` 分档：`mailagentd_unreachable`（agent 后台没起）
+   * 与业务错误说不同的话，并给「重试」。
+   */
+  const [error, setError] = useState<string | null>(null);
+  /** 时间线「重试」的触发器 */
+  const [reloadKey, setReloadKey] = useState(0);
 
   const [openId, setOpenId] = useState<string | null>(null);
   const [detail, setDetail] = useState<MessageDetail | null>(null);
+  /**
+   * 详情读取失败的原因（2026-10-10 第十二轮）。
+   * ⚠ 旧实现在 `!res.ok` 时**什么都不做**：弹窗里的 `detail` 一直是 null，于是永远停在
+   *   转圈——没有错误、没有重试、也不会自动关（边界取证时实测）。
+   */
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [rfc822Data, setRfc822Data] = useState<Record<number, ParsedView | "loading">>({});
 
   const load = useCallback(async (before?: string | null) => {
     const params = new URLSearchParams();
     if (before) params.set("before", before);
-    const res = await fetch(`/api/mail/agent/timeline?${params}`);
-    if (!res.ok) throw new Error(`${res.status}`);
+    // 读路径统一 20s 超时（fetchWithTimeout）
+    const res = await fetchWithTimeout(`/api/mail/agent/timeline?${params}`);
+    if (!res.ok) {
+      // ⚠ 必须把 body 里的 error 读出来：只有拿到 `mailagentd_unreachable` 才能
+      //   与业务错误分开说人话（旧实现只抛 `${res.status}`，界面上一律「加载失败」）
+      throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
+    }
     const data = (await res.json()) as { items: TimelineItem[]; next: string | null };
     setItems((prev) => (before ? [...prev, ...data.items] : data.items));
     setNext(data.next);
   }, []);
 
   useEffect(() => {
+    setLoading(true);
+    setError(null);
     load()
-      .catch(() => setError(true))
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false));
-  }, [load]);
+    // reloadKey：点「重试」时原地重跑
+  }, [load, reloadKey]);
 
   const openMessage = useCallback(async (messageId: string) => {
     setOpenId(messageId);
     setDetail(null);
+    setDetailError(null);
     setRfc822Data({});
-    const res = await fetch(`/api/mail/agent/message/${encodeURIComponent(messageId)}`);
-    if (res.ok) setDetail((await res.json()) as MessageDetail);
+    try {
+      const res = await fetchWithTimeout(
+        `/api/mail/agent/message/${encodeURIComponent(messageId)}`,
+      );
+      if (!res.ok) {
+        throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
+      }
+      setDetail((await res.json()) as MessageDetail);
+    } catch (err) {
+      setDetailError(err instanceof Error ? err.message : String(err));
+    }
   }, []);
 
   const expandRfc822 = useCallback(
@@ -328,6 +366,15 @@ function TimelineTab() {
     return DAY_GROUPS.map((key) => ({ key, rows: buckets[key] })).filter((g) => g.rows.length > 0);
   }, [items]);
 
+  /**
+   * 错误原文 → 展示文案（2026-10-10 第十二轮）。
+   * ⚠ agent 是**独立子系统**（mailagentd）：它的不可达必须说「agent 后台服务…」，
+   *   而不是 `mailErrorText` 在 `mail` 命名空间下的「邮件服务暂时不可用」——两者挂了
+   *   的原因、影响面与处置都不同（agent 挂了并不影响收发信）。
+   */
+  const detailErrorText = (raw: string) =>
+    mailErrorKind(raw) === "unreachable" ? t("loadFailedHint") : mailErrorText(raw, tm);
+
   if (loading) {
     return (
       <div className="flex justify-center py-12">
@@ -336,7 +383,40 @@ function TimelineTab() {
     );
   }
   if (error) {
-    return <p className="py-12 text-center text-sm text-muted-foreground">{t("loadFailed")}</p>;
+    /*
+     * 时间线读取失败（2026-10-10 第十二轮补全）：旧实现只有一行灰字「加载失败」——
+     * 没有图标层级、没说清是谁挂了、也没有重试入口（只能刷新整页）。
+     * 现在与站内其它错误态同一套（图标 + 标题 + 说明 + 动作）。
+     * ⚠ agent 是**独立子系统**（mailagentd），它的不可达要说「agent 后台」而不是
+     *   `mailErrorText` 默认的「邮件服务」——两者挂了的原因与处置完全不同。
+     */
+    const kind = mailErrorKind(error);
+    return (
+      <Empty className="py-12">
+        <EmptyMedia variant="icon">
+          <CircleAlertIcon aria-hidden />
+        </EmptyMedia>
+        <EmptyHeader>
+          <EmptyTitle>{t("loadFailed")}</EmptyTitle>
+          <EmptyDescription>{detailErrorText(error)}</EmptyDescription>
+        </EmptyHeader>
+        {kind === "unauthorized" ? (
+          <Link
+            href="/login"
+            data-slot="button"
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            <LogInIcon data-icon="default" />
+            {tm("relogin")}
+          </Link>
+        ) : (
+          <Button variant="outline" size="sm" onClick={() => setReloadKey((k) => k + 1)}>
+            <RefreshCwIcon data-icon="default" />
+            {tm("retry")}
+          </Button>
+        )}
+      </Empty>
+    );
   }
   if (items.length === 0) {
     return (
@@ -495,6 +575,31 @@ function TimelineTab() {
                 </a>
               </div>
             </>
+          ) : detailError ? (
+            /*
+             * 详情读取失败（2026-10-10 第十二轮）：旧实现在这里**什么也不做** → `detail`
+             * 一直是 null → 弹窗永远转圈（没有错误、没有重试、也不自动关，只能 ✕）。
+             * 现在给错误态 + 原地重试（重试 = 用同一个 messageId 重新 openMessage）。
+             */
+            <div className="flex flex-col items-start gap-3 py-8">
+              <p className="flex items-center gap-2 text-sm font-medium">
+                <CircleAlertIcon
+                  className="size-4 shrink-0 text-amber-700 dark:text-amber-400"
+                  aria-hidden
+                />
+                {t("loadFailed")}
+              </p>
+              <p className="text-sm text-muted-foreground">{detailErrorText(detailError)}</p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => openId && void openMessage(openId)}
+                disabled={!openId}
+              >
+                <RefreshCwIcon data-icon="default" />
+                {tm("retry")}
+              </Button>
+            </div>
           ) : (
             <div className="flex justify-center py-12">
               <Spinner label={tm("loading")} />

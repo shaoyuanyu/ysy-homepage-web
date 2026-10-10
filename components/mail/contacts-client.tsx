@@ -317,7 +317,11 @@ export function ContactsClient() {
                   {c.note ? `${c.name ? " · " : ""}${c.note}` : ""}
                 </span>
               </span>
-              <span className="flex shrink-0 items-center gap-0.5 sm:opacity-0 sm:transition-opacity sm:group-hover/row:opacity-100 sm:group-focus-within/row:opacity-100">
+              {/* ⚠ 显现条件用 `:focus-visible` 而非 `:focus-within`：鼠标点过的按钮**仍持有焦点**
+                  （`matches(":focus-visible")` 为 false），`focus-within` 会把这一行的动作钉在
+                  屏幕上——鼠标移到另一行就两行并存（邮件列表行同一处报障，详见 `mail-client.tsx`
+                  的 `mail-row-actions` 长注释） */}
+              <span className="flex shrink-0 items-center gap-0.5 sm:opacity-0 sm:transition-opacity sm:group-hover/row:opacity-100 sm:group-has-[:focus-visible]/row:opacity-100">
                 <Link
                   href={`/mail/compose?to=${encodeURIComponent(c.email)}`}
                   data-slot="button"

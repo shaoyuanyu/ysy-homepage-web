@@ -362,6 +362,8 @@
     "serverUnreachable": "邮件服务暂时不可用，请稍后重试",
     "unauthorized": "登录状态已失效，请重新登录",
     "retry": "重试",
+    "relogin": "重新登录",
+    "staleList": "未能刷新，以下是上次的结果",
     "empty": "暂无邮件",
     "emptySearch": "没有匹配的邮件",
     "emptyFilter": {
@@ -447,6 +449,7 @@
       "empty": "暂无邮件",
       "loadMore": "加载更多",
       "loadFailed": "加载失败",
+      "loadFailedHint": "agent 后台服务暂时不可用，请稍后重试",
       "copies": "所在邮箱",
       "detailHeaders": "完整头部",
       "detailStructure": "MIME 结构",
@@ -608,7 +611,9 @@
       "lastOkNever": "从未成功",
       "syncFailed": "{name} 合并视图同步失败：{reason}",
       "stale": "{name} 已 {time} 未能同步",
-      "firstSync": "正在首次同步邮件…"
+      "firstSync": "正在首次同步邮件…",
+      "listFailed": "邮件列表读取失败",
+      "unauthorized": "登录状态已失效，请重新登录"
     },
     "filterDrafts": "草稿",
     "filterJunk": "垃圾",

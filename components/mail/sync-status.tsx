@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { CircleAlertIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { mailErrorKind } from "@/lib/mail/error-text";
 import { Spinner } from "@/components/ui/spinner";
 import { MAIL_ACCOUNTS_CHANGED_EVENT } from "@/components/mail/accounts-dialog";
 
@@ -129,6 +130,16 @@ export function useSyncStatus(): {
   const [status, setStatus] = useState<SyncStatus>({ phase: "loading" });
   const [backfill, setBackfill] = useState<BackfillState | null>(null);
   const [firstSync, setFirstSync] = useState(false);
+  /**
+   * 账号 id → 显示名（2026-10-10 第十二轮）。
+   *
+   * 起因：底栏「{name} 合并视图同步失败」「{name} 已 x 未能同步」里的 name 直接用了
+   * webmail 的 `/health` 给的 `id`（`shaoyuanyu`），而同一条底栏上另一枚图标（来自
+   * mailagentd）用的是 `displayName`（「个人」）——同一个账号在底栏上两种称呼。
+   * webmail 的 `/health` 只回 id（不改后端），故这里自己取一次 `/accounts` 做映射；
+   * 取不到（后台挂了）就退回 id，不影响告警本身。
+   */
+  const [names, setNames] = useState<Record<string, string>>({});
 
   const rel = useCallback(
     (iso: string): string => {
@@ -142,6 +153,23 @@ export function useSyncStatus(): {
     },
     [t],
   );
+
+  // 名称映射：挂载时取一次，账号增删后（同一事件源，见下）再取一次
+  useEffect(() => {
+    const loadNames = () => {
+      fetch("/api/mail/accounts", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : []))
+        .then((list: { id: string; displayName?: string }[]) =>
+          setNames(Object.fromEntries(list.map((a) => [a.id, a.displayName?.trim() || a.id]))),
+        )
+        .catch(() => {});
+    };
+    loadNames();
+    window.addEventListener(MAIL_ACCOUNTS_CHANGED_EVENT, loadNames);
+    return () => window.removeEventListener(MAIL_ACCOUNTS_CHANGED_EVENT, loadNames);
+  }, []);
+
+  const nameOf = useCallback((id: string) => names[id] ?? id, [names]);
 
   const load = useCallback(async () => {
     const problems: Problem[] = [];
@@ -162,17 +190,45 @@ export function useSyncStatus(): {
     ]);
     const mailagentdUp = mailagentdRes.status === "fulfilled" && mailagentdRes.value.ok;
     const webmailUp = webmailRes.status === "fulfilled" && webmailRes.value.ok;
+    /**
+     * 会话过期（2026-10-10 第十二轮）：401 与「服务挂了」在界面上必须分开说——
+     * 「稍后重试」对过期的会话毫无意义，要做的是重新登录。此前 401 被归进
+     * `!webmailUp`，底栏显示的是「邮件服务不可达」（误导）。
+     */
+    const webmailUnauthorized =
+      webmailRes.status === "fulfilled" && webmailRes.value.status === 401;
+    const agentUnauthorized =
+      mailagentdRes.status === "fulfilled" && mailagentdRes.value.status === 401;
 
     if (!mailagentdUp && !webmailUp) {
+      const unauthorized = webmailUnauthorized || agentUnauthorized;
       setStatus({
         phase: "alert",
-        problems: [{ key: "down", text: t("unreachable"), source: "webmail" }],
+        problems: [
+          {
+            key: unauthorized ? "unauthorized" : "down",
+            text: unauthorized ? t("unauthorized") : t("unreachable"),
+            source: "webmail",
+          },
+        ],
         latestNew: null,
       });
       return;
     }
-    if (!mailagentdUp) problems.push({ key: "agent-down", text: t("agentDown"), source: "agent" });
-    if (!webmailUp) problems.push({ key: "webmail-down", text: t("webmailDown"), source: "webmail" });
+    if (!mailagentdUp) {
+      problems.push({
+        key: "agent-down",
+        text: agentUnauthorized ? t("unauthorized") : t("agentDown"),
+        source: "agent",
+      });
+    }
+    if (!webmailUp) {
+      problems.push({
+        key: "webmail-down",
+        text: webmailUnauthorized ? t("unauthorized") : t("webmailDown"),
+        source: "webmail",
+      });
+    }
 
     // ⚠ 重复写完整条件而非用 mailagentdUp：TS 无法从独立 boolean 反推 PromiseSettledResult 的收窄
     if (mailagentdRes.status === "fulfilled" && mailagentdRes.value.ok) {
@@ -220,7 +276,7 @@ export function useSyncStatus(): {
           problems.push({
             source: "webmail",
             key: `webmail-${a.id}`,
-            text: t("syncFailed", { name: a.id, reason: a.lastError }),
+            text: t("syncFailed", { name: nameOf(a.id), reason: a.lastError }),
           });
         } else if (a.lastSync === null) {
           // ⚠ 首次同步还没跑完（lastSync 为 null）**不是告警**（2026-10-08 修）：
@@ -236,7 +292,7 @@ export function useSyncStatus(): {
           problems.push({
             source: "webmail",
             key: `webmail-stale-${a.id}`,
-            text: t("stale", { name: a.id, time: rel(a.lastSync) }),
+            text: t("stale", { name: nameOf(a.id), time: rel(a.lastSync) }),
           });
         }
       }
@@ -256,7 +312,7 @@ export function useSyncStatus(): {
     } else {
       setStatus({ phase: "ok", latestNew });
     }
-  }, [t, rel]);
+  }, [t, rel, nameOf]);
 
   // 轮询：平静期 60s；**有抓取任务在跑时 5s**（进度条要动、列表要跟着刷新）
   const active = backfill !== null || firstSync;
@@ -354,6 +410,7 @@ export function SyncStatusIndicator({
   rel,
   backfill,
   firstSync,
+  listFailed,
   className,
 }: {
   status: SyncStatus;
@@ -361,15 +418,23 @@ export function SyncStatusIndicator({
   backfill?: BackfillState | null;
   /** 有账号首轮同步还没跑完（进度数字还出不来）——见 useSyncStatus */
   firstSync?: boolean;
+  /**
+   * 左栏列表**读不出来**的原始错误串（正在错误空态）——由 MailClient 经底栏 context 发布。
+   * 2026-10-10 第十二轮补：此前这种情况底栏仍是一片绿点「上次收到新邮件 x 前」，
+   * 与左栏「加载失败」自相矛盾（边界取证场景「/health 活、列表接口死」）。
+   * 带原文是为了分档：会话过期说「重新登录」，服务不可达说「列表读取失败」。
+   */
+  listFailed?: string | null;
   className?: string;
 }) {
   const t = useTranslations("mail.sync");
 
   // 按优先级构造（第 0 条 = 底栏完整显示的那条；其余都只做图标）
   //
-  // 优先级（2026-10-08 用户定稿）：① 正在同步 → ② 邮件同步自身的问题（webmail）
-  // → ③ 正常/检查中基线 → ④ agent 后台的问题（**永远只做图标**）。
-  // ⚠ ④ 排最后是刻意的：用户明确要求把「agent 服务不可达」缩成一枚感叹号，
+  // 优先级（2026-10-08 用户定稿；2026-10-10 补 ③）：① 正在同步 → ② 邮件同步自身的
+  // 问题（webmail）→ ③ 列表读不出来 → ④ 正常/检查中基线 → ⑤ agent 后台的问题
+  // （**永远只做图标**）。
+  // ⚠ ⑤ 排最后是刻意的：用户明确要求把「agent 服务不可达」缩成一枚感叹号，
   //   而它也确实与「我的邮件在不在同步」无关（mailagentd 是另一个子系统）。
   const items: StatusItem[] = [];
 
@@ -419,6 +484,26 @@ export function SyncStatusIndicator({
     });
   }
 
+  // 列表读不出来（2026-10-10 第十二轮）：同步链路可能是好的（/health 正常），但用户
+  // 这一屏根本读不到邮件——此刻还说「上次收到新邮件 x 前」会读成「一切正常」。
+  // 排在 webmail 问题之后（后者是**原因**，这条是**后果**，同一个故事里原因更该占文字位）。
+  // ⚠ 分档：会话过期（401）说「重新登录」，其余（不可达 / 业务错误）说「列表读取失败」。
+  if (listFailed) {
+    const text =
+      mailErrorKind(listFailed) === "unauthorized" ? t("unauthorized") : t("listFailed");
+    items.push({
+      key: "list-failed",
+      tone: "warn",
+      glyph: (
+        <CircleAlertIcon data-slot="mail-sync-alert-icon" className="size-3.5 shrink-0" aria-hidden />
+      ),
+      text,
+      detail: text,
+      slot: "mail-sync-alert-text",
+      title: text,
+    });
+  }
+
   // 基线（正常 / 检查中）：判据是「**邮件同步链路**没有问题」——注意不是「没有任何问题」：
   // ⚠ agent 后台的问题不影响这里（它拿不到 latestNew 吗？拿得到，webmail 是好的），
   //   所以「agent 不可达 + 同步正常」时底栏照样显示「上次收到新邮件 x 前」，
@@ -426,8 +511,10 @@ export function SyncStatusIndicator({
   // ⚠ 邮件后台不可达时还说「同步正常」是错的（历史实现也是这个口径），故排除。
   // ⚠ 正在同步时**也不放**这枚绿点：蓝色转圈已经说明「在干活」，再挂一个绿点只是噪音
   //   （2026-10-08 用户要的是「一屏只完整显示一条、其余最多一枚图标」）。
+  // ⚠ 列表读不出来时同理排除（2026-10-10）：否则「⚠ 邮件列表读取失败 ●」里那枚绿点
+  //   会被读成「列表失败但一切照旧」。
   const progressing = !!backfill || !!firstSync;
-  if (syncProblems.length === 0 && !progressing) {
+  if (syncProblems.length === 0 && !progressing && !listFailed) {
     if (status.phase === "loading") {
       items.push({
         key: "loading",

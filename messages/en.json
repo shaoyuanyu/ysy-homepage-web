@@ -362,6 +362,8 @@
     "serverUnreachable": "Mail service is temporarily unavailable",
     "unauthorized": "Your session expired — please sign in again",
     "retry": "Retry",
+    "relogin": "Sign in again",
+    "staleList": "Couldn't refresh — showing the previous results",
     "empty": "No messages yet",
     "emptySearch": "No matching messages",
     "emptyFilter": {
@@ -447,6 +449,7 @@
       "empty": "No messages yet",
       "loadMore": "Load more",
       "loadFailed": "Failed to load",
+      "loadFailedHint": "The agent backend is temporarily unavailable. Please try again later.",
       "copies": "Found in",
       "detailHeaders": "Full headers",
       "detailStructure": "MIME structure",
@@ -608,7 +611,9 @@
       "lastOkNever": "never succeeded",
       "syncFailed": "{name}: merged-view sync failed: {reason}",
       "stale": "{name}: not synced for {time}",
-      "firstSync": "Syncing mail for the first time…"
+      "firstSync": "Syncing mail for the first time…",
+      "listFailed": "Failed to load the message list",
+      "unauthorized": "Your session expired — please sign in again"
     },
     "filterDrafts": "Drafts",
     "filterJunk": "Junk",

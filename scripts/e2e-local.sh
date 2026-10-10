@@ -25,12 +25,16 @@ pnpm start > /tmp/e2e-server.log 2>&1 &
 SERVER_PID=$!
 trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
 
+# ⚠ 就绪探测必须带 `-f`（2026-10-10 踩过）：`curl -s -o /dev/null` 对 **500 也算成功**
+#   （退出码 0），于是「服务器起来了但每个路由都 500」会被判成就绪、接着跑完整轮测试，
+#   产出 100+ 条假红（当天真实原因是 dev 还占着 3000、构建把它脚下的 `.next` 换掉了）。
+#   带上 `-f` 后 HTTP ≥400 即视为未就绪：轮询超时 → 打印服务端日志并非零退出。
 for i in $(seq 1 30); do
-  if curl -s -o /dev/null http://localhost:3000/; then break; fi
+  if curl -fsS -o /dev/null http://localhost:3000/; then break; fi
   sleep 1
 done
-if ! curl -s -o /dev/null http://localhost:3000/; then
-  echo "!!! 服务器启动失败"; tail -20 /tmp/e2e-server.log; exit 1
+if ! curl -fsS -o /dev/null http://localhost:3000/; then
+  echo "!!! 服务器启动失败（或启动后返回 5xx）"; tail -20 /tmp/e2e-server.log; exit 1
 fi
 
 echo "=== [3/3] 运行冒烟测试 ==="

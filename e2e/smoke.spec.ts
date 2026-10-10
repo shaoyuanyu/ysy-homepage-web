@@ -3125,6 +3125,12 @@ function stubMailApi(
     partialIds?: string[];
     /** 详情请求返回该状态码 + `{error:"webmaild_unreachable"}`（验证内部错误码不回显） */
     detailError?: number;
+    /**
+     * 列表（`GET /messages`）返回该状态码（2026-10-10 第十二轮）：401 → `unauthorized`
+     * （会话过期），其余 → `webmaild_unreachable`。**实时读取**，用例可在页面加载完之后
+     * 改它来模拟「中途挂掉」。
+     */
+    listError?: number;
     /** 账号内存桩的实时引用（用例可改写 unread 等字段模拟新邮件 / 新账号） */
     accountStore?: Record<string, unknown>[];
     /** 「上次收到新邮件」信号（/health 的 lastNewMail）的可控引用：
@@ -3348,6 +3354,21 @@ function stubMailApi(
     }
     if (path === "/messages") {
       calls.listQueries?.push(url.search);
+      /**
+       * 列表读取失败（2026-10-10 第十二轮）：按状态码返回代理层的错误体。
+       * 401 → `unauthorized`（会话过期，文案必须说「重新登录」）；其余 → 服务不可达。
+       * ⚠ 用 `calls.listError` 读实时值（不是闭包快照）——「中途挂掉」用例要在页面
+       *   已经加载完列表之后把它改掉，再点刷新。
+       */
+      if (calls.listError) {
+        return route.fulfill({
+          status: calls.listError,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error: calls.listError === 401 ? "unauthorized" : "webmaild_unreachable",
+          }),
+        });
+      }
       const account = url.searchParams.get("account");
       const q = url.searchParams.get("q");
       const filter = url.searchParams.get("filter");
@@ -4371,6 +4392,10 @@ test.describe("站内邮件（/mail）", () => {
      * 用户原话：「在邮件列表的悬浮操作条中点击『标为未读』后，悬浮操作条中的『标为未读』会
      * 转变成『标为已读』，但是邮件查看页面的工具栏中并没有同步变化。其他几个操作也存在同样
      * 问题」——根因是列表行内操作只改自己的 state、从不广播（详情 → 列表那条早已有）。
+     *
+     * ⚠ 星标用「互相同步」验证，**「标为未读」不在这条路上**（2026-10-10 第十轮用户指定：
+     *   在列表里对正看着的那封标未读 → 改完状态**退出查看**，与详情页自己那枚同规则，
+     *   故它只能作为「退出」契约来验，见本用例 ③）。
      */
     test("状态互相同步：列表悬浮条改状态，右侧详情工具栏立即跟随（反之亦然）", async ({ page }) => {
       const calls = { flags: [] as unknown[], send: [], delete: [] };
@@ -4391,26 +4416,29 @@ test.describe("站内邮件（/mail）", () => {
       await expect(detailBar.getByRole("button", { name: "标为未读", exact: true })).toBeVisible();
       await expect(row.getByRole("button", { name: "标为未读", exact: true })).toBeVisible();
 
-      // ① 列表悬浮条点「标为未读」→ 该封变未读，**详情工具栏必须跟着翻成「标为已读」**
-      //    （用户报障的正是这一半：以前只有悬浮条自己在变）
-      await row.getByRole("button", { name: "标为未读", exact: true }).click();
-      await expect(detailBar.getByRole("button", { name: "标为已读", exact: true })).toBeVisible();
-      await expect(row.getByRole("button", { name: "标为已读", exact: true })).toBeVisible();
-
-      // ② 列表悬浮条加星标 → 详情工具栏的星标按钮进入按下态、文案变「取消星标」
+      // ① 列表悬浮条加星标 → 详情工具栏的星标按钮进入按下态、文案变「取消星标」
       await row.getByRole("button", { name: "加星标", exact: true }).click();
       await expect(detailBar.getByRole("button", { name: "取消星标", exact: true })).toHaveAttribute(
         "aria-pressed",
         "true",
       );
 
-      // ③ 反方向：详情页点「取消星标」→ 列表悬浮条跟着回到「加星标」（未按下）
+      // ② 反方向：详情页点「取消星标」→ 列表悬浮条跟着回到「加星标」（未按下）
       await detailBar.getByRole("button", { name: "取消星标", exact: true }).click();
       await row.locator("[data-mail-row]").hover();
       await expect(row.getByRole("button", { name: "加星标", exact: true })).toHaveAttribute(
         "aria-pressed",
         "false",
       );
+
+      // ③ 列表悬浮条点「标为未读」→ 该封变未读**并退出查看**（用户 2026-10-10 第十轮指定：
+      //    停留在读信页等于当场推翻刚标下去的未读，「标为未读」就等于无效）。
+      //    留在列表上才看得到操作结果——该行翻成「标为已读」（未读态）。
+      await row.getByRole("button", { name: "标为未读", exact: true }).click();
+      await expect(page).toHaveURL(/\/mail(\?[^/]*)?$/);
+      await expect(detailBar).toHaveCount(0);
+      await row.locator("[data-mail-row]").hover();
+      await expect(row.getByRole("button", { name: "标为已读", exact: true })).toBeVisible();
     });
 
     /**
@@ -5621,6 +5649,81 @@ test.describe("站内邮件（/mail）", () => {
     });
 
     /**
+     * 行内气泡栏的可见性（2026-10-10 第十一轮用户截图报障）：
+     * 「在列表里对一封邮件做过操作之后，把鼠标悬浮到另一封上 → 同时出现两条悬浮操作条」。
+     * 根因不是重复渲染，而是**显现条件写成了 `group-focus-within/row`**：鼠标点过的按钮
+     * **仍持有焦点**（实测 `document.activeElement` 就是那一行的按钮，且它
+     * `matches(":focus-visible") === false`），于是那一行的气泡栏被焦点**钉在屏幕上**，
+     * 和鼠标所在那一行的那条并存。修法 = 条件换成 `:focus-visible`（键盘 Tab 进某一行时
+     * 按钮正是 `:focus-visible`，气泡栏照旧现身，可达性不变）。
+     * 契约：① 同一时刻**最多一条**可见；② 点过某行的动作后鼠标移到另一行，只剩新那一行那条；
+     * ③ 键盘路径不回归。⚠ 用「可见条数」而不是元素个数断言——每条气泡栏**始终在 DOM 里**
+     * （`display:none` 隐藏），个数永远是行数。
+     */
+    test("行内气泡栏：点过某行动作后鼠标移到另一行只剩一条可见（焦点不钉住气泡栏）", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      /** 可见气泡栏所在行号（`display:none` 的不算）——同时出现两条就是用户报的重复 */
+      const visibleBarRows = () =>
+        page
+          .locator('[data-slot="mail-row-actions"]')
+          .evaluateAll((els) =>
+            els.map((el, i) => (getComputedStyle(el).display === "none" ? -1 : i)).filter((i) => i >= 0),
+          );
+
+      await page.getByRole("tab", { name: "收件", exact: true }).click();
+      await expect(rows).toHaveCount(4);
+      expect(await visibleBarRows()).toEqual([]);
+
+      // 悬浮第 1 行 → 只有它那一条现身
+      await rows.first().locator("[data-mail-row]").hover();
+      await expect.poll(visibleBarRows).toEqual([0]);
+
+      // 在这一行上做一个真实动作（加星标）。⚠ 同时锁住**根因成立**：点完按钮焦点仍留在
+      // 那一行的按钮上、且不是 `:focus-visible`——`focus-within` 时代正是它把气泡栏钉住
+      await rows.first().getByRole("button", { name: "加星标", exact: true }).click();
+      await expect.poll(() => calls.flags.length).toBe(1);
+      expect(
+        await page.evaluate(() => {
+          const a = document.activeElement as HTMLElement | null;
+          const li = a?.closest("li") ?? null;
+          const list = [...document.querySelectorAll('[data-slot="mail-list"] > li')];
+          return { inRow: li ? list.indexOf(li) : -1, focusVisible: !!a?.matches(":focus-visible") };
+        }),
+      ).toEqual({ inRow: 0, focusVisible: false });
+
+      // 鼠标移到第 3 行：**只剩第 3 行那一条**（第 1 行那条必须随焦点一并退场）
+      await rows.nth(2).locator("[data-mail-row]").hover();
+      await expect.poll(visibleBarRows).toEqual([2]);
+
+      // 键盘路径不回归：Tab 到某一行（`:focus-visible`）→ 该行气泡栏现身。
+      // ⚠ 只能用真键盘 Tab：`element.focus()` 在 Chrome 里**不会**命中 `:focus-visible`
+      //   （实测），拿它当键盘路径是假到达；循环上限 60 覆盖页头那些 tab stop
+      await page.mouse.move(2, 2);
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.());
+      let focusedRow = -1;
+      for (let i = 0; i < 60 && focusedRow < 0; i++) {
+        await page.keyboard.press("Tab");
+        focusedRow = await page.evaluate(() => {
+          const a = document.activeElement as HTMLElement | null;
+          if (!a?.matches("[data-mail-row]")) return -1;
+          return [...document.querySelectorAll('[data-slot="mail-list"] > li')].indexOf(a.closest("li")!);
+        });
+      }
+      expect(focusedRow, "60 次 Tab 内应能聚焦到列表里的某一行").toBeGreaterThanOrEqual(0);
+      await expect.poll(visibleBarRows).toEqual([focusedRow]);
+
+      // 焦点退场后不残留（否则又回到「两条并存」那条路）
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.());
+      await expect.poll(visibleBarRows).toEqual([]);
+    });
+
+    /**
      * 详情页操作栏（2026-10-07 用户验收反馈，两轮定稿）：
      * ① 低频的「原始邮件 / 打印」收进「更多」菜单，而**「更多」固定在这一行最左端**
      *    （用户明确否掉「放主题行那种别的行」；放最左还有个好处：宽屏下这一端本来是空的，
@@ -5891,10 +5994,10 @@ test.describe("站内邮件（/mail）", () => {
     });
 
     test("详情加载失败：友好文案（不回显 webmaild_unreachable 这类内部错误码）", async ({ page }) => {
-      const calls = {
-        flags: [] as unknown[],
+      const calls: { flags: unknown[]; send: unknown[]; delete: unknown[]; detailError?: number } = {
+        flags: [],
         send: [],
-        delete: [] as unknown[],
+        delete: [],
         detailError: 502,
       };
       await stubMailApi(page, calls);
@@ -5906,6 +6009,116 @@ test.describe("站内邮件（/mail）", () => {
       const detail = page.locator('[data-slot="mail-pane-detail"]');
       await expect(detail).toContainText("邮件服务暂时不可用");
       await expect(detail).not.toContainText("webmaild_unreachable");
+      // 详情是**独立请求**：列表那侧的重试管不到它，所以详情自己必须有出口
+      // （2026-10-10 第十二轮：改版前这里只有一行红字，没有任何动作）
+      const retry = detail.getByRole("button", { name: "重试" });
+      await expect(retry).toBeVisible();
+
+      // 点重试时后台恢复 → 原地把这封邮件渲染出来（不是回列表重点一次）
+      calls.detailError = undefined;
+      await retry.click();
+      await expect(detail).toContainText("HTML Newsletter");
+      await expect(detail).not.toContainText("邮件服务暂时不可用");
+    });
+
+    /**
+     * 会话过期（2026-10-10 第十二轮）。
+     *
+     * 起因：列表错误态此前把文案硬编码成「邮件服务暂时不可用，请稍后重试」——**401 也被
+     * 这么说**。用户面对的是「稍后重试」按钮，而真正要做的是重新登录，点一百次也不会好。
+     * 契约：401 说「登录状态已失效，请重新登录」，动作给「重新登录」（不给「重试」）。
+     */
+    test("会话过期（401）：列表与底栏都说重新登录，不给「重试」", async ({ page }) => {
+      const calls: { flags: unknown[]; send: unknown[]; delete: unknown[]; listError?: number } = {
+        flags: [],
+        send: [],
+        delete: [],
+        listError: 401,
+      };
+      // 健康端点先按正常返回，后面再翻成 401（同一个对象按请求实时读取）
+      const health: {
+        webmail?: { status: number; body: unknown };
+        mailagentd?: { status: number; body: unknown };
+      } = {};
+      await stubMailApi(page, calls, health);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      // ① 列表接口 401（health 还活着）
+      await gotoReady(page, "/mail");
+      const list = page.locator('[data-slot="mail-pane-list"]');
+      await expect(list).toContainText("登录状态已失效");
+      await expect(list).not.toContainText("邮件服务暂时不可用");
+      await expect(list.getByRole("link", { name: "重新登录" })).toBeVisible();
+      await expect(list.getByRole("button", { name: "重试" })).toHaveCount(0);
+      // 底栏同口径：不能一边说「会话过期」一边说「邮件服务不可达」（2026-10-10 前是后者）
+      await expect(page.locator('[data-slot="mail-sync-alert-text"]')).toContainText(
+        "登录状态已失效",
+      );
+
+      // ② 连健康端点也 401（会话真的没了，列表本身读得出来）——底栏同样得说重新登录
+      calls.listError = undefined;
+      health.webmail = { status: 401, body: { error: "unauthorized" } };
+      health.mailagentd = { status: 401, body: { error: "unauthorized" } };
+      await gotoReady(page, "/mail");
+      await expect(page.locator('[data-slot="mail-list"] > li').first()).toBeVisible();
+      await expect(page.locator('[data-slot="mail-sync-alert-text"]')).toContainText(
+        "登录状态已失效",
+      );
+    });
+
+    /**
+     * 中途挂掉（2026-10-10 第十二轮）：列表已经加载出来了，点「刷新」时后台挂了。
+     * 契约：**已经读到的邮件一封都不能少**（旧行为是把整块列表换成错误空态，用户正在看的
+     * 东西连同滚动位置一起消失），失败只体现为头顶一行可重试的说明。
+     */
+    test("刷新失败（列表已在屏）：旧邮件保留，只加一行说明", async ({ page }) => {
+      const calls: { flags: unknown[]; send: unknown[]; delete: unknown[]; listError?: number } = {
+        flags: [],
+        send: [],
+        delete: [],
+      };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      // ⚠ 必须显式等列表出现再数：`gotoReady` 只保证水合完成，不等首屏数据
+      //   （生产构建更快、读得太早会数到 0 行——2026-10-10 全量跑时正是这么红的）
+      await expect(rows.first()).toBeVisible();
+      const before = await rows.count();
+      expect(before).toBeGreaterThan(3);
+
+      calls.listError = 502; // 后台此刻挂了
+      await page.getByRole("button", { name: "刷新" }).click();
+
+      const stale = page.locator('[data-slot="mail-list-stale"]');
+      await expect(stale).toContainText("未能刷新");
+      await expect(rows).toHaveCount(before);
+      // 旧列表还在，就不该把底栏也说成「列表读取失败」（那是「什么都没有」的说法）
+      await expect(page.locator('[data-slot="mail-sync-alert-text"]')).toHaveCount(0);
+    });
+
+    /**
+     * 半死状态（2026-10-10 第十二轮）：`/health` 说同步一切正常，但列表接口读不出来。
+     * 契约：底栏不能在这时说「上次收到新邮件 x 前」——左栏「加载失败」与底栏一片绿
+     * 是自相矛盾的（边界取证时就是这么显示的）。
+     */
+    test("列表读不出来时，底栏不再显示「正常」", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] as unknown[], listError: 502 };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      await expect(page.locator('[data-slot="mail-pane-list"]')).toContainText("加载失败");
+      await expect(page.locator('[data-slot="mail-sync-alert-text"]')).toContainText(
+        "邮件列表读取失败",
+      );
+      // 「正常态文案」与它的绿点一起让位
+      await expect(page.locator('[data-slot="mail-sync-latest"]')).toHaveCount(0);
+      await expect(page.locator('[data-slot="mail-sync-dot"]')).toHaveCount(0);
     });
 
     /**
@@ -7061,7 +7274,15 @@ const AGENT_RFC822 = {
   rfc822: [],
 };
 
-function stubMailAgentApi(page: Page, calls: { pending: { id: number; action: string }[] }) {
+function stubMailAgentApi(
+  page: Page,
+  calls: { pending: { id: number; action: string }[] },
+  /**
+   * 故障注入（2026-10-10 第十二轮）：状态码按请求实时读取，用例可中途改。
+   * undefined/0 = 正常。
+   */
+  faults?: { timeline?: number; message?: number },
+) {
   let pendingItems = [
     { id: 7, created_at: "2026-09-26T12:00:00.000Z", to_json: '["someone@example.org"]', subject: "代发确认", text: "请确认是否发出这封邮件。" },
   ];
@@ -7070,6 +7291,16 @@ function stubMailAgentApi(page: Page, calls: { pending: { id: number; action: st
     const path = decodeURIComponent(url.pathname.replace(/^\/api\/mail\/agent/, ""));
     const json = (body: unknown) =>
       route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
+    const fail = (status: number) =>
+      route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify({ error: status === 401 ? "unauthorized" : "mailagentd_unreachable" }),
+      });
+
+    if (faults?.timeline && path === "/timeline") return fail(faults.timeline);
+    if (faults?.message && path.startsWith("/message/") && !path.endsWith("/eml") && !path.includes("/rfc822/"))
+      return fail(faults.message);
 
     if (path === "/timeline") return json({ items: AGENT_TIMELINE, next: null });
     if (path === "/judgments") {
@@ -7145,6 +7376,55 @@ test.describe("agent 邮件入口（/mail/agent）", () => {
 
   test.describe("登录态（API 打桩）", () => {
     test.skip(!totpSecret, "未配置 TOTP_SECRET，跳过登录测试");
+
+    /**
+     * agent 后台不可达（2026-10-10 第十二轮）。
+     *
+     * 起因：`/mail/agent` 的整页错误态此前只有一行灰字「加载失败」——不说清是谁挂了、
+     * 也没有重试入口（只能刷新整页）。契约：图标 + 标题 + **指向 agent 后台**的说明
+     * （不是「邮件服务」，agent 挂了不影响收发信）+ 「重试」，且重试能真的恢复。
+     */
+    test("时间线不可达：说明指向 agent 后台，重试可原地恢复", async ({ page }) => {
+      const faults: { timeline?: number } = { timeline: 502 };
+      await stubMailAgentApi(page, { pending: [] }, faults);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail/agent");
+      await expect(page.locator("main")).toContainText("加载失败");
+      await expect(page.locator("main")).toContainText("agent 后台服务暂时不可用");
+      await expect(page.locator("main")).not.toContainText("邮件服务暂时不可用");
+
+      faults.timeline = undefined; // 后台恢复
+      await page.getByRole("button", { name: "重试" }).click();
+      await expect(page.locator('[data-slot="agent-timeline"] li')).toHaveCount(2);
+    });
+
+    /**
+     * agent 详情不可达（2026-10-10 第十二轮）。
+     *
+     * 起因：`openMessage` 里 `if (res.ok) setDetail(...)` ——失败**什么都不做**，`detail`
+     * 一直是 null，于是弹窗永远转圈：没有错误、没有重试、也不会自动关（边界取证时实测，
+     * 只能手动 ✕）。契约：弹窗里给错误态 + 重试。
+     */
+    test("详情不可达：弹窗给错误与重试，不再永远转圈", async ({ page }) => {
+      const faults: { message?: number } = { message: 502 };
+      await stubMailAgentApi(page, { pending: [] }, faults);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail/agent");
+      await page.locator('[data-slot="agent-timeline"] li button').first().click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toContainText("加载失败");
+      await expect(dialog).toContainText("agent 后台服务暂时不可用");
+      const retry = dialog.getByRole("button", { name: "重试" });
+      await expect(retry).toBeVisible();
+
+      faults.message = undefined; // 后台恢复
+      await retry.click();
+      await expect(dialog).toContainText("完整头部");
+    });
 
     test("时间线：方向徽章 + 详情弹窗（头部/结构/正文）+ rfc822 就地展开 + 无写入口", async ({ page }) => {
       const calls = { pending: [] as { id: number; action: string }[] };

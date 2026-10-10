@@ -12,12 +12,14 @@ import {
   CircleAlertIcon,
   DownloadIcon,
   FileCode2Icon,
+  LogInIcon,
   OctagonAlertIcon,
   ForwardIcon,
   MailOpenIcon,
   MailIcon,
   MoreHorizontalIcon,
   PrinterIcon,
+  RefreshCwIcon,
   ReplyAllIcon,
   ReplyIcon,
   SendIcon,
@@ -40,6 +42,13 @@ import { buttonVariants } from "@/components/ui/button";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -55,7 +64,8 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/toast";
-import { mailErrorText } from "@/lib/mail/error-text";
+import { mailErrorText, mailErrorKind } from "@/lib/mail/error-text";
+import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
 import type {
   MailAddress,
   MailDetail,
@@ -168,6 +178,11 @@ export function MessageView({ messageId }: { messageId: string }) {
 
   const [detail, setDetail] = useState<MailDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * 详情「重试」的触发器（2026-10-10 第十二轮）：详情是一个独立请求，列表那侧的重试
+   * 管不到它——失败后要能原地重来，而不是逼用户回列表、重新点那一行。
+   */
+  const [reloadKey, setReloadKey] = useState(0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [acting, setActing] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -325,7 +340,8 @@ export function MessageView({ messageId }: { messageId: string }) {
   useEffect(() => {
     let cancelled = false;
     seenTouchedRef.current = false; // 换了一封邮件，上一封的手动操作护栏随之复位
-    fetch(`/api/mail/message/${encodeURIComponent(messageId)}`)
+    // 读路径统一 20s 超时（fetchWithTimeout）：服务半死时不能再无限转圈
+    fetchWithTimeout(`/api/mail/message/${encodeURIComponent(messageId)}`)
       .then(async (res) => {
         if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
         return res.json();
@@ -356,7 +372,8 @@ export function MessageView({ messageId }: { messageId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [messageId]);
+    // reloadKey：点「重试」时原地重跑这一条（见 reloadDetail）
+  }, [messageId, reloadKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -501,6 +518,7 @@ export function MessageView({ messageId }: { messageId: string }) {
    * 此前只改自己的 state、从不广播。
    * - `deleted`（删除 / 搬进垃圾）→ 这封已经不在列表里了，退出详情（否则右栏留着一封
    *   已删邮件的正文）；
+   * - `seen: false`（列表里「标为未读」）→ 改完状态**同样退出详情**（见下）；
    * - 其余 → 只改右栏自己的态（列表那边已由发起方自己更新，不必回广播）。
    * ⚠ `source === "detail"` 的事件必须忽略：否则自己发出的广播会绕回来重复打补丁，
    *   `deleted` 那条还会把自己踢出详情页（刚点删除时正好会命中）。
@@ -511,6 +529,26 @@ export function MessageView({ messageId }: { messageId: string }) {
       if (!change || change.messageId !== messageId) return;
       if (change.source === "detail") return;
       if (change.deleted) {
+        router.push("/mail");
+        return;
+      }
+      /**
+       * 列表里「标为未读」→ 退出查看（2026-10-10 第十轮用户指定）：
+       * 「打开一个邮件查看后，如果在邮件列表点击该邮件的『标为未读』，应该在修改该邮件
+       * 已读状态后退出查看该邮件。否则『标为未读』的操作等于无效」。
+       *
+       * 与详情页自己那枚「标为未读」是同一条规则（见 `postFlags` 里的说明）——读信页
+       * 自身的语义就是「打开 = 已读」，停在这封信上等于当场推翻刚标下去的未读：
+       * 再点一次该行 / 任何重新挂载都会立刻标回已读。返回列表才看得到操作结果
+       * （该行蓝点 / 加粗已亮起）。
+       *
+       * ⚠ `seenTouchedRef` 必须一并置位：打开未读邮件时那次「打开即标已读」的写回
+       *   要连阿里云 IMAP（秒级），若它此刻还在路上，等它落地就会把刚标成的未读又
+       *   覆写回已读（列表行也一起翻回去）——那正是用户说的「等于无效」。
+       *   批量条对选中项逐个广播，其中若有正看着的这封，同样落在这里。
+       */
+      if (change.seen === false) {
+        seenTouchedRef.current = true;
         router.push("/mail");
         return;
       }
@@ -733,8 +771,16 @@ export function MessageView({ messageId }: { messageId: string }) {
   }, []);
 
   if (error) {
+    /*
+     * 详情读取失败（2026-10-10 第十二轮改版）。改版前是「返回列表 + 一行红字」：
+     * 右栏一大片空白里飘一行红字，没有层级也没有出口——只能回列表再点一次那一行。
+     * 现在与列表错误态同一套观感（Empty = 图标 + 标题 + 说明 + 一个动作），并补上
+     * **原地重试**（详情是独立请求，列表那侧的重试管不到它）。
+     * ⚠ 会话过期（401）不给「重试」：重试一万次也不会好，给「重新登录」。
+     */
+    const kind = mailErrorKind(error);
     return (
-      <div className="flex flex-col items-start gap-4">
+      <div className="flex min-h-0 flex-col lg:flex-1">
         <Link
           href="/mail"
           data-slot="button"
@@ -743,10 +789,38 @@ export function MessageView({ messageId }: { messageId: string }) {
           <ArrowLeftIcon data-icon="default" />
           {t("backToList")}
         </Link>
-        <p className="flex items-center gap-2 text-sm text-destructive">
-          <CircleAlertIcon className="size-4" aria-hidden />
-          {mailErrorText(error, t)}
-        </p>
+        <Empty className="py-16 lg:flex-1 lg:py-6">
+          <EmptyMedia variant="icon">
+            <CircleAlertIcon aria-hidden />
+          </EmptyMedia>
+          <EmptyHeader>
+            <EmptyTitle>{t("loadFailed")}</EmptyTitle>
+            <EmptyDescription>{mailErrorText(error, t)}</EmptyDescription>
+          </EmptyHeader>
+          {kind === "unauthorized" ? (
+            <Link
+              href="/login"
+              data-slot="button"
+              className={buttonVariants({ variant: "outline", size: "sm" })}
+            >
+              <LogInIcon data-icon="default" />
+              {t("relogin")}
+            </Link>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setError(null);
+                setDetail(null);
+                setReloadKey((k) => k + 1);
+              }}
+            >
+              <RefreshCwIcon data-icon="default" />
+              {t("retry")}
+            </Button>
+          )}
+        </Empty>
       </div>
     );
   }

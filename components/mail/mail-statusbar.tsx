@@ -48,6 +48,12 @@ interface MailBarState {
   accounts: MailAccount[];
   /** "all" 或账号 id —— 仅用于判断是否显示账号指示（选具体账号时不显示） */
   accountFilter: string;
+  /**
+   * 列表**读不出来**的原始错误串（左栏正处于错误空态；「刷新失败但旧列表还在」时为 null）
+   * ——底栏据此把「同步正常」换成告警，避免「左栏加载失败 / 底栏一片绿」的自相矛盾。
+   * 带原文而不是 boolean：底栏要能分辨「会话过期」与「服务不可达」两种说法。
+   */
+  listFailed: string | null;
 }
 
 const MailBarStateContext = createContext<MailBarState | null>(null);
@@ -75,10 +81,10 @@ export function MailBarProvider({ children }: { children: ReactNode }) {
 /** MailClient 把列表统计与账号筛选状态发布到底栏（两者同挂 layout，导航不丢） */
 export function usePublishMailBar(state: MailBarState) {
   const setState = useContext(MailBarSetterContext);
-  const { loading, loaded, unread, accounts, accountFilter } = state;
+  const { loading, loaded, unread, accounts, accountFilter, listFailed } = state;
   useEffect(() => {
-    setState?.({ loading, loaded, unread, accounts, accountFilter });
-  }, [setState, loading, loaded, unread, accounts, accountFilter]);
+    setState?.({ loading, loaded, unread, accounts, accountFilter, listFailed });
+  }, [setState, loading, loaded, unread, accounts, accountFilter, listFailed]);
 }
 
 /**
@@ -243,6 +249,7 @@ export function MailStatusbar({
             rel={rel}
             backfill={backfill}
             firstSync={firstSync}
+            listFailed={state?.listFailed ?? null}
             className="ml-auto"
           />
         )}

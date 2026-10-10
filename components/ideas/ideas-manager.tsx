@@ -372,8 +372,12 @@ export function IdeasManager({ initialIdeas }: { initialIdeas: Idea[] }) {
                 </div>
               </div>
 
-              {/* 操作：桌面 hover 显示；触屏无 hover，移动端常显 */}
-              <div className="flex shrink-0 items-center gap-0.5 opacity-100 transition-opacity focus-within:opacity-100 group-hover:opacity-100 md:opacity-0">
+              {/* 操作：桌面 hover 显示；触屏无 hover，移动端常显。
+                  ⚠ 键盘条件是 `has-[:focus-visible]` 而非 `focus-within`：鼠标点过的按钮**仍持有
+                  焦点**（`:focus-visible` 为 false），`focus-within` 会把该卡片的动作钉在屏幕上——
+                  鼠标移到另一张卡片就两处并存（邮件列表行同一处报障，详见 `mail-client.tsx`
+                  的 `mail-row-actions` 长注释） */}
+              <div className="flex shrink-0 items-center gap-0.5 opacity-100 transition-opacity has-[:focus-visible]:opacity-100 group-hover:opacity-100 md:opacity-0">
                 {editingId === idea.id ? (
                   <>
                     <Button
