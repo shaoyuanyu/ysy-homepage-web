@@ -316,6 +316,46 @@ export function MailClient({
     //   的重新触发信号（隐藏期的 rowW=0 不可见、无副作用）。
   }, [composeCompact, locale, rowW]);
   const [items, setItems] = useState<MailListItem[]>([]);
+
+  /**
+   * 乐观 UI 的三个基本动作（2026-10-10 用户要求「乐观 UI」）。
+   *
+   * 背景：**行为类**动作（标记 / 标为垃圾 / 移出垃圾 / 删除 / 撤销）的真实耗时是**一次
+   * IMAP 往返**（建连 + SELECT + 命令；连接池上线前实测约 1 秒）。等它回来再改界面，
+   * 用户点下去就是"卡一下"。改成**点下去立刻改列表**——用户的"完成"信号就是那一行变化
+   * ——请求在后台跑，失败再用原数据还原并报错。
+   *
+   * ⚠ **内容类操作不走这一套**（发信、存草稿）：它们的失败会丢用户的字，必须等服务端
+   *   确认（用户 2026-10-10 明确要求）。
+   * ⚠ 放回必须按**服务端同一排序**插回（`insertByListOrder`），不是 push 到末尾：
+   *   顺序错乱比"慢"更糟。
+   * ⚠ 插回前查重：这期间用户可能刷新过列表，那一行可能已经在了。
+   * ⚠ 回滚只回列表，**不回服务端**——服务端本来就没被改动（请求失败了），列表现状
+   *   才是偏离真实状态的那一方。
+   */
+  const patchItem = useCallback((messageId: string, change: Partial<MailListItem>) => {
+    setItems((prev) => prev.map((m) => (m.messageId === messageId ? { ...m, ...change } : m)));
+  }, []);
+  const removeRow = useCallback((messageId: string) => {
+    setItems((prev) => prev.filter((x) => x.messageId !== messageId));
+    setStaleIds((prev) => {
+      if (!prev.has(messageId)) return prev;
+      const next = new Set(prev);
+      next.delete(messageId);
+      return next;
+    });
+  }, []);
+  const restoreRow = useCallback((m: MailListItem, stale = false) => {
+    setItems((prev) => insertByListOrder(prev, m));
+    if (stale) setStaleIds((prev) => new Set(prev).add(m.messageId));
+  }, []);
+
+  /**
+   * 数据可能已过期的行（`MailRow` 的 `stale`）：乐观放回时手里那份 `copies` 是
+   * **操作之前**的（uid 可能已失效），所以先不给行内操作条——否则用户再点一下就会
+   * 拿着过期 uid 去搬**别的邮件**。下一次整表重取时清空。
+   */
+  const [staleIds, setStaleIds] = useState<Set<string>>(new Set());
   /** 草稿列表（「草稿」tab 专用；null = 尚未加载） */
   const [drafts, setDrafts] = useState<MailDraft[] | null>(null);
   /**
@@ -647,10 +687,18 @@ export function MailClient({
    * 部分失败（skipped）不算成功：报错并让重取的列表展示真实状态。
    */
   const markAllRead = useCallback(async () => {
+    // 乐观：列表里所有行**立刻**变已读；停在「未读」筛选下时列表会被清空——那些行
+    // 不再匹配当前筛选（与服务端返回的结果一致）。失败则整体还原。
+    const snapshot = items;
+    setItems((prev) => (unseenActive ? [] : prev.map((m) => ({ ...m, seen: true }))));
     setMarkingAll(true);
     try {
       const folders = view === "junk" ? await junkFolders() : [];
-      if (view === "junk" && folders.length === 0) return;
+      if (view === "junk" && folders.length === 0) {
+        // 垃圾 tab 且一个垃圾文件夹都没同步：不能退化成"清收件箱"，当无事发生
+        setItems(snapshot);
+        return;
+      }
       const res = await fetch("/api/mail/mark-all-read", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -668,13 +716,15 @@ export function MailClient({
       } else {
         toast.add({ title: t("markAllReadNone") });
       }
-      await Promise.all([loadAccounts(), loadCurrent()]);
+      void loadAccounts();
+      void loadCurrent();
     } catch {
+      setItems(snapshot);
       toast.add({ title: t("actionFailed"), type: "error" });
     } finally {
       setMarkingAll(false);
     }
-  }, [accountFilter, view, junkFolders, loadCurrent, loadAccounts, t]);
+  }, [items, unseenActive, accountFilter, view, junkFolders, loadCurrent, loadAccounts, t]);
 
   // 多选：选中的列表项（顺序按当前列表）
   const selectedItems = useMemo(
@@ -737,6 +787,12 @@ export function MailClient({
         return;
       }
       const targetIds = targets.map((m) => m.messageId);
+      // 乐观：选中的行**立刻**变成目标状态（内容一个字不变，只改标记），请求在后台跑。
+      // ⚠ 回滚按行逐一还原，不整表重取——用户这期间可能又选了别的 / 滚了页。
+      const before = targets.map((m) => ({ messageId: m.messageId, seen: m.seen, flagged: m.flagged }));
+      for (const m of targets) patchItem(m.messageId, change);
+      // 右栏（若正看着其中一封）跟着变——批量条是列表侧的动作，详情页只能靠广播
+      for (const id of targetIds) broadcastItemChange({ messageId: id, ...change, source: "list" });
       setBatchBusy(true);
       try {
         const res = await fetch("/api/mail/flags", {
@@ -746,28 +802,41 @@ export function MailClient({
         });
         if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
         const data = (await res.json()) as { updated: number; skipped: unknown[] };
-        // 右栏（若正看着其中一封）跟着变——批量条是列表侧的动作，详情页只能靠广播
-        for (const id of targetIds) broadcastItemChange({ messageId: id, ...change, source: "list" });
         if (Array.isArray(data.skipped) && data.skipped.length > 0) {
           toast.add({ title: t("batchPartial"), type: "error" });
         } else {
           toast.add({ title: t("batchDone", { count: targetIds.length }), type: "success" });
         }
         setSelected(new Set());
-        await Promise.all([loadAccounts(), reload()]);
+        void loadAccounts();
+        // 生效中的筛选与本次变更相关（未读筛选中标了已读 / 星标筛选中改了星标）→ 整表重取，
+        // 让不再匹配的行离开列表（只打补丁会让它们赖在列表里，见 applyItemChange 的说明）
+        if ((unseenActive && change.seen !== undefined) || (flaggedActive && change.flagged !== undefined)) {
+          void reload();
+        }
       } catch {
+        for (const p of before) patchItem(p.messageId, { seen: p.seen, flagged: p.flagged });
+        for (const p of before) {
+          broadcastItemChange({ messageId: p.messageId, seen: p.seen, flagged: p.flagged, source: "list" });
+        }
         toast.add({ title: t("actionFailed"), type: "error" });
       } finally {
         setBatchBusy(false);
       }
     },
-    [selected, selectedItems, reload, loadAccounts, t],
+    [selected, selectedItems, reload, loadAccounts, t, patchItem, unseenActive, flaggedActive],
   );
 
   /** 批量删除：确认后对该批消息的**全部副本**一起删（与单条删除同一接口同一口径） */
   const batchDelete = useCallback(async () => {
     const copies = selectedItems.flatMap((m) => m.copies);
     if (copies.length === 0) return;
+    const removed = selectedItems;
+    // 乐观：弹窗立刻关、选中项清空、那几行**立刻**摘掉，请求在后台跑
+    // （选择模式本身留着——批量条退回「已选 0 封」，用户可以接着选下一批）
+    setBatchDeleteOpen(false);
+    setSelected(new Set());
+    for (const m of removed) removeRow(m.messageId);
     setBatchBusy(true);
     try {
       const res = await fetch("/api/mail/delete", {
@@ -776,20 +845,20 @@ export function MailClient({
         body: JSON.stringify({ copies }),
       });
       if (!res.ok) throw new Error();
-      toast.add({ title: t("batchDeleted", { count: selectedItems.length }), type: "success" });
+      toast.add({ title: t("batchDeleted", { count: removed.length }), type: "success" });
       // 右栏若正看着被删的其中一封 → 退回列表（否则会留着一封已删邮件的正文）
-      for (const m of selectedItems) {
+      for (const m of removed) {
         broadcastItemChange({ messageId: m.messageId, deleted: true, source: "list" });
       }
-      setBatchDeleteOpen(false);
-      setSelected(new Set());
-      await Promise.all([loadAccounts(), reload()]);
+      void loadAccounts();
     } catch {
+      for (const m of removed) restoreRow(m);
+      for (const m of removed) broadcastItemChange({ messageId: m.messageId, refresh: true, source: "list" });
       toast.add({ title: t("actionFailed"), type: "error" });
     } finally {
       setBatchBusy(false);
     }
-  }, [selectedItems, reload, loadAccounts, t]);
+  }, [selectedItems, loadAccounts, t, removeRow, restoreRow]);
 
   const loadMore = useCallback(async () => {
     // ⚠ `loading`（整体重载）也要拦：重载在飞时续页会把**旧游标**的下一页追加到即将被
@@ -900,45 +969,6 @@ export function MailClient({
       target.focus();
     }
   }, [selectMode, exitSelectMode]);
-
-  const patchItem = useCallback((messageId: string, change: Partial<MailListItem>) => {
-    setItems((prev) => prev.map((m) => (m.messageId === messageId ? { ...m, ...change } : m)));
-  }, []);
-
-  /**
-   * 乐观 UI 的两个基本动作（2026-10-10 用户要求「乐观 UI」）。
-   *
-   * 背景：整理类动作（标为垃圾 / 移出垃圾 / 删除 / 撤销）的真实耗时是**一次 IMAP
-   * 往返**（建连 + SELECT + 命令，实测约 1 秒，撞上后台同步还要等锁）。等它回来再改
-   * 界面，用户点下去就是"卡一下"。改成**点下去立刻改列表**——用户的"完成"信号就是
-   * 那一行消失/回来——请求在后台跑，失败再用原数据放回原位并报错。
-   *
-   * ⚠ 放回必须按**服务端同一排序**插回（`insertByListOrder`），不是 push 到末尾：
-   *   顺序错乱比"慢"更糟。
-   * ⚠ 插回前查重：这期间用户可能刷新过列表，那一行可能已经在了。
-   * ⚠ 回滚只回列表，**不回服务端**——服务端本来就没被改动（请求失败了），列表现状
-   *   才是真实状态的偏离方。
-   */
-  /**
-   * 数据可能已过期的行（`MailRow` 的 `stale`）：乐观放回时手里那份 `copies` 是
-   * **操作之前**的（uid 可能已失效），所以先不给行内操作条——否则用户再点一下就会
-   * 拿着过期 uid 去搬**别的邮件**。下一次整表重取时清空。
-   */
-  const [staleIds, setStaleIds] = useState<Set<string>>(new Set());
-
-  const removeRow = useCallback((messageId: string) => {
-    setItems((prev) => prev.filter((x) => x.messageId !== messageId));
-    setStaleIds((prev) => {
-      if (!prev.has(messageId)) return prev;
-      const next = new Set(prev);
-      next.delete(messageId);
-      return next;
-    });
-  }, []);
-  const restoreRow = useCallback((m: MailListItem, stale = false) => {
-    setItems((prev) => insertByListOrder(prev, m));
-    if (stale) setStaleIds((prev) => new Set(prev).add(m.messageId));
-  }, []);
 
   /**
    * 一格状态变更的统一落地（2026-10-06）：刷新未读计数（h1 角标 / 未读开关上标 /
@@ -1256,16 +1286,21 @@ export function MailClient({
   /** 草稿删除（草稿箱行内操作，ConfirmDialog 确认后执行） */
   const doDeleteDraft = useCallback(async () => {
     if (!pendingDraftDelete) return;
+    const draft = pendingDraftDelete;
+    // 乐观：这一行立刻消失（草稿的正文在服务端，删失败只是"列表少了一行"，
+    // 不会丢用户的字——与发信/存草稿那类内容操作不同，用户 2026-10-10 明确区分过）
+    setDrafts((prev) => (prev ?? []).filter((d) => d.id !== draft.id));
+    setPendingDraftDelete(null);
     setDeletingDraft(true);
     try {
-      const res = await fetch(`/api/mail/drafts/${encodeURIComponent(pendingDraftDelete.id)}`, {
+      const res = await fetch(`/api/mail/drafts/${encodeURIComponent(draft.id)}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error();
-      setDrafts((prev) => (prev ?? []).filter((d) => d.id !== pendingDraftDelete.id));
       toast.add({ title: t("draftDeleted"), type: "success" });
-      setPendingDraftDelete(null);
     } catch {
+      // 回滚：插回并按草稿列表的口径（服务端按 updatedAt 倒序）重排
+      setDrafts((prev) => [...(prev ?? []), draft].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
       toast.add({ title: t("actionFailed"), type: "error" });
     } finally {
       setDeletingDraft(false);

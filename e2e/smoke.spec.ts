@@ -4440,8 +4440,7 @@ test.describe("站内邮件（/mail）", () => {
       });
       await expect(page.locator('[data-slot="toast-title"]').first()).toContainText("已移回收件箱");
       // 零等待：同步还在跑（桩延迟 4 秒），那一行就该已经回到列表里了
-      await expect(rows).toHaveCount(5, { timeout: 1500 });
-      await expect(rows.filter({ hasText: "Report with attachment" })).toHaveCount(1);
+      await expect(rows.filter({ hasText: "Report with attachment" })).toHaveCount(1, { timeout: 1500 });
     });
 
     /**
@@ -5978,16 +5977,6 @@ test.describe("站内邮件（/mail）", () => {
       await bar.getByRole("button", { name: "全选（当前列表）" }).click();
       await expect(bar).toContainText("已选 4 封");
 
-      // 批量删除：确认弹窗 → 对该批全部副本发一次 delete
-      await bar.getByRole("button", { name: "删除", exact: true }).click();
-      const confirm = page.locator('[data-slot="confirm-dialog"]');
-      await expect(confirm).toContainText("删除选中的 4 封邮件？");
-      // 确认按钮文案 = 传入的 confirmLabel（「删除」，不是默认的「确定」）
-      await confirm.getByRole("button", { name: "删除" }).click();
-      await expect.poll(() => calls.delete.length).toBe(1);
-      const delBody = calls.delete[0] as { copies: unknown[] };
-      expect(delBody.copies.length).toBeGreaterThanOrEqual(4);
-
       // 出口一：批量条最右端那枚 ✕「退出多选」（唯一一枚，单实例）
       await bar.getByRole("button", { name: "退出多选" }).click();
       await expect(page.locator('[data-slot="mail-batch-bar"]')).toHaveCount(0);
@@ -6012,6 +6001,28 @@ test.describe("站内邮件（/mail）", () => {
       await page.mouse.click(blank.x, blank.y);
       await expect(page.locator('[data-slot="mail-batch-bar"]')).toHaveCount(0);
       await expect(page.locator('[data-slot="mail-row-checkbox"]')).toHaveCount(0);
+
+      /**
+       * 批量删除（⚠ 放在**最后**：它是乐观的，点确认那一刻那 4 行就没了——
+       * 上面的两个出口都还要用这份列表）。
+       */
+      await enterSelectMode(rows.first());
+      await expect(bar).toBeVisible();
+      await bar.getByRole("button", { name: "全选（当前列表）" }).click();
+      await expect(bar).toContainText("已选 4 封");
+      await bar.getByRole("button", { name: "删除", exact: true }).click();
+      const confirm = page.locator('[data-slot="confirm-dialog"]');
+      await expect(confirm).toContainText("删除选中的 4 封邮件？");
+      // 确认按钮文案 = 传入的 confirmLabel（「删除」，不是默认的「确定」）
+      await confirm.getByRole("button", { name: "删除" }).click();
+      await expect.poll(() => calls.delete.length).toBe(1);
+      const delBody = calls.delete[0] as { copies: unknown[] };
+      expect(delBody.copies.length).toBeGreaterThanOrEqual(4);
+      // 乐观（2026-10-10）：弹窗立刻关、选中项清空、那 4 行立刻消失，不等服务端
+      // （桩也不会把数据变少）。选择模式本身留着——批量条退回「已选 0 封」。
+      await expect(page.locator('[data-slot="confirm-dialog"]')).toHaveCount(0);
+      await expect(rows).toHaveCount(0, { timeout: 1500 });
+      await expect(bar).toContainText("已选 0 封");
     });
 
     /**
