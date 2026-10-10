@@ -3188,6 +3188,11 @@ function stubMailApi(
     pageSize?: number;
     /** 列表响应延迟（毫秒）：让 `loadingMore` 的中间态可观测（按钮盒子稳定性断言用） */
     listDelayMs?: number;
+    /**
+     * `POST /sync` 的人为延迟（毫秒）：用来锁「移出垃圾 / 撤销是**零等待**的」——
+     * 桩不慢的话，「等完同步再刷新」与「立刻刷新」两种写法在测试里看不出区别。
+     */
+    syncDelayMs?: number;
   },
   // 状态条（5.5）的健康端点覆盖：默认全部健康；传 {status, body} 模拟告警/不可达
   health?: { mailagentd?: { status: number; body: unknown }; webmail?: { status: number; body: unknown } },
@@ -3217,7 +3222,7 @@ function stubMailApi(
   calls.draftStore = draftStore;
   // 远程图片白名单内存桩（4.4）：PUT 全量替换，GET 反映最新状态
   let domainStore = ["edu.cn"];
-  return page.route("**/api/mail/**", (route) => {
+  return page.route("**/api/mail/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname.replace(/^\/api\/mail/, "");
     const json = (body: unknown) =>
@@ -3395,6 +3400,14 @@ function stubMailApi(
       // 按 `SEARCH HEADER Message-ID` 现场定位再搬回原文件夹。
       // restored = 真正搬回去的账号数；skipped = 定不到位的账号。
       return json({ restored: body.targets?.length ?? 0, skipped: [] });
+    }
+    if (path === "/sync") {
+      // ⚠ 可选的人为延迟（见 calls.syncDelayMs）：让「零等待」这条契约可测——
+      //   若实现里写成 `await sync` 再刷新，这个用例会超时红。
+      if (calls.syncDelayMs) {
+        await new Promise((r) => setTimeout(r, calls.syncDelayMs));
+      }
+      return json({ results: [], errors: [] });
     }
     if (path === "/messages") {
       calls.listQueries?.push(url.search);
@@ -4389,13 +4402,22 @@ test.describe("站内邮件（/mail）", () => {
      * 全是过期的，只能由服务端按 Message-ID 现场定位再搬回**原文件夹**。
      */
     test("列表：标为垃圾后可从 toast 撤销（走 /unmove，按原文件夹搬回）", async ({ page }) => {
-      const calls = { flags: [], send: [], delete: [], move: [] as unknown[], unmove: [] as unknown[] };
+      const calls = {
+        flags: [],
+        send: [],
+        delete: [],
+        move: [] as unknown[],
+        unmove: [] as unknown[],
+        // ⚠ 同步故意慢：撤销后那一行应当**零等待**地回到列表（不能等完同步才重取）
+        syncDelayMs: 4000,
+      };
       await stubMailApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
       await loginWithCode(page, code);
       await gotoReady(page, "/mail");
 
-      const first = page.locator('[data-slot="mail-list"] > li').nth(0);
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      const first = rows.nth(0);
       await first.hover();
       await first.getByRole("button", { name: "标为垃圾" }).click();
       await expect.poll(() => calls.move.length).toBe(1);
@@ -4403,6 +4425,7 @@ test.describe("站内邮件（/mail）", () => {
         copies: [{ accountId: "acc1", folder: "INBOX", uid: 1 }],
         to: "\\Junk",
       });
+      await expect(rows).toHaveCount(4);
 
       // 结果 toast 上挂着「撤销」
       const undo = page.locator('[data-slot="toast-action"]').first();
@@ -4416,6 +4439,9 @@ test.describe("站内邮件（/mail）", () => {
         targets: [{ accountId: "acc1", folder: "INBOX" }],
       });
       await expect(page.locator('[data-slot="toast-title"]').first()).toContainText("已移回收件箱");
+      // 零等待：同步还在跑（桩延迟 4 秒），那一行就该已经回到列表里了
+      await expect(rows).toHaveCount(5, { timeout: 1500 });
+      await expect(rows.filter({ hasText: "Report with attachment" })).toHaveCount(1);
     });
 
     /**
@@ -4426,7 +4452,7 @@ test.describe("站内邮件（/mail）", () => {
      *   里也会出现，而动作取决于它现在在哪。「全部」视图里打开一封只存在于垃圾夹的邮件，
      *   给的动作同样应该是这个（否则点了没反应）。
      */
-    test("垃圾视图：动作是「移出垃圾」，走 /move 搬到 INBOX", async ({ page }) => {
+    test("垃圾视图：动作是「移出垃圾」，走 /move 搬到 INBOX（且零等待）", async ({ page }) => {
       const calls = {
         flags: [],
         send: [],
@@ -4434,13 +4460,17 @@ test.describe("站内邮件（/mail）", () => {
         junkSynced: true,
         junkFolderItems: true,
         move: [] as unknown[],
+        // ⚠ 同步故意**慢**：实现里若写成「等完同步再刷新」，下面那条 1.5 秒内消失的
+        //   断言就会红。这正是用户报的「移出垃圾很慢、延迟很高」那个 bug 的护栏。
+        syncDelayMs: 4000,
       };
       await stubMailApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
       await loginWithCode(page, code);
       await gotoReady(page, "/mail?view=junk");
 
-      const row = page.locator('[data-slot="mail-list"] > li').first();
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      const row = rows.first();
       await expect(row).toContainText("中奖通知");
       await row.hover();
       // 给的是「移出垃圾」，「标为垃圾」不该出现
@@ -4457,6 +4487,8 @@ test.describe("站内邮件（/mail）", () => {
         to: "INBOX",
       });
       await expect(page.locator('[data-slot="toast-title"]').first()).toContainText("已移出垃圾");
+      // 零等待：同步还在跑（桩延迟 4 秒），这一行就该已经摘掉了
+      await expect(rows).toHaveCount(0, { timeout: 1500 });
     });
 
     /**

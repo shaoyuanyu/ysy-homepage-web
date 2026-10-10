@@ -1028,16 +1028,32 @@ export function MailClient({
           return;
         }
         toast.add({ title: t("junkUndone"), type: "success" });
-        await Promise.all(
-          accountIds.map((accountId) =>
-            fetch("/api/mail/sync", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ accountId }),
-            }).catch(() => {}),
-          ),
-        );
-        await reload();
+        // 乐观放回：撤销后这封信回到了原文件夹，列表里该重新出现它。
+        // ⚠ 不置回列表就只能等完同步再整表重取（`POST /sync` 同步等待，十秒起步）——
+        //   toast 已经说"已移回收件箱"了，列表里却还空着，就差这一下。
+        setItems((prev) => {
+          if (prev.some((x) => x.messageId === m.messageId)) return prev;
+          const next = [...prev, m];
+          // 与服务端列表同一排序：`ORDER BY m.date DESC, m.message_id DESC`
+          next.sort(
+            (a, b) =>
+              (b.date ?? "").localeCompare(a.date ?? "") ||
+              b.messageId.localeCompare(a.messageId),
+          );
+          return next;
+        });
+        void (async () => {
+          await Promise.all(
+            accountIds.map((accountId) =>
+              fetch("/api/mail/sync", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ accountId }),
+              }).catch(() => {}),
+            ),
+          );
+          await reload();
+        })();
       } catch (err) {
         toast.add({
           title: t("junkUndoFailed"),
@@ -1057,9 +1073,15 @@ export function MailClient({
    *   Message-ID 在垃圾夹里现场定位」是为**撤销**场景准备的（那里 MOVE 之后 uid 已变、
    *   前端手里的 copies 全是过期的），定位要拉整个垃圾夹的头，能不用就不用。
    *
-   * ⚠ 成功后**不能摘行**（与「标为垃圾」刚好相反）：移出后这封邮件还在，只是换了文件夹——
-   *   在「全部」「搜索」视图里它本来就该留着。整表重取、以服务端为准（等一次同步，
-   *   否则本地索引还在旧位置）。
+   * ⚠ 成功后是**零等待**（2026-10-10 用户报「移出垃圾很慢」）：`/move` 已经把垃圾夹
+   *   那一行从**本地索引**里删掉了（`applyCopiesOp`），而 INBOX 里的新副本要等下一轮
+   *   同步才发现。所以：
+   *   ① 那一行**先摘掉**——留着它反而是个能再点的「移出垃圾」，而手里的 copies
+   *      （垃圾夹的 uid）已经失效，再点会搬到**别的邮件**上（危险）；
+   *   ② 那一轮同步放到**后台**跑，完了再重取一次，让这封（现在在收件箱）回到它该在
+   *      的视图里。
+   *   ⚠ 曾经写成 `await Promise.all(同步)` 再 `reload()`——体感差了整整一个同步周期
+   *     （`POST /sync` 是同步等待的，十秒起步），而「标为垃圾」那边一直是 `void` 不等。
    */
   const notJunkFromList = useCallback(
     async (m: MailListItem) => {
@@ -1080,17 +1102,20 @@ export function MailClient({
           });
           return;
         }
+        setItems((prev) => prev.filter((x) => x.messageId !== m.messageId));
         toast.add({ title: t("notJunkDone"), type: "success" });
-        await Promise.all(
-          accountIds.map((accountId) =>
-            fetch("/api/mail/sync", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ accountId }),
-            }).catch(() => {}),
-          ),
-        );
-        await reload();
+        void (async () => {
+          await Promise.all(
+            accountIds.map((accountId) =>
+              fetch("/api/mail/sync", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ accountId }),
+              }).catch(() => {}),
+            ),
+          );
+          await reload();
+        })();
       } catch (err) {
         toast.add({
           title: t("notJunkFailed"),

@@ -300,17 +300,28 @@ export function MessageView({ messageId }: { messageId: string }) {
         setActing(false);
         return;
       }
-      // ⚠ **不能广播 `deleted`**：移出垃圾后这封邮件还在（只是换了文件夹），在「全部」
-      //   视图里它本来就该留着。广播 `refresh` 让左栏整表重取，以服务端为准。
-      broadcastItemChange({ messageId, refresh: true, source: "detail" });
+      // ⚠ **零等待**（2026-10-10 用户报「移出垃圾很慢」）：`/move` 已经把垃圾夹那一行从
+      //   本地索引删了，INBOX 里的新副本要等下一轮同步才发现。所以：
+      //   ① 立刻广播 `deleted` —— 左栏那行先摘掉（留着它就是个能再点的「移出垃圾」，
+      //      而手里的 copies 已失效，再点会搬到**别的邮件**上）；
+      //   ② 同步放后台，完了再广播 `refresh` 让列表重取（这封现在在收件箱，该回到
+      //      「全部」这类视图里）。
+      //   ⚠ 曾经广播 `refresh` 了事——列表当场重取时本地索引还没更新，看上去就是
+      //     “点了没反应”（要等下一轮 30s 轮询）。
+      broadcastItemChange({ messageId, deleted: true, source: "detail" });
       toast.add({ title: t("notJunkDone"), type: "success" });
-      for (const accountId of copyAccountIds) {
-        void fetch("/api/mail/sync", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ accountId }),
-        }).catch(() => {});
-      }
+      void (async () => {
+        await Promise.all(
+          copyAccountIds.map((accountId) =>
+            fetch("/api/mail/sync", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ accountId }),
+            }).catch(() => {}),
+          ),
+        );
+        broadcastItemChange({ messageId, refresh: true, source: "detail" });
+      })();
       router.push("/mail", mailNavOptions());
     } catch (err) {
       toast.add({
@@ -352,16 +363,20 @@ export function MessageView({ messageId }: { messageId: string }) {
         return;
       }
       toast.add({ title: t("junkUndone"), type: "success" });
-      await Promise.all(
-        copyAccountIds.map((accountId) =>
-          fetch("/api/mail/sync", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ accountId }),
-          }).catch(() => {}),
-        ),
-      );
-      broadcastItemChange({ messageId, refresh: true, source: "detail" });
+      // 同步放后台：撤销的 toast 是"事后确认"，但没必要把按钮/界面挂在那里等完同步
+      // （`POST /sync` 是同步等待的）。完了再广播 refresh，让左栏把这一封放回去。
+      void (async () => {
+        await Promise.all(
+          copyAccountIds.map((accountId) =>
+            fetch("/api/mail/sync", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ accountId }),
+            }).catch(() => {}),
+          ),
+        );
+        broadcastItemChange({ messageId, refresh: true, source: "detail" });
+      })();
     } catch (err) {
       toast.add({
         title: t("junkUndoFailed"),
