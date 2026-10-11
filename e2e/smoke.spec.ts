@@ -6058,7 +6058,12 @@ test.describe("站内邮件（/mail）", () => {
      * ② 删除有 20 封上限，超了按钮变灰且**可访问名说明原因**（不是静默禁用）。
      */
     test("多选：全选按「全部匹配」执行（标记走 scope），超过 20 封时删除按钮变灰", async ({ page }) => {
-      const calls = { flags: [] as unknown[], send: [], delete: [] as unknown[], matchCount: 12 };
+      /** `matchCount` 留空 = 用桩算出的条数（见空范围串那一段），后面两段各自覆盖它 */
+      const calls: { flags: unknown[]; send: unknown[]; delete: unknown[]; matchCount?: number } = {
+        flags: [],
+        send: [],
+        delete: [],
+      };
       await stubMailApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
       await loginWithCode(page, code);
@@ -6072,10 +6077,31 @@ test.describe("站内邮件（/mail）", () => {
         await expect(li.locator('[data-slot="mail-row-actions"]')).toBeVisible();
         await li.getByRole("button", { name: "选择", exact: true }).click();
       };
+
+      /**
+       * ⚠ **先测默认 tab**（全部 + 全部账号 + 无筛选）——此时范围串是**空串**。
+       * 空串曾被当成「列表还没加载」，于是真实界面上点了全选后一直显示「已选 0 封」、
+       * 连删除/标记都跟着变灰（2026-10-11 用户截图报障）。只测带筛选的路径
+       * （`direction=received`…）恰好漏掉了最常见的那一个视图。
+       */
+      await expect(rows).toHaveCount(5);
+      await enterSelectMode(rows.first());
+      await expect(bar).toBeVisible();
+      await bar.getByRole("button", { name: "全选全部匹配（5 封）" }).click();
+      await expect(bar).toContainText("已选 5 封（全部匹配）");
+      await bar.getByRole("button", { name: "标为已读" }).click();
+      await expect.poll(() => calls.flags.length).toBe(1);
+      // 空范围串要**真的发给服务端**（`scope: ""` = 不加任何参数 = 全部），不是省略字段
+      expect(calls.flags[0]).toEqual({ scope: "", seen: true });
+
+      // 切到「收件」，这一段用 12 > 已加载的 4 模拟「匹配的比看到的多」
+      await bar.getByRole("button", { name: "退出多选" }).click();
       await page.getByRole("tab", { name: "收件", exact: true }).click();
+      calls.matchCount = 12;
       await expect(rows).toHaveCount(4);
       await enterSelectMode(rows.first());
       await expect(bar).toBeVisible();
+      calls.flags.length = 0;
 
       // 可访问名带上「全部匹配」的封数（12 > 已加载的 4 —— 范围不再等于看到的那几行）
       await bar.getByRole("button", { name: "全选全部匹配（12 封）" }).click();

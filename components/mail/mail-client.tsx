@@ -247,10 +247,13 @@ export function MailClient({
    *   「删除是不是超了 20 封上限」；
    * - `listQuery` = 最近一次列表加载用的查询串（**不含 `before` 游标**），即「当前筛选」
    *   的完整定义。范围执行时原样交给服务端——口径只在 `load` 里构造一处，不可能漂移。
+   *   ⚠ 类型是 `string | null`：**空串是合法范围**（「全部」tab + 全部账号 + 无筛选 = 不加
+   *   任何参数）。用 `""` 当「还没加载」会让最常见的那个视图直接失效——真实界面上表现为
+   *   「点了全选，一直显示 已选 0 封」（2026-10-11 用户截图报障）。
    */
   const [allMatching, setAllMatching] = useState(false);
   const [matchCount, setMatchCount] = useState<number | null>(null);
-  const [listQuery, setListQuery] = useState("");
+  const [listQuery, setListQuery] = useState<string | null>(null);
   /**
    * 当前视图下「真正生效」的筛选值（2026-10-06 用户定稿）：「未读」在「发件」「草稿」
    * 不可用（「发件」不可能有未读——与「草稿」同规则；「星标」仅「草稿」不可用，
@@ -766,10 +769,11 @@ export function MailClient({
   /**
    * 「全选」的范围数字：进入选择模式后按当前筛选拉一次总数（`GET /messages/count`，
    * 与列表同一套参数）。拿不到时为 null —— 顺带成为「算不出封数就别删」的保险。
+   * ⚠ 判「列表是否已加载」只能看 `listQuery === null`，**不能看空串**（见上面 listQuery 的注）。
    * ⚠ 筛选一变先把旧数字清掉：宁可先不给数，也不能拿上一筛选的数字去判 20 封上限。
    */
   useEffect(() => {
-    if (!selectMode || view === "drafts" || !listQuery) {
+    if (!selectMode || view === "drafts" || listQuery === null) {
       setMatchCount(null);
       return;
     }
@@ -848,8 +852,8 @@ export function MailClient({
    */
   const batchFlags = useCallback(
     async (change: { seen?: boolean; flagged?: boolean }) => {
-      const scope = allMatching ? listQuery : null;
-      if (!scope && selected.size === 0) return;
+      const scope = allMatching && listQuery !== null ? listQuery : null;
+      if (scope === null && selected.size === 0) return;
       /**
        * `seen` 只作用于**有已读状态的**消息（`hasReadState`，判据在服务端 `readCopiesOf`：
        * 收件箱副本优先、没有收件箱副本时才认当前视图的副本）——选中项里混着发件 / 归档时，
@@ -858,10 +862,10 @@ export function MailClient({
        * ⚠ 「全部匹配」模式下 `selectedItems` 是空的，故乐观改的是**已加载的那些行**——
        *   它们正是匹配集合的前缀（同一套筛选、同一排序），改它们是安全的。
        */
-      const pool = scope ? items : selectedItems;
+      const pool = scope !== null ? items : selectedItems;
       const targets =
         change.seen !== undefined ? pool.filter((m) => m.hasReadState !== false) : pool;
-      if (!scope && targets.length === 0) {
+      if (scope === null && targets.length === 0) {
         toast.add({ title: t("markAllReadNone") });
         return;
       }
@@ -877,7 +881,7 @@ export function MailClient({
         const res = await fetch("/api/mail/flags", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(scope ? { scope, ...change } : { messageIds: targetIds, ...change }),
+          body: JSON.stringify(scope !== null ? { scope, ...change } : { messageIds: targetIds, ...change }),
         });
         if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
         const data = (await res.json()) as { updated: number; messages?: number; skipped: unknown[] };
@@ -916,12 +920,12 @@ export function MailClient({
    * （超了删除按钮变灰，进不到这里）——服务端还有一道同名上限兜底。
    */
   const batchDelete = useCallback(async () => {
-    const scope = allMatching ? listQuery : null;
+    const scope = allMatching && listQuery !== null ? listQuery : null;
     const copies = selectedItems.flatMap((m) => m.copies);
-    if (!scope && copies.length === 0) return;
+    if (scope === null && copies.length === 0) return;
     // 乐观摘行。范围模式下匹配集合 ≤ 20 封（否则按钮已灰），而首页就可能把匹配的行全装下
     // —— 摘掉前 `matchCount` 行与真实结果一致；逐行模式摘的就是用户勾的那些。
-    const removed = scope ? items.slice(0, matchCount ?? items.length) : selectedItems;
+    const removed = scope !== null ? items.slice(0, matchCount ?? items.length) : selectedItems;
     // 乐观：弹窗立刻关、选中项清空、那几行**立刻**摘掉，请求在后台跑
     // （选择模式本身留着——批量条退回「已选 0 封」，用户可以接着选下一批）
     setBatchDeleteOpen(false);
@@ -933,7 +937,7 @@ export function MailClient({
       const res = await fetch("/api/mail/delete", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(scope ? { scope } : { copies }),
+        body: JSON.stringify(scope !== null ? { scope } : { copies }),
       });
       if (!res.ok) throw new Error();
       toast.add({ title: t("batchDeleted", { count: removed.length }), type: "success" });

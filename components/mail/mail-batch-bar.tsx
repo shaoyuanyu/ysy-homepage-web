@@ -131,7 +131,9 @@ export function MailBatchBar({
         }
         title={allMatching ? t("batchClearAll") : t("batchSelectAll", { count: matchCount ?? total })}
         aria-pressed={allMatching}
-        disabled={busy || total === 0}
+        // ⚠ 已处于「全部匹配」时**永不禁用**：封数未知（计数还没回来 / 请求失败）时
+        //   `total` 是 0，若禁用它，用户就被卡在一个全灰的模式里出不来（唯一出口只剩 ✕）
+        disabled={busy || (!allMatching && total === 0)}
         onClick={onToggleAll}
         className="aria-pressed:bg-primary/10 aria-pressed:text-primary"
       >
