@@ -40,6 +40,11 @@ import { Spinner } from "@/components/ui/spinner";
  *   整理动作只留本条的「删除」与详情页的「标为垃圾邮件」。
  * - 「全选」是**开关**（用户指定）：全选后再点一次 = 取消全选。图标随状态从 ☑ 变 ☒，
  *   `aria-pressed` 一并表状态——此前是全选后按钮直接 disabled，用户点了没反应。
+ *   ⚠ **2026-10-11 改口径（用户要求）**：「全选」选的不再是「已加载的那几页」，而是
+ *     当前筛选范围里**全部匹配**的邮件（服务端现算；可访问名带上封数）。逐行勾选仍然是
+ *     「只选这几封」，两种模态互斥；选中计数改成「已选 N 封（全部匹配）」把范围说出来。
+ * - 删除有**封数上限**（用户 2026-10-11 定稿：一次不超过 20 封）：超了按钮变灰，
+ *   可访问名直接写清楚为什么。同一条限在后端也有一道（按钮态不是边界）。
  * - 两个标记动作的**可用性跟着选中项走**（用户指定）：选中的全都已读 → 「标为已读」禁用；
  *   全都未读 → 「标为未读」禁用；混合选中时两个都可用（点哪个都是有意义的批量动作）。
  *   判据由调用方算好传进来（`allSeen` / `allUnseen`，空选中时为 false）。
@@ -56,6 +61,10 @@ import { Spinner } from "@/components/ui/spinner";
 export function MailBatchBar({
   count,
   total,
+  allMatching,
+  matchCount,
+  deleteBlocked,
+  deleteLimit,
   busy,
   allSeen,
   allUnseen,
@@ -65,9 +74,22 @@ export function MailBatchBar({
   onToggleAll,
   onExit,
 }: {
+  /** 当前选中的封数（「全部匹配」模式 = 服务端算出的匹配总数） */
   count: number;
-  /** 当前列表已加载的封数（「全选」的范围） */
+  /** 可选的封数（逐行模式 = 已加载行数；「全部匹配」模式 = 匹配总数）：0 时全选按钮禁用 */
   total: number;
+  /**
+   * 是否处于「全部匹配」模式（= 全选按钮的开关态）。
+   * ⚠ 按钮态必须用**这个**，不能用 `count === total`：逐行选满一页时两者相等，但那时
+   *   按钮显示「已全选」会让人以为再点一下是取消（实际是改成动全部匹配）——图标与含义矛盾。
+   */
+  allMatching: boolean;
+  /** 全部匹配的封数（拉取中 / 失败时为 null）；仅用于「全选」的提示文案 */
+  matchCount: number | null;
+  /** 删除被封数上限挡住（> `deleteLimit`，或封数未知）：按钮变灰并说明原因 */
+  deleteBlocked: boolean;
+  /** 删除的封数上限（与后端同名常量同一个数） */
+  deleteLimit: number;
   busy: boolean;
   /** 选中的邮件**全部**已读（此时「标为已读」无事可做） */
   allSeen: boolean;
@@ -82,7 +104,6 @@ export function MailBatchBar({
   onExit: () => void;
 }) {
   const t = useTranslations("mail");
-  const allSelected = total > 0 && count === total;
 
   return (
     <div
@@ -96,7 +117,7 @@ export function MailBatchBar({
           count > 0 ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
         )}
       >
-        {t("batchSelected", { count })}
+        {allMatching ? t("batchSelectedAll", { count }) : t("batchSelected", { count })}
       </span>
       {/* 处理中：没有「退出」按钮之后，这里是 busy 唯一的落点（不要挪进胶囊里——
           胶囊宽度会随文字变，跳动比多一个 12px 圆环更显眼） */}
@@ -105,14 +126,16 @@ export function MailBatchBar({
       <Button
         variant="ghost"
         size="icon-sm"
-        aria-label={allSelected ? t("batchClearAll") : t("batchSelectAll")}
-        title={allSelected ? t("batchClearAll") : t("batchSelectAll")}
-        aria-pressed={allSelected}
+        aria-label={
+          allMatching ? t("batchClearAll") : t("batchSelectAll", { count: matchCount ?? total })
+        }
+        title={allMatching ? t("batchClearAll") : t("batchSelectAll", { count: matchCount ?? total })}
+        aria-pressed={allMatching}
         disabled={busy || total === 0}
         onClick={onToggleAll}
         className="aria-pressed:bg-primary/10 aria-pressed:text-primary"
       >
-        {allSelected ? <SquareXIcon /> : <SquareCheckBigIcon />}
+        {allMatching ? <SquareXIcon /> : <SquareCheckBigIcon />}
       </Button>
       <Button
         variant="ghost"
@@ -134,13 +157,15 @@ export function MailBatchBar({
       >
         <MailOpenIcon />
       </Button>
-      {/* 破坏性动作单独一档配色（站内 destructive variant）：一眼看出它和其它三个不同 */}
+      {/* 破坏性动作单独一档配色（站内 destructive variant）：一眼看出它和其它三个不同。
+          ⚠ 封数超上限（`deleteLimit`）时**变灰**并用可访问名说明原因——“按钮为什么点不了”
+             必须能直接读出来，否则只能靠猜（用户 2026-10-11 的要求） */}
       <Button
         variant="destructive"
         size="icon-sm"
-        aria-label={t("delete")}
-        title={t("delete")}
-        disabled={busy || count === 0}
+        aria-label={deleteBlocked ? t("batchDeleteLimit", { count: deleteLimit }) : t("delete")}
+        title={deleteBlocked ? t("batchDeleteLimit", { count: deleteLimit }) : t("delete")}
+        disabled={busy || count === 0 || deleteBlocked}
         onClick={onDelete}
       >
         <Trash2Icon />

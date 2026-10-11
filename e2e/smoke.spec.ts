@@ -3193,6 +3193,14 @@ function stubMailApi(
      * 桩不慢的话，「等完同步再刷新」与「立刻刷新」两种写法在测试里看不出区别。
      */
     syncDelayMs?: number;
+    /**
+     * 「全选」范围数字（`GET /messages/count`）的覆盖值（2026-10-11）。
+     * 不设时桩返回**上一次列表响应经过同样筛选后的条数**——真实服务端就是按同一套
+     * 筛选现算的；用例设一个更大的数就是模拟「匹配的比加载出来的多」。
+     */
+    matchCount?: number;
+    /** 桩内部用：最近一次 `/messages` 筛选后的条数（供上面的计数桩复用） */
+    listCount?: number;
   },
   // 状态条（5.5）的健康端点覆盖：默认全部健康；传 {status, body} 模拟告警/不可达
   health?: { mailagentd?: { status: number; body: unknown }; webmail?: { status: number; body: unknown } },
@@ -3409,6 +3417,16 @@ function stubMailApi(
       }
       return json({ results: [], errors: [] });
     }
+    /**
+     * 「全选」的范围数字（2026-10-11）：与 `/messages` 同一套筛选参数。
+     * 桩给「上一次列表筛选后的条数」，用例可用 `calls.matchCount` 覆盖成更大的值，
+     * 模拟「匹配的比已加载的多」（真实场景就是如此——列表一页只给 50 封）。
+     */
+    if (path === "/messages/count") {
+      return json({
+        count: calls.matchCount ?? calls.listCount ?? (calls.listStore as unknown[]).length,
+      });
+    }
     if (path === "/messages") {
       calls.listQueries?.push(url.search);
       /**
@@ -3498,6 +3516,9 @@ function stubMailApi(
         items = items.filter((m) => m.copies.some((c) => c.folder.toUpperCase() === "INBOX"));
       if (direction === "sent")
         items = items.filter((m) => m.copies.every((c) => SENT_FOLDERS.has(c.folder.trim().toLowerCase())));
+      // 记下这次筛选后的条数：`GET /messages/count` 的桩据此给「全部匹配」的数字
+      // （真实服务端是按同一套筛选现算的；桩的列表本来就是"全部"，故两者相等）
+      calls.listCount = items.length;
       // 分页桩（2026-10-09）：游标 = 「从第几条开始」的数字偏移（真实服务端是 IMAP 游标，
       // 这里只要契约形状对得上：`next` 非空 ⟹ 带上 `before=<next>` 能续下一页）
       const reply = async () => {
@@ -5969,13 +5990,14 @@ test.describe("站内邮件（/mail）", () => {
       // 处理完清空选择
       await expect(bar).toContainText("已选 0 封");
 
-      // 全选 → 计数 = 当前列表 4 封；再点一次 = 取消全选（同一个按钮，可访问名随状态变）
-      await bar.getByRole("button", { name: "全选（当前列表）" }).click();
-      await expect(bar).toContainText("已选 4 封");
+      // 全选 → 计数 = 「全部匹配」的封数（列表只加载了 4 封，桩里两者相等）；
+      // 再点一次 = 取消全选（同一个按钮，可访问名随状态变）
+      await bar.getByRole("button", { name: "全选全部匹配（4 封）" }).click();
+      await expect(bar).toContainText("已选 4 封（全部匹配）");
       await bar.getByRole("button", { name: "取消全选" }).click();
       await expect(bar).toContainText("已选 0 封");
-      await bar.getByRole("button", { name: "全选（当前列表）" }).click();
-      await expect(bar).toContainText("已选 4 封");
+      await bar.getByRole("button", { name: "全选全部匹配（4 封）" }).click();
+      await expect(bar).toContainText("已选 4 封（全部匹配）");
 
       // 出口一：批量条最右端那枚 ✕「退出多选」（唯一一枚，单实例）
       await bar.getByRole("button", { name: "退出多选" }).click();
@@ -6008,21 +6030,85 @@ test.describe("站内邮件（/mail）", () => {
        */
       await enterSelectMode(rows.first());
       await expect(bar).toBeVisible();
-      await bar.getByRole("button", { name: "全选（当前列表）" }).click();
-      await expect(bar).toContainText("已选 4 封");
+      await bar.getByRole("button", { name: "全选全部匹配（4 封）" }).click();
+      await expect(bar).toContainText("已选 4 封（全部匹配）");
       await bar.getByRole("button", { name: "删除", exact: true }).click();
       const confirm = page.locator('[data-slot="confirm-dialog"]');
-      await expect(confirm).toContainText("删除选中的 4 封邮件？");
+      await expect(confirm).toContainText("删除全部匹配的 4 封邮件？");
       // 确认按钮文案 = 传入的 confirmLabel（「删除」，不是默认的「确定」）
       await confirm.getByRole("button", { name: "删除" }).click();
       await expect.poll(() => calls.delete.length).toBe(1);
-      const delBody = calls.delete[0] as { copies: unknown[] };
-      expect(delBody.copies.length).toBeGreaterThanOrEqual(4);
+      const delBody = calls.delete[0] as { copies?: unknown[]; scope?: string };
+      // 「全选」= 视图口径的全部匹配 → 走 scope（服务端现算），不再物化 copies
+      expect(typeof delBody.scope).toBe("string");
+      expect(delBody.copies).toBeUndefined();
       // 乐观（2026-10-10）：弹窗立刻关、选中项清空、那 4 行立刻消失，不等服务端
       // （桩也不会把数据变少）。选择模式本身留着——批量条退回「已选 0 封」。
       await expect(page.locator('[data-slot="confirm-dialog"]')).toHaveCount(0);
       await expect(rows).toHaveCount(0, { timeout: 1500 });
       await expect(bar).toContainText("已选 0 封");
+    });
+
+    /**
+     * 「全选」= 当前筛选范围内**全部匹配**（2026-10-11 用户要求），不是「已加载的那几页」。
+     *
+     * 范围数字来自 `GET /messages/count`（与 `/messages` 同一套参数）。桩里把它盖成
+     * 12 / 25，模拟「匹配的比加载出来的多」——真实的邮箱里这是常态（列表一页只给 50 封）。
+     * 两件事必须锁住：① 标记走 `scope`，不再物化 `messageIds`（没加载出来的那些物化不出来）；
+     * ② 删除有 20 封上限，超了按钮变灰且**可访问名说明原因**（不是静默禁用）。
+     */
+    test("多选：全选按「全部匹配」执行（标记走 scope），超过 20 封时删除按钮变灰", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] as unknown[], matchCount: 12 };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      const bar = page.locator('[data-slot="mail-batch-bar"]');
+      /** 进入选择模式：悬停该行 → 气泡栏现身 → 点里面的「选择」（每行一枚，见上一条用例注释） */
+      const enterSelectMode = async (li: Locator) => {
+        await li.locator("[data-mail-row]").hover();
+        await expect(li.locator('[data-slot="mail-row-actions"]')).toBeVisible();
+        await li.getByRole("button", { name: "选择", exact: true }).click();
+      };
+      await page.getByRole("tab", { name: "收件", exact: true }).click();
+      await expect(rows).toHaveCount(4);
+      await enterSelectMode(rows.first());
+      await expect(bar).toBeVisible();
+
+      // 可访问名带上「全部匹配」的封数（12 > 已加载的 4 —— 范围不再等于看到的那几行）
+      await bar.getByRole("button", { name: "全选全部匹配（12 封）" }).click();
+      await expect(bar).toContainText("已选 12 封（全部匹配）");
+
+      // 删除的确认文案要点明**范围**（可能含没加载出来的那些）
+      await bar.getByRole("button", { name: "删除", exact: true }).click();
+      const confirm = page.locator('[data-slot="confirm-dialog"]');
+      await expect(confirm).toContainText("删除全部匹配的 12 封邮件？");
+      await confirm.getByRole("button", { name: "取消" }).click();
+      await expect(page.locator('[data-slot="confirm-dialog"]')).toHaveCount(0);
+      // 取消不发请求（"点了取消但请求已发出"是最坏的一种错觉）
+      expect(calls.delete.length).toBe(0);
+
+      // 标记走 scope：body 里没有 messageIds（12 封里有 8 封根本没加载出来）
+      await bar.getByRole("button", { name: "标为已读" }).click();
+      await expect.poll(() => calls.flags.length).toBe(1);
+      const flagsBody = calls.flags[0] as { messageIds?: unknown; scope?: string; seen?: boolean };
+      expect(flagsBody.messageIds).toBeUndefined();
+      expect(typeof flagsBody.scope).toBe("string");
+      expect(flagsBody.seen).toBe(true);
+      // 处理完退出「全部匹配」模态
+      await expect(bar).toContainText("已选 0 封");
+
+      // 超过 20 封上限 → 删除按钮变灰，且可访问名直接说明原因
+      await bar.getByRole("button", { name: "退出多选" }).click();
+      calls.matchCount = 25;
+      await enterSelectMode(rows.first());
+      await bar.getByRole("button", { name: "全选全部匹配（25 封）" }).click();
+      await expect(bar).toContainText("已选 25 封（全部匹配）");
+      await expect(bar.getByRole("button", { name: "一次最多删除 20 封" })).toBeDisabled();
+      // 上限只管删除：标记照常可用（清未读是日常动作，不该被它连坐）
+      await expect(bar.getByRole("button", { name: "标为已读" })).toBeEnabled();
     });
 
     /**

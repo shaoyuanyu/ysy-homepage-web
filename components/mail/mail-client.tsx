@@ -119,6 +119,15 @@ function isViewFilter(v: string | null): v is ViewFilter {
  */
 const ROW_FIXED_W = 28 * 3 + 24;
 
+/**
+ * 一次批量删除的**封数**上限（2026-10-11 用户定稿：一次不超过 20 封）。
+ *
+ * ⚠ 与 webmail 仓库 `webmail/src/api.ts` 的 `MAX_SCOPE_DELETE_MESSAGES` **是同一个数、
+ *   各持一份**（两个独立包，不能互 import）——改一处必须改另一处。
+ *   那边是**边界**（超了直接 400），这里只是按钮态（变灰 + 说明为什么）。
+ */
+const MAX_BATCH_DELETE = 20;
+
 /** 加载占位：列表行骨架（4.9：不用居中 spinner 充数） */
 function ListSkeleton() {
   return (
@@ -230,6 +239,18 @@ export function MailClient({
   /** 批量操作进行中（禁用所有批量按钮，防连点重复提交） */
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  /**
+   * 「全选」的两种范围（2026-10-11 用户定稿）：逐行勾选 = 只选这几封；点「全选」= 选中
+   * **当前筛选范围内全部匹配**（服务端现算，不受已加载页数限制）。
+   * - `allMatching` 是**模态标志**：为真时选中集合为空、批量动作走 `scope` 而不是 messageIds；
+   * - `matchCount` = 服务端给的范围封数（拉取中 / 失败时为 null）：既显示给用户，也用来判
+   *   「删除是不是超了 20 封上限」；
+   * - `listQuery` = 最近一次列表加载用的查询串（**不含 `before` 游标**），即「当前筛选」
+   *   的完整定义。范围执行时原样交给服务端——口径只在 `load` 里构造一处，不可能漂移。
+   */
+  const [allMatching, setAllMatching] = useState(false);
+  const [matchCount, setMatchCount] = useState<number | null>(null);
+  const [listQuery, setListQuery] = useState("");
   /**
    * 当前视图下「真正生效」的筛选值（2026-10-06 用户定稿）：「未读」在「发件」「草稿」
    * 不可用（「发件」不可能有未读——与「草稿」同规则；「星标」仅「草稿」不可用，
@@ -429,6 +450,9 @@ export function MailClient({
       for (const f of opts.folders ?? []) {
         params.append("folder", f.account ? `${f.account}|${f.path}` : f.path);
       }
+      // 「全选全部匹配」的范围就是这一串（**不含 before 游标**）：即「当前筛选」的完整定义。
+      // 存进 state 是为了让「匹配总数」随筛选变化重新拉取；范围执行时原样发给服务端。
+      setListQuery(params.toString());
       if (opts.before) params.set("before", opts.before);
       // 读路径统一 20s 超时（fetchWithTimeout）：服务半死时不能再无限转骨架
       const res = await fetchWithTimeout(`/api/mail/messages?${params}`);
@@ -738,27 +762,73 @@ export function MailClient({
    */
   const allSeen = selectedItems.length > 0 && selectedItems.every((m) => m.seen);
   const allUnseen = selectedItems.length > 0 && selectedItems.every((m) => !m.seen);
+
+  /**
+   * 「全选」的范围数字：进入选择模式后按当前筛选拉一次总数（`GET /messages/count`，
+   * 与列表同一套参数）。拿不到时为 null —— 顺带成为「算不出封数就别删」的保险。
+   * ⚠ 筛选一变先把旧数字清掉：宁可先不给数，也不能拿上一筛选的数字去判 20 封上限。
+   */
+  useEffect(() => {
+    if (!selectMode || view === "drafts" || !listQuery) {
+      setMatchCount(null);
+      return;
+    }
+    setMatchCount(null);
+    let cancelled = false;
+    fetchWithTimeout(`/api/mail/messages/count?${listQuery}`)
+      .then((r) => (r.ok ? (r.json() as Promise<{ count: number }>) : null))
+      .then((d) => {
+        if (!cancelled && d) setMatchCount(d.count);
+      })
+      .catch(() => {
+        // 计数拿不到不影响别的动作：显示退回不带数字的说法，删除按钮变灰（见 deleteBlocked）
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectMode, listQuery, view]);
+
   // 视图 / 账号 / 搜索变化时清空选择（选择模式本身保留：用户可能想接着选下一批）
+  // ⚠ 「全部匹配」也一并退出：那个范围是按上一个筛选算的，换了筛选必须重新点一次，
+  //   否则用户以为还选着一批、实际含义已经变了（宁可多一次点击，也不对看不见的行下手）
   useEffect(() => {
     setSelected(new Set());
+    setAllMatching(false);
   }, [view, accountFilter, q]);
+
+  /**
+   * 「将要删除的封数」= 全部匹配模式看服务端计数，逐行模式看勾选数。
+   * `deleteBlocked`：超过 20 封、或封数未知（计数没拉到时宁可不许删）
+   * —— 上限常量与后端同一个数，见 `MAX_BATCH_DELETE`。
+   */
+  const deleteTargetCount = allMatching ? matchCount : selected.size;
+  const deleteBlocked = deleteTargetCount === null || deleteTargetCount > MAX_BATCH_DELETE;
 
   const exitSelectMode = useCallback(() => {
     setSelectMode(false);
     setSelected(new Set());
+    // ⚠ 「全部匹配」模态必须一起清：它是**这一次选择**的范围，留着会让下次进来时
+    //   按钮直接显示「取消全选」、批量条挂着上一次的封数（E2E 抓到过：退出再进来，
+    //   「全选」的名字找不到了，因为它已经变成「取消全选」）
+    setAllMatching(false);
   }, []);
 
   /**
-   * 全选 / 取消全选（同一个按钮，2026-10-07 用户指定）：已全选时再点即清空。
-   * ⚠ 判据用 `count === total` 而不是"有没有选中项"——只选了一部分时点它仍是全选。
+   * 全选 / 取消全选（2026-10-11 改口径）：选中**当前筛选范围内全部匹配**的邮件，而不是
+   * 「已加载的那几页」。已全选时再点即清空。
+   *
+   * ⚠ 不再是「逐行选满一页也算全选」（旧判据 `prev.size === items.length`）：两种模态的含义
+   *   不同——逐行选满只代表这一页，而按钮一旦显示成「全部匹配」再点一下就会动到看不见的信。
    */
   const toggleAll = useCallback(() => {
-    setSelected((prev) =>
-      items.length > 0 && prev.size === items.length
-        ? new Set()
-        : new Set(items.map((m) => m.messageId)),
-    );
-  }, [items]);
+    if (allMatching) {
+      setAllMatching(false);
+      setSelected(new Set());
+      return;
+    }
+    setAllMatching(true);
+    setSelected(new Set());
+  }, [allMatching]);
 
   const toggleSelect = useCallback((messageId: string) => {
     setSelected((prev) => {
@@ -769,20 +839,29 @@ export function MailClient({
     });
   }, []);
 
-  /** 批量标记（已读 / 未读）：走后端的 messageIds 口径（每账号一次连接、每文件夹一次 STORE） */
+  /**
+   * 批量标记（已读 / 未读）。
+   *
+   * 两种范围（2026-10-11）：逐行勾选 → 走 `messageIds`（每账号一次连接、每文件夹一次
+   * STORE）；「全选」→ 走 `scope`（把这串当前筛选原样交给服务端，由它现算全部匹配——
+   * 几百上千封也不必物化 id 塞进请求体）。
+   */
   const batchFlags = useCallback(
     async (change: { seen?: boolean; flagged?: boolean }) => {
-      const ids = [...selected];
-      if (ids.length === 0) return;
+      const scope = allMatching ? listQuery : null;
+      if (!scope && selected.size === 0) return;
       /**
        * `seen` 只作用于**有已读状态的**消息（`hasReadState`，判据在服务端 `readCopiesOf`：
        * 收件箱副本优先、没有收件箱副本时才认当前视图的副本）——选中项里混着发件 / 归档时，
        * 提示里的封数要按真正会变的那些算，否则又是一次「提示说改了 N 封、刷新后有几封没变」
        * （用户报过的不同步观感）。
+       * ⚠ 「全部匹配」模式下 `selectedItems` 是空的，故乐观改的是**已加载的那些行**——
+       *   它们正是匹配集合的前缀（同一套筛选、同一排序），改它们是安全的。
        */
+      const pool = scope ? items : selectedItems;
       const targets =
-        change.seen !== undefined ? selectedItems.filter((m) => m.hasReadState !== false) : selectedItems;
-      if (targets.length === 0) {
+        change.seen !== undefined ? pool.filter((m) => m.hasReadState !== false) : pool;
+      if (!scope && targets.length === 0) {
         toast.add({ title: t("markAllReadNone") });
         return;
       }
@@ -798,16 +877,19 @@ export function MailClient({
         const res = await fetch("/api/mail/flags", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ messageIds: targetIds, ...change }),
+          body: JSON.stringify(scope ? { scope, ...change } : { messageIds: targetIds, ...change }),
         });
         if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
-        const data = (await res.json()) as { updated: number; skipped: unknown[] };
+        const data = (await res.json()) as { updated: number; messages?: number; skipped: unknown[] };
         if (Array.isArray(data.skipped) && data.skipped.length > 0) {
           toast.add({ title: t("batchPartial"), type: "error" });
         } else {
-          toast.add({ title: t("batchDone", { count: targetIds.length }), type: "success" });
+          // 范围模式报服务端算出的封数（可能远多于已加载的那几行）
+          const done = typeof data.messages === "number" ? data.messages : targetIds.length;
+          toast.add({ title: t("batchDone", { count: done }), type: "success" });
         }
         setSelected(new Set());
+        setAllMatching(false);
         void loadAccounts();
         // 生效中的筛选与本次变更相关（未读筛选中标了已读 / 星标筛选中改了星标）→ 整表重取，
         // 让不再匹配的行离开列表（只打补丁会让它们赖在列表里，见 applyItemChange 的说明）
@@ -824,25 +906,34 @@ export function MailClient({
         setBatchBusy(false);
       }
     },
-    [selected, selectedItems, reload, loadAccounts, t, patchItem, unseenActive, flaggedActive],
+    [selected, selectedItems, items, allMatching, listQuery, reload, loadAccounts, t, patchItem, unseenActive, flaggedActive],
   );
 
-  /** 批量删除：确认后对该批消息的**全部副本**一起删（与单条删除同一接口同一口径） */
+  /**
+   * 批量删除：确认后对该批消息的**全部副本**一起删（与单条删除同一接口同一口径）。
+   *
+   * 「全部匹配」模式下走 `scope`（服务端现算），UI 层已限死 ≤ `MAX_BATCH_DELETE` 封
+   * （超了删除按钮变灰，进不到这里）——服务端还有一道同名上限兜底。
+   */
   const batchDelete = useCallback(async () => {
+    const scope = allMatching ? listQuery : null;
     const copies = selectedItems.flatMap((m) => m.copies);
-    if (copies.length === 0) return;
-    const removed = selectedItems;
+    if (!scope && copies.length === 0) return;
+    // 乐观摘行。范围模式下匹配集合 ≤ 20 封（否则按钮已灰），而首页就可能把匹配的行全装下
+    // —— 摘掉前 `matchCount` 行与真实结果一致；逐行模式摘的就是用户勾的那些。
+    const removed = scope ? items.slice(0, matchCount ?? items.length) : selectedItems;
     // 乐观：弹窗立刻关、选中项清空、那几行**立刻**摘掉，请求在后台跑
     // （选择模式本身留着——批量条退回「已选 0 封」，用户可以接着选下一批）
     setBatchDeleteOpen(false);
     setSelected(new Set());
+    setAllMatching(false);
     for (const m of removed) removeRow(m.messageId);
     setBatchBusy(true);
     try {
       const res = await fetch("/api/mail/delete", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ copies }),
+        body: JSON.stringify(scope ? { scope } : { copies }),
       });
       if (!res.ok) throw new Error();
       toast.add({ title: t("batchDeleted", { count: removed.length }), type: "success" });
@@ -858,7 +949,7 @@ export function MailClient({
     } finally {
       setBatchBusy(false);
     }
-  }, [selectedItems, loadAccounts, t, removeRow, restoreRow]);
+  }, [selectedItems, items, allMatching, listQuery, matchCount, loadAccounts, t, removeRow, restoreRow]);
 
   const loadMore = useCallback(async () => {
     // ⚠ `loading`（整体重载）也要拦：重载在飞时续页会把**旧游标**的下一页追加到即将被
@@ -1916,8 +2007,12 @@ export function MailClient({
           「退出多选」就在这条栏的最右端（✕，单实例）；另有隐式出口：点列表空白处、按 Esc */}
       {selectMode && view !== "drafts" && (
         <MailBatchBar
-          count={selected.size}
-          total={items.length}
+          count={allMatching ? (matchCount ?? 0) : selected.size}
+          total={allMatching ? (matchCount ?? 0) : items.length}
+          allMatching={allMatching}
+          matchCount={matchCount}
+          deleteBlocked={deleteBlocked}
+          deleteLimit={MAX_BATCH_DELETE}
           busy={batchBusy}
           allSeen={allSeen}
           allUnseen={allUnseen}
@@ -2193,12 +2288,18 @@ export function MailClient({
         onConfirm={doDelete}
       />
 
-      {/* 批量删除确认：与单条删除同一套站内确认弹窗（破坏性操作不用原生 confirm） */}
+      {/* 批量删除确认：与单条删除同一套站内确认弹窗（破坏性操作不用原生 confirm）。
+          「全部匹配」模式下文案要点明**范围**（可能包含没加载出来的那些），
+          且此时删除已被 20 封上限限住（超了按钮就进不到这里）。 */}
       <ConfirmDialog
         open={batchDeleteOpen}
         onOpenChange={setBatchDeleteOpen}
-        title={t("batchDeleteTitle", { count: selected.size })}
-        description={t("batchDeleteBody")}
+        title={
+          allMatching
+            ? t("batchDeleteAllTitle", { count: matchCount ?? 0 })
+            : t("batchDeleteTitle", { count: selected.size })
+        }
+        description={allMatching ? t("batchDeleteAllBody") : t("batchDeleteBody")}
         confirmLabel={t("delete")}
         pending={batchBusy}
         onConfirm={() => void batchDelete()}
