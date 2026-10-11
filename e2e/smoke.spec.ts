@@ -5993,11 +5993,11 @@ test.describe("站内邮件（/mail）", () => {
       // 全选 → 计数 = 「全部匹配」的封数（列表只加载了 4 封，桩里两者相等）；
       // 再点一次 = 取消全选（同一个按钮，可访问名随状态变）
       await bar.getByRole("button", { name: "全选全部匹配（4 封）" }).click();
-      await expect(bar).toContainText("已选 4 封（全部匹配）");
+      await expect(bar).toContainText("已选 4 封");
       await bar.getByRole("button", { name: "取消全选" }).click();
       await expect(bar).toContainText("已选 0 封");
       await bar.getByRole("button", { name: "全选全部匹配（4 封）" }).click();
-      await expect(bar).toContainText("已选 4 封（全部匹配）");
+      await expect(bar).toContainText("已选 4 封");
 
       // 出口一：批量条最右端那枚 ✕「退出多选」（唯一一枚，单实例）
       await bar.getByRole("button", { name: "退出多选" }).click();
@@ -6031,7 +6031,7 @@ test.describe("站内邮件（/mail）", () => {
       await enterSelectMode(rows.first());
       await expect(bar).toBeVisible();
       await bar.getByRole("button", { name: "全选全部匹配（4 封）" }).click();
-      await expect(bar).toContainText("已选 4 封（全部匹配）");
+      await expect(bar).toContainText("已选 4 封");
       await bar.getByRole("button", { name: "删除", exact: true }).click();
       const confirm = page.locator('[data-slot="confirm-dialog"]');
       await expect(confirm).toContainText("删除全部匹配的 4 封邮件？");
@@ -6088,7 +6088,7 @@ test.describe("站内邮件（/mail）", () => {
       await enterSelectMode(rows.first());
       await expect(bar).toBeVisible();
       await bar.getByRole("button", { name: "全选全部匹配（5 封）" }).click();
-      await expect(bar).toContainText("已选 5 封（全部匹配）");
+      await expect(bar).toContainText("已选 5 封");
       await bar.getByRole("button", { name: "标为已读" }).click();
       await expect.poll(() => calls.flags.length).toBe(1);
       // 空范围串要**真的发给服务端**（`scope: ""` = 不加任何参数 = 全部），不是省略字段
@@ -6105,7 +6105,7 @@ test.describe("站内邮件（/mail）", () => {
 
       // 可访问名带上「全部匹配」的封数（12 > 已加载的 4 —— 范围不再等于看到的那几行）
       await bar.getByRole("button", { name: "全选全部匹配（12 封）" }).click();
-      await expect(bar).toContainText("已选 12 封（全部匹配）");
+      await expect(bar).toContainText("已选 12 封");
       /**
        * ⚠ 列表里已加载的行必须**显示为勾选**：它们确实在范围内（同一套筛选的前缀）。
        * 此前全选只改计数、不动行，界面上「已选 12 封」下面每一行都是空的——自相矛盾
@@ -6129,7 +6129,7 @@ test.describe("站内邮件（/mail）", () => {
       const firstRow = rows.first().locator("[data-mail-row]");
       await firstRow.click();
       await expect(firstRow).toHaveAttribute("aria-pressed", "false");
-      await expect(bar).toContainText("已选 11 封（全部匹配）");
+      await expect(bar).toContainText("已选 11 封");
       await expect(bar).toContainText("已排除 1 封");
 
       // 标记走 scope + exclude：body 里没有 messageIds（12 封里有 8 封根本没加载出来）
@@ -6153,7 +6153,7 @@ test.describe("站内邮件（/mail）", () => {
       calls.matchCount = 25;
       await enterSelectMode(rows.first());
       await bar.getByRole("button", { name: "全选全部匹配（25 封）" }).click();
-      await expect(bar).toContainText("已选 25 封（全部匹配）");
+      await expect(bar).toContainText("已选 25 封");
       await expect(bar.getByRole("button", { name: "一次最多删除 20 封" })).toBeDisabled();
       // 上限只管删除：标记照常可用（清未读是日常动作，不该被它连坐）
       await expect(bar.getByRole("button", { name: "标为已读" })).toBeEnabled();

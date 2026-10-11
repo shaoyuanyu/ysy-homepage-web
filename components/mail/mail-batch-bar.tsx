@@ -42,7 +42,7 @@ import { Spinner } from "@/components/ui/spinner";
  *   `aria-pressed` 一并表状态——此前是全选后按钮直接 disabled，用户点了没反应。
  *   ⚠ **2026-10-11 改口径（用户要求）**：「全选」选的不再是「已加载的那几页」，而是
  *     当前筛选范围里**全部匹配**的邮件（服务端现算；可访问名带上封数）。逐行勾选仍然是
- *     「只选这几封」，两种模态互斥；选中计数改成「已选 N 封（全部匹配）」把范围说出来。
+ *     「只选这几封」，两种模态互斥；选中计数只说封数（不区分两种模态，见下面的注释）。
  * - 删除有**封数上限**（用户 2026-10-11 定稿：一次不超过 20 封）：超了按钮变灰，
  *   可访问名直接写清楚为什么。同一条限在后端也有一道（按钮态不是边界）。
  * - 两个标记动作的**可用性跟着选中项走**（用户指定）：选中的全都已读 → 「标为已读」禁用；
@@ -120,8 +120,11 @@ export function MailBatchBar({
           count > 0 ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
         )}
       >
-        {allMatching ? t("batchSelectedAll", { count }) : t("batchSelected", { count })}
-        {/* 「全选 → 再点掉几封」时把排除数说出来：否则计数比全选的数小，看起来像算错了 */}
+        {t("batchSelected", { count })}
+        {/* 「全选 → 再点掉几封」时把排除数说出来：否则计数比全选的数小，看起来像算错了。
+            ⚠ 计数本身**不区分**「逐行勾选」与「全部匹配」——不加「（全部匹配）」这种后缀
+            （用户 2026-10-11：没必要，而且很丑）。范围已由「全选」按钮的按下态与
+            被勾上的那些行表达。 */}
         {excludedCount > 0 && (
           <span className="ml-1 font-normal">{t("batchExcluded", { count: excludedCount })}</span>
         )}

@@ -640,7 +640,6 @@
     "batchEnter": "选择",
     "batchExit": "退出多选",
     "batchSelected": "已选 {count} 封",
-    "batchSelectedAll": "已选 {count} 封（全部匹配）",
     "batchExcluded": "（已排除 {count} 封）",
     "batchSelectAll": "全选全部匹配（{count} 封）",
     "batchClearAll": "取消全选",
