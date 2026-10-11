@@ -14,8 +14,6 @@ import {
   FileCode2Icon,
   FileTextIcon,
   LogInIcon,
-  MailCheckIcon,
-  MailXIcon,
   ForwardIcon,
   MailOpenIcon,
   MailIcon,
@@ -44,6 +42,7 @@ import {
 import { formatSize } from "@/lib/mail/format";
 import { attachmentUrl, AttachmentPreview } from "@/components/mail/attachment-preview";
 import { CalendarInviteSection } from "@/components/mail/calendar-invite";
+import { JunkIcon, NotJunkIcon } from "@/components/mail/junk-icons";
 import { MOTION_SIZE, TOOLBAR_MS } from "@/components/mail/motion";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -1126,10 +1125,9 @@ export function MessageView({ messageId }: { messageId: string }) {
               前端不再需要文件夹清单。
               ⚠ 文案 2026-10-07 用户缩写为「标为垃圾」（原「标为垃圾邮件」）——
               主栏要在一行内放下，见同文件顶部与 MAIL-AGENT.md 4.9 的动作分级。
-              ⚠ 图标 2026-10-10 换成一对信封：信封打叉（标为垃圾）/ 信封打勾（移出垃圾）。
-              此前的八边形感叹号（2026-10-07 由 `FolderInputIcon` 换成它，理由是 Gmail
-              的「举报垃圾邮件」同形）用户截图指出“根本没有直观语义”——它只有“警告/
-              危险”的意思，看不出是“垃圾”，而且与相邻几枚信封图标不成一族。 */}
+              ⚠ 图标 2026-10-11 起用 Tabler 盾牌系列（`shield-x` / `shield-check`）——
+              用户要求「两枚成一套、又要和删除区分开」。此前用过信封打叉/打勾，其中打勾
+              那枚是「全部已读」原有的图标（挪用，已还原）。详见 junk-icons.tsx。 */}
           {junkOnly ? (
             <Button
               variant="ghost"
@@ -1139,7 +1137,7 @@ export function MessageView({ messageId }: { messageId: string }) {
               title={t("notJunk")}
               onClick={() => void notJunk()}
             >
-              <MailCheckIcon data-icon="default" />
+              <NotJunkIcon data-icon="default" />
               <ActionLabel>{t("notJunk")}</ActionLabel>
             </Button>
           ) : (
@@ -1151,7 +1149,7 @@ export function MessageView({ messageId }: { messageId: string }) {
               title={t("moveToJunk")}
               onClick={() => void markJunk()}
             >
-              <MailXIcon data-icon="default" />
+              <JunkIcon data-icon="default" />
               <ActionLabel>{t("moveToJunk")}</ActionLabel>
             </Button>
           )}

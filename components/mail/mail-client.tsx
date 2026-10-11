@@ -13,7 +13,6 @@ import {
 import { useLocale, useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
 import {
-  CheckCheckIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -21,6 +20,7 @@ import {
   FilePenLineIcon,
   InboxIcon,
   LogInIcon,
+  MailCheckIcon,
   PaperclipIcon,
   RefreshCwIcon,
   SearchIcon,
@@ -1828,7 +1828,7 @@ export function MailClient({
             aria-label={t("markAllRead")}
             title={markAllNothing ? t("markAllReadNone") : t("markAllRead")}
           >
-            {markingAll ? <Spinner /> : <CheckCheckIcon data-icon="default" />}
+            {markingAll ? <Spinner /> : <MailCheckIcon data-icon="default" />}
           </Button>
           <Button
             variant="ghost"

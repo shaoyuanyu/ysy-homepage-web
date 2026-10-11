@@ -7,10 +7,8 @@ import {
   ArrowLeftRightIcon,
   ArrowUpRightIcon,
   ChevronDownIcon,
-  MailCheckIcon,
   MailIcon,
   MailOpenIcon,
-  MailXIcon,
   PaperclipIcon,
   SquareCheckBigIcon,
   StarIcon,
@@ -21,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/mail/format";
 import { isJunkOnly, isSentItem } from "@/lib/mail/kind";
 import { accountDotProps } from "@/components/mail/account-dot";
+import { JunkIcon, NotJunkIcon } from "@/components/mail/junk-icons";
 import { MailRowCheckbox } from "@/components/mail/mail-batch-bar";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -310,9 +309,11 @@ function MailRowImpl({
           )}
           {/* 「标为垃圾 ⇄ 移出垃圾」（2026-10-10）：这封**只在垃圾夹里**时给的是「移出垃圾」
               ——按副本位置判，不按当前 tab（理由见 lib/mail/kind.ts 的 isJunkOnly）。
-              ⚠ 图标成对：信封打叉（标为垃圾）/ 信封打勾（移出垃圾），与相邻的「标为未读」
-                那枚普通信封同一视觉家族。此前的八边形感叹号只有“警告”的意思，看不出
-                “垃圾”这个语义（用户 2026-10-10 截图指出）。 */}
+              ⚠ 两个动作**互斥**（同一行只会出现一枚），所以它们不必须“成对”。
+              ⚠ 图标 2026-10-11 起用 Tabler 盾牌系列（`shield-x` / `shield-check`）：
+                用户要求「两枚成一套、又要和删除区分开」。此前依次用过八边形感叹号、
+                信封打叉/打勾——后者那枚「信封打勾」是「全部已读」原有的图标，属挪用，
+                已还原。详见 components/mail/junk-icons.tsx。 */}
           {junkOnly ? (
             <Button
               variant="ghost"
@@ -321,7 +322,7 @@ function MailRowImpl({
               title={t("notJunk")}
               onClick={() => onNotJunk(m)}
             >
-              <MailCheckIcon />
+              <NotJunkIcon />
             </Button>
           ) : (
             <Button
@@ -331,7 +332,7 @@ function MailRowImpl({
               title={t("moveToJunk")}
               onClick={() => onJunk(m)}
             >
-              <MailXIcon />
+              <JunkIcon />
             </Button>
           )}
           <Button variant="ghost" size="icon-sm" aria-label={t("delete")} onClick={() => onDelete(m)}>
