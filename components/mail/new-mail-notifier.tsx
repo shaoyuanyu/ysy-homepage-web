@@ -13,9 +13,9 @@ import { toast } from "@/components/ui/toast";
  *
  * 两个协作组件 + 两个 window 事件（同页组件解耦）：
  * - `MailNewMailWatcher`（挂在 `Providers`，**全站**）：每 30s 拉一次
- *   `/api/mail/accounts` 汇总未读；与上次基线相比有新增 → toast 弹窗提醒
- *   （于是在写邮件页、博客等任何页面都能收到提醒）+ 广播 `mail:new-mail`；
- *   每次拉取都广播 `mail:unread`（未读总数）供角标订阅。
+ *   `/api/mail/accounts`（各账号未读总数，广播给角标）与 `/api/mail/health`
+ *   （各账号 `lastNewMail`，判断有没有新邮件）；判定有新邮件 → toast 弹窗提醒
+ *   （于是在写邮件页、博客等任何页面都能收到提醒）+ 广播 `mail:new-mail`。
  * - `MailUnreadBadge`（/mail 的 h1 右上角）：订阅上述事件，显示未读总数，
  *   新邮件到达时播放一次「弹跳」动画（重挂载触发 CSS keyframes 重播）。
  *
@@ -43,13 +43,16 @@ const isKnownOwner = () => {
 };
 
 /**
- * 「真·新邮件」信号 = webmaild /health 的每账号 `lastNewMail`（同步器**实际抓进
- * 新邮件**才推进的时刻）。
+ * 「真·新邮件」信号 = webmaild /health 的每账号 `lastNewMail`（同步时**收件箱里
+ * 增量抓进新邮件**才推进的时刻，判据见 webmail 包 `src/api.ts` 的 `doRunSync`）。
  *
  * ⚠ 勿改回「未读总数上升就提示」——未读总数会因为**任何**未读操作上升，最典型的是
  * 用户自己点「标为未读」（列表行内与详情页都有），于是每标一次就弹一条假的
  * 「收到 N 封新邮件」（2026-10-06 用户实测时页面上叠了三条假提醒）。
- * `lastNewMail` 只在同步抓到新邮件时前进，标未读/读信等 flag 变更不触发它。
+ * ⚠ 也不要改成「非收件箱也算」或「用户自己搬动的信也算」——发信留底、草稿镜像、
+ *   「标为垃圾」搬进垃圾夹、「移出垃圾」与撤销搬回收件箱，在同步器眼里都是「一个
+ *   文件夹里出现了新副本」（MOVE 之后目标文件夹给的是新 UID），照着弹就是在
+ *   替用户自己的动作播报「收到新邮件」（2026-10-11 用户报障）。
  */
 interface HealthAccount {
   id: string;
