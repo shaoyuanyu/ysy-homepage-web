@@ -20,11 +20,25 @@
  *   容器要到动画末尾才装得下它，中途必然被裁。带省略号时那段时间会闪「…」（看起来像
  *   坏数据）；纯裁切（`overflow-hidden`，去掉 `text-ellipsis`）的右缘随容器移动，读起来
  *   是擦除式揭示（wipe）。实现见 account-menu.tsx 的 `animating` 标记。
+ *
+ * ⚠ **每一条动效都要能被系统的「减弱动态效果」关掉**（2026-10-11）。开这个开关的人
+ *   （前庭功能障碍 / 偏头痛 / 晕动敏感）看位移不是「少点花哨」，是真会晕。引用
+ *   MOTION_SIZE 的地方自动获得降级；自己写 class 的关键帧动画要补 `motion-reduce:` 变体。
  */
 
 /** 工具栏统一时长（ms）。类名侧一律写死 `duration-300`，改这里必须同步改类的写法。 */
 export const TOOLBAR_MS = 300;
 
-/** 工具栏唯一曲线：尺寸 / 透明度 / 字号都用它（见上方说明，不要新增第二条曲线） */
-export const MOTION_SIZE = "duration-300 ease-out";
+/**
+ * 工具栏唯一曲线：尺寸 / 透明度 / 字号都用它（见上方说明，不要新增第二条曲线）。
+ *
+ * ⚠ 尾巴上的 `motion-reduce:transition-none` **不要删**（2026-10-11）：系统开了「减弱
+ *   动态效果」时统一退化成「瞬间到位」。它放在常量里而不是逐个类名补——引用点有二十
+ *   多处（账号选择器 / 通讯录筛选器 / 会话折叠 / 快速回复 / 搜索框 / 写邮件按钮），
+ *   分散着补必然漏掉几个。
+ *   为什么安全：`animating` / `searchClosing` 这类「动画窗口」标记全部由 `setTimeout`
+ *   定时清除（TOOLBAR_MS + 40），不等 `transitionend`，所以过渡被关掉后状态照旧自解，
+ *   不会卡在中间态。
+ */
+export const MOTION_SIZE = "duration-300 ease-out motion-reduce:transition-none";
 

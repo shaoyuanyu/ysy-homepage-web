@@ -841,6 +841,25 @@ API 形状（均 JSON，下划线端点为站内代理的转发对象）：
 
 **测试**：`webmail/test/scope.test.ts`（9 条，造库不连网：计数与列表同口径、不受分页限制、草稿 / 纯垃圾不计入、账号与方向筛选、搜索路径、超限 400 且本地一行未动、`/move` 拒绝 `scope`）+ `test/write.test.ts` 范围写回（8 条：`chunkUids` 分块边界、真投递 55 封后 `scope` 标记覆盖 > 50 封、搜索范围删除只删那 3 封且服务端也真的删了、超 20 封 400）+ E2E「多选：全选按全部匹配执行（标记走 scope），超过 20 封时删除按钮变灰」；桩里 `GET /api/mail/messages/count` 返回「上一次列表筛选后的条数」，用例可用 `calls.matchCount` 盖成更大的值来模拟「匹配的比加载出来的多」。
 
+### 4.20 系统「减弱动态效果」的降级（2026-10-11，用户要求「遵循系统规范」）
+
+**此前只覆盖了一处**：`prefers-reduced-motion: reduce` 全站唯一认它的地方是未读角标的弹跳（`app/globals.css` 的 `.mail-unread-pop`），而 `components/mail/` 里 `motion-reduce:` 出现 **0 次**。开这个开关的人（前庭功能障碍 / 偏头痛 / 晕动敏感）进 `/mail`，角标不弹了、工具栏照样 300ms 滑——开关被半认半不认，比完全不认更像坏了。
+
+覆盖分两层：
+
+- **过渡类**（工具栏联动，二十余处引用点）：`components/mail/motion.ts` 的 `MOTION_SIZE` 尾巴补 `motion-reduce:transition-none`，账号选择器的 max-width + 字号、通讯录筛选器、会话折叠、快速回复轨道、搜索框、写邮件按钮的 gap/文字一处生效（分散补必漏）。
+- **关键帧进出场**：`components/ui/` 的 dropdown-menu（含子菜单）/ tooltip / popover / dialog（遮罩 + 内容）/ accordion 各补 `motion-reduce:animate-none!`；邮件搜索框自己的 `animate-in` / `animate-out` 一对同。
+
+⚠ **`!` 不是风格偏好，缺了就是静默失效**：Tailwind v4 产出的 CSS 里 `motion-reduce:animate-none` 排在 `data-open:animate-in` **前面**，而两者优先级**相同**（`data-open:animate-in` 编译成 `.data-open\:animate-in:where([data-state="open"])`，`:where()` 不贡献优先级），同分看先后 → 后出现的 `data-open:animate-in` 胜、动画照播。实测（真实 Chromium 的 computed style）摘掉 `!` 后降级下 `animationName` 仍是 `enter`。**过渡类没有这个坑**：`transition-[…]` 这类基础工具类排在 media 变体**之前**，实测被正确压掉，故 `MOTION_SIZE` 里不需要 `!`。
+
+⚠ **搜索框退场另需 `motion-reduce:opacity-0`**：它的退场靠 `animate-out … fill-mode-forwards` 把 0 透明度**保持到卸载帧**；动画一关这条保障同时失效，元素本体可见 → 关闭后那 `TOOLBAR_MS + 40` 毫秒里会原地闪一下再消失（比有动画还难看）。`opacity-0` 抵消它。
+
+**有意不关的**：`Skeleton` 的 `animate-pulse`、`Spinner` 的 `animate-spin`——零位移，且分别是「载荷中 / 进行中」的指示，关掉像卡死。
+
+**测试**：E2E「系统『减弱动态效果』：过渡与进出场动画全关，但开关行为不变」。判据取 **computed style 而不是类名**（类名在不在 DOM 里根本说明不了谁赢），并配**对照组**——默认设置下同一个菜单必须有动画名，否则「类名整体丢失」会静默通过；再锁「没有动画也要当帧卸载」——Base UI 用 `element.getAnimations()` 判断，动画被关时它返回空数组、立即卸载（实测降级下开菜单 `getAnimations() === 0`、按 Esc 当帧从 DOM 移除，正常模式下仍播 `enter`）。摘掉 `!` 变异验证过一次：用例变红（`Received: "enter"`）。
+
+**未做（范围外）**：`/mail` 以外页面的过渡本次没审；手风琴的降级只有 CSS 层证据（它只出现在 agent 页，`mailagentd` 没跑时那页取不到数据，做不了交互实测）。
+
 ---
 
 ## 五、agent 系统

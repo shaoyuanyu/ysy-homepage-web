@@ -1803,8 +1803,13 @@ export function MailClient({
                 clearLabel={t("clearSearch")}
                 className={cn(
                   "w-full",
-                  !searchOpen && "pointer-events-none",
+                  // ⚠ 退场态的 `motion-reduce:opacity-0` 不是可有可无：动画被关掉后，
+                  //   `fill-mode-forwards` 那条「保持 0 透明度到卸载帧」的保障也一起失效，
+                  //   元素本身仍可见——不加它，减弱动效的用户会在关闭后的 340ms 里看见
+                  //   输入框原地闪一下再消失（比有动画还糟）。
+                  !searchOpen && "pointer-events-none motion-reduce:opacity-0",
                   searchOpen ? "animate-in fade-in-0" : "animate-out fade-out-0 fill-mode-forwards",
+                  "motion-reduce:animate-none!",
                   MOTION_SIZE,
                 )}
                 aria-label={t("searchPlaceholder")}

@@ -5711,6 +5711,56 @@ test.describe("站内邮件（/mail）", () => {
       await expect(badge).toHaveClass(/mail-unread-pop/);
     });
 
+    /**
+     * 系统「减弱动态效果」（`prefers-reduced-motion: reduce`）：/mail 的过渡与进出场动画
+     * 全部关掉，但状态机照常（菜单照样开、Esc 照样关、不残留）。
+     *
+     * ⚠ 这条用例存在的理由（2026-10-11）：降级全靠 Tailwind 变体，而变体之间比的是
+     *   **产出 CSS 里的先后顺序**。实测 Tailwind v4 把 `motion-reduce:animate-none`
+     *   排在 `data-open:animate-in` **前面**，同优先级下后者胜、动画照播；所以覆盖
+     *   tw-animate-css 进出场的那几处必须带 `!`（`motion-reduce:animate-none!`）。
+     *   谁把 `!` 去掉、或删掉 MOTION_SIZE 尾巴上的 `motion-reduce:transition-none`，
+     *   这条就会红。
+     *
+     * 判据取 computed style 而不是类名（类名在不在 DOM 里说明不了谁赢），并且配一个
+     * **对照组**：默认设置下同一个菜单必须有动画名——否则「类名整体丢失」也会静默通过。
+     */
+    test("系统「减弱动态效果」：过渡与进出场动画全关，但开关行为不变", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      const accountTrigger = '[data-slot="dropdown-menu-trigger"]:has([data-slot="account-count"])';
+      const menu = page.locator('[data-slot="dropdown-menu-content"]');
+      const menuAnim = () => menu.last().evaluate((el) => getComputedStyle(el).animationName);
+
+      // ---- 对照组：默认设置（显式声明，避免宿主机自身开了降级）动画照播 ----
+      await page.emulateMedia({ reducedMotion: "no-preference" });
+      await gotoReady(page, "/mail");
+      await page.locator(accountTrigger).click();
+      await expect(menu.last()).toBeVisible();
+      expect(await menuAnim(), "默认设置下账号菜单应有进出场动画").not.toBe("none");
+      await page.keyboard.press("Escape");
+      await expect(menu).toHaveCount(0);
+
+      // ---- 降级：动画与过渡都关 ----
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.locator(accountTrigger).click();
+      await expect(menu.last()).toBeVisible();
+      expect(await menuAnim(), "降级下账号菜单不该有进出场动画").toBe("none");
+      // 工具栏联动（此处取写邮件按钮的文字轨道，它与账号 max-width 共用 MOTION_SIZE）
+      const toolbarTransition = await page
+        .locator('[data-slot="compose-label"]')
+        .evaluate((el) => getComputedStyle(el).transitionProperty);
+      expect(toolbarTransition, "降级下工具栏联动不该有过渡").toBe("none");
+
+      // ---- 降级下关菜单：没有动画也必须立刻卸载（Base UI 靠 getAnimations() 判断，
+      //      变体写错时退出动画还在 → 这里就不会立刻消失） ----
+      await page.keyboard.press("Escape");
+      await expect(menu).toHaveCount(0);
+    });
+
     test("列表：收件与发件都是我的账号时，方向角标显示双色双向箭头", async ({ page }) => {
       const calls = { flags: [], send: [], delete: [] };
       await stubMailApi(page, calls);
