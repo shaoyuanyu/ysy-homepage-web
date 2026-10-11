@@ -652,6 +652,7 @@
     "batchDeleteAllBody": "这一批是当前筛选范围内的全部匹配（含还没加载出来的那些），删除会连它们在所有账号 / 文件夹里的副本一起删，无法撤销。",
     "batchDeleteLimit": "一次最多删除 {count} 封",
     "directionBoth": "收件与发件均为我的账号",
+    "directionBothShort": "收件与发件",
     "emptyDrafts": "暂无草稿",
     "junkNoFolder": "这个账号没有「垃圾邮件」文件夹",
     "junkNotSynced": "「垃圾邮件」还不在同步范围里——在页头的「账号」里勾选它，才会同步到这里",

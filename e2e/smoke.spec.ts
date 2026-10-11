@@ -4230,8 +4230,10 @@ test.describe("站内邮件（/mail）", () => {
       await page.keyboard.press("Escape");
 
       // 附件指示（4.2）：第一行（w04）有回形针
-      await expect(rows.nth(0).getByLabel("含附件")).toBeVisible();
-      await expect(rows.nth(1).getByLabel("含附件")).toHaveCount(0);
+      // ⚠ 必须 `exact: true`（2026-10-11）：整行按钮现在有自己的可访问名，里面**也含**
+      //    「含附件」这几个字（见 4.22），非精确匹配会同时命中行按钮与回形针两处。
+      await expect(rows.nth(0).getByLabel("含附件", { exact: true })).toBeVisible();
+      await expect(rows.nth(1).getByLabel("含附件", { exact: true })).toHaveCount(0);
 
       // 「未读」是独立开关（可与任意视图叠加）：收件 ∩ 未读 = 3 条（w03 已读被滤掉）
       const unseenChip = page.getByRole("button", { name: "未读", exact: true });
@@ -4322,16 +4324,19 @@ test.describe("站内邮件（/mail）", () => {
       expect(readStyle.senderColor).not.toBe(unreadStyle.senderColor);
 
       // 行内快捷操作（4.9）：hover 显现；点星标 → POST flags 乐观更新
+      // ⚠ 两处都 `exact: true`（2026-10-11）：整行按钮的可访问名里含「已加星标」，
+      //    而非精确匹配的「加星标」是它的子串——给某一行加星之后，非精确查询会同时命中
+      //    行按钮与该行动作按钮（见 4.22）。
       await rows.nth(0).hover();
-      await rows.nth(0).getByRole("button", { name: "加星标" }).click();
+      await rows.nth(0).getByRole("button", { name: "加星标", exact: true }).click();
       await expect.poll(() => calls.flags.length).toBe(1);
       expect(calls.flags[0]).toEqual({ messageId: "mid:w04@test.local", flagged: true });
-      await expect(rows.nth(0).getByRole("button", { name: "取消星标" })).toHaveCount(1);
+      await expect(rows.nth(0).getByRole("button", { name: "取消星标", exact: true })).toHaveCount(1);
       // 星标是前景色（黑/白，shadcn 风格；2026-10-04 用户反馈「应该是黑的」），不再是琥珀色：
       // 已加星的星 svg fill 与页面前景色一致（amber-500 时二者不等）
       const starFill = await rows
         .nth(0)
-        .getByRole("button", { name: "取消星标" })
+        .getByRole("button", { name: "取消星标", exact: true })
         .locator("svg")
         .evaluate((el) => getComputedStyle(el).fill);
       const foreground = await page.evaluate(() => getComputedStyle(document.body).color);
@@ -4344,6 +4349,48 @@ test.describe("站内邮件（/mail）", () => {
       await expect(rows.nth(1).locator("[data-mail-row]")).toBeFocused();
       await page.keyboard.press("ArrowUp");
       await expect(rows.nth(0).locator("[data-mail-row]")).toBeFocused();
+    });
+
+    /**
+     * 列表行的**可访问名**（2026-10-11，原改进清单第 9 条「列表行的可访问名太长」）。
+     *
+     * 整行是一个 `<button>`：不给 `aria-label` 时，名字由**全部后代文本**按 DOM 顺序拼出来，
+     * 摘要（几十个字的预览）也在里面——读屏扫列表时听到的是一串没停顿的长句，最先失去的
+     * 恰好是「这是谁、什么事、什么时候」。
+     *
+     * 这条锁三件事，后两件是对照组，防「随便写个常量也能过」：
+     * ① 名字是**短句**：对方 / 主题 / 时间 / 状态都在，**摘要不在**；
+     * ② 状态**逐行算**：未读行带「未读」、已读行不带；
+     * ③ 连接符**随语言走**：zh-CN 下是顿号（不是空格、不是写死的逗号）。
+     */
+    test("列表行：可访问名是短句（对方 / 主题 / 时间 / 状态），摘要不进名字", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      await page.getByRole("tab", { name: "全部", exact: true }).click();
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      // 行序 = 服务端给的 date DESC：0 = w04（未读 / 含附件 / boss@example.com，无 fromName）
+      const legalLabel = await rows.nth(0).locator("[data-mail-row]").getAttribute("aria-label");
+      expect(legalLabel, "整行必须显式给 aria-label——不给就会把摘要一起拼进名字").toBeTruthy();
+      const name = legalLabel ?? "";
+
+      expect(name, "对方").toContain("boss@example.com");
+      expect(name, "主题").toContain("Report with attachment");
+      expect(name, "附件状态").toContain("含附件");
+      expect(name, "未读状态").toContain("未读");
+      expect(name, "方向").toContain("收件");
+      expect(name, "摘要（预览）不该进可访问名").not.toContain("See attached report.");
+      expect(name, "中文用顿号连接（ListFormat narrow + conjunction）").toContain("、");
+
+      // ② 状态逐行算：w03 已读，名字里不该出现「未读」
+      const readLabel = (await rows.nth(1).locator("[data-mail-row]").getAttribute("aria-label")) ?? "";
+      expect(readLabel).toContain("HTML Newsletter");
+      expect(readLabel, "已读行不提「未读」").not.toContain("未读");
+      // ③ 名字里的主题与**可见文本**一致（防 label 与真实数据错位）
+      await expect(rows.nth(1)).toContainText("HTML Newsletter");
     });
 
     /**
@@ -4403,6 +4450,14 @@ test.describe("站内邮件（/mail）", () => {
       await expect(page.locator('[data-slot="mail-thread-child"]')).toHaveCount(2);
       await expect(rows).toHaveCount(4);
       await expect(rows.nth(1)).toContainText("Re: 预算讨论");
+
+      // 子行的可访问名同一条契约（2026-10-11）：也是短句，且**不含方向 / 附件**——
+      // 子行本来就不渲染那两枚角标，「听到的」必须与「看到的」一致
+      const childLabel = (await rows.nth(1).locator("[data-mail-row]").getAttribute("aria-label")) ?? "";
+      expect(childLabel).toContain("张老师");
+      expect(childLabel).toContain("Re: 预算讨论");
+      expect(childLabel, "子行没渲染方向角标，名字里也就不提方向").not.toContain("收件");
+      expect(childLabel, "子行没渲染方向角标，名字里也就不提方向").not.toContain("发件");
 
       // 收起
       await toggle.click();

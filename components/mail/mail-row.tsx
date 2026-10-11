@@ -26,6 +26,34 @@ import { Button } from "@/components/ui/button";
 import type { MailAccount, MailListItem } from "@/lib/mail/types";
 
 /**
+ * 拼「可访问名」用的连接符（`Intl.ListFormat`，随 `localeTag` 走）。
+ *
+ * 为什么不 `join("、")`：站点是中英双语——中文该用顿号、英文该用逗号，写死哪一种都会在
+ * 另一种语言里别扭。
+ *
+ * ⚠ `style` / `type` 这一对是**试出来**的，别凭直觉改：
+ *   - `type: "unit"` 看着最像「一串并列的名词」，但**zh-CN 的 unit 模式没有分隔符**，
+ *     `format(["未读","收件","张老师"])` 直接连成「未读收件张老师」——等于没拼。
+ *   - `type: "conjunction"` + `style: "long"` 会给「未读、收件和张老师」/「…, and …」，
+ *     多出来的「和 / and」把一串标签读成了一句通顺的话，语义是错的。
+ *   - `type: "conjunction"` + `style: "narrow"` 才两头都对：zh-CN「未读、收件、张老师」、
+ *     en-US「未读, 收件, 张老师」——只有分隔符，没有连接词。
+ *   （实测见 E2E「列表行：可访问名是短句…」，它锁了中文那顿号。）
+ *
+ * ⚠ 按 `localeTag` 缓存：`new Intl.*` 每次都要走一遍 locale 解析，而首屏一次渲染几百行，
+ *   每行每渲染都新建一个就是纯粹的浪费。
+ */
+const LIST_FORMATS = new Map<string, Intl.ListFormat>();
+function rowLabelFormat(localeTag: string): Intl.ListFormat {
+  let format = LIST_FORMATS.get(localeTag);
+  if (!format) {
+    format = new Intl.ListFormat(localeTag, { style: "narrow", type: "conjunction" });
+    LIST_FORMATS.set(localeTag, format);
+  }
+  return format;
+}
+
+/**
  * 列表行（从 `mail-client.tsx` 抽出来的 `memo` 组件）。
  *
  * 为什么要 memo：列表分页到几百行后，父组件的任何 state 变化（搜索框每敲一个字符、
@@ -129,11 +157,49 @@ function MailRowImpl({
         (m.to.length > 1 ? ` ${t("andOthers", { count: m.to.length })}` : "")
       : m.fromName || m.fromAddr;
 
+  /** 主题与时间各算一次，可见文本与可访问名共用（免得同名两处各调一次 `formatDate`） */
+  const subjectText = m.subject || t("noSubject");
+  const dateText = formatDate(m.date, localeTag);
+
+  /**
+   * 整行按钮的**可访问名**（2026-10-11，原改进清单第 9 条「列表行的可访问名太长」）。
+   *
+   * 不给 `aria-label` 时，名字由**全部后代文本**按 DOM 顺序拼出来：方向角标 + 未读角标
+   * + 对方 + 日期 + 主题 + **摘要**。摘要是「预览」，在列表里逐字念完（几十个字）恰好把
+   * 「这是谁、什么事、什么时候」淹没掉——读屏用户靠名字扫列表时最先失去的就是它。
+   *
+   * 这里显式给一份短名字，顺序 = 状态 → 方向 → 对方 → 主题 → 时间 → 附件 → 星标。
+   * ⚠ 显式名字会**整体覆盖**后代的可访问名，所以未读 / 方向 / 附件 / 星标这四件事必须
+   *   在这里手动补回来——下面角标上的 `aria-label` 从此对读屏不再生效（保留只是给 E2E
+   *   与排障看），别以为删掉它们就能连带删掉名字里的状态。
+   * ⚠ 摘要**不进名字**是要点，不是漏写：它仍然在可见文本里。
+   * ⚠ 已读的行不提「未读」（与 Gmail 同一取舍：只有异常态才占名字里的位置），但方向、
+   *   附件、星标是「是 / 否」都影响扫读，故按布尔补。
+   * ⚠ 代价：名字里从此有「未读」「含附件」「已加星标」这些词，而 Playwright 的
+   *   `getByRole({ name })` / `getByLabel()` 默认**子串匹配**——行里那枚回形针图标
+   *   （`aria-label="含附件"`）、行内动作按钮（`aria-label="加星标"`，是「已加星标」的
+   *   子串）都会变成第二个命中（严格模式直接报错，实测踩到过一次）。凡按名字找行内元素
+   *   的定位器一律补 `exact: true`，见 4.22。
+   */
+  const rowLabel = rowLabelFormat(localeTag).format(
+    [
+      m.seen ? "" : t("filterUnseen"),
+      // 双向（收 / 发都是我的账号）在名字里用短说法：`directionBoth` 是一整句话，塞进名字太吵
+      dual ? t("directionBothShort") : sent ? t("filterSent") : t("filterReceived"),
+      peerLabel(),
+      subjectText,
+      dateText,
+      m.hasAttach ? t("hasAttachment") : "",
+      m.flagged ? t("flagged") : "",
+    ].filter(Boolean),
+  );
+
   return (
     <li className="group/row relative">
       <button
         type="button"
         data-mail-row
+        aria-label={rowLabel}
         aria-current={active || undefined}
         aria-pressed={selectMode ? selected : undefined}
         onClick={() => (selectMode ? onToggleSelect(m.messageId) : onOpen(m))}
@@ -227,11 +293,11 @@ function MailRowImpl({
                 m.seen ? "text-muted-foreground" : "font-medium text-foreground",
               )}
             >
-              {formatDate(m.date, localeTag)}
+              {dateText}
             </span>
           </span>
           <span className={cn("block truncate text-sm", m.seen ? "text-muted-foreground" : "font-semibold")}>
-            {m.subject || t("noSubject")}
+            {subjectText}
           </span>
           <span className="block truncate text-xs text-muted-foreground">{m.snippet}</span>
         </span>
@@ -389,11 +455,22 @@ function ThreadChildRowImpl({ item: m, localeTag, showAccountDots, accountsById,
   const t = useTranslations("mail");
   const sent = isSentItem(m.copies);
   const peer = sent && m.to?.length ? m.to[0].name || m.to[0].address || "" : m.fromName || m.fromAddr;
+  const subjectText = m.subject || t("noSubject");
+  const dateText = formatDate(m.date, localeTag);
+  /**
+   * 同 `MailRow`：显式给短名字，别让后代文本拼成一句（见上方 `rowLabel` 的长注释）。
+   * ⚠ 这里**不提方向 / 附件 / 星标**——子行本来就没渲染那几枚角标，「听到的」与「看到的」
+   *   要一致；它们的状态由展开它的代表行负责说。
+   */
+  const rowLabel = rowLabelFormat(localeTag).format(
+    [m.seen ? "" : t("filterUnseen"), peer, subjectText, dateText].filter(Boolean),
+  );
   return (
     <li data-slot="mail-thread-child" className="bg-accent/20">
       <button
         type="button"
         data-mail-row
+        aria-label={rowLabel}
         onClick={() => onOpen(m)}
         className="flex w-full items-center gap-3 py-2 pr-4 pl-16 text-left text-sm transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none"
       >
@@ -401,7 +478,7 @@ function ThreadChildRowImpl({ item: m, localeTag, showAccountDots, accountsById,
           {peer}
         </span>
         <span className="min-w-0 flex-1 truncate text-muted-foreground">
-          {m.subject || t("noSubject")}
+          {subjectText}
         </span>
         {showAccountDots && (
           <span className="flex shrink-0 items-center gap-0.5">
@@ -418,7 +495,7 @@ function ThreadChildRowImpl({ item: m, localeTag, showAccountDots, accountsById,
           </span>
         )}
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-          {formatDate(m.date, localeTag)}
+          {dateText}
         </span>
       </button>
     </li>
