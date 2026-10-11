@@ -5709,6 +5709,60 @@ test.describe("站内邮件（/mail）", () => {
       await expect(page.locator('[data-slot="toast-title"]')).toContainText("收到 2 封新邮件");
       await expect(badge).toHaveText("5");
       await expect(badge).toHaveClass(/mail-unread-pop/);
+
+      // 读屏播报通道（2026-10-11）：Base UI 的 toast viewport 就是那个 polite live region
+      // （`role=region aria-live=polite aria-relevant="additions text"`，插入即播报）。
+      // 锁两点：① 全站只有**一个** Notifications region（此前 Providers 里多挂了一份空
+      // viewport → 两个同名地标，多出来的那个迟早变成双份播报）；② 这条 toast 的标题确实
+      // 在它**里面**——这才是「插入即播报」的事实依据。
+      const live = page.locator('[role="region"][aria-label="Notifications"]');
+      await expect(live).toHaveCount(1);
+      await expect(live.locator('[data-slot="toast-title"]')).toContainText("收到 2 封新邮件");
+    });
+
+    /**
+     * 页面不可见时到达的新邮件：**先攒着**，回到页面才弹（2026-10-11）。
+     *
+     * 为什么：读屏的 polite 播报只有用户听得见才有意义——在别的标签页里把它念完等于
+     * 没念（视觉上等价，toast 的倒计时在窗口失焦时本来就暂停）。
+     *
+     * 写法：① `document.visibilityState` 打桩伪造「不可见」，不依赖真实切窗口；
+     * ② watcher 在不可见时只能靠 30s 的 interval 发现新邮件，故装假时钟快进 31s
+     * （真实等半分钟太慢）。假时钟必须在 goto 之前装——interval 是用它建出来的。
+     */
+    test("新邮件提醒：页面不可见时先攒着，回到页面才弹（读屏才听得到）", async ({ page }) => {
+      await page.clock.install();
+      const calls = {
+        flags: [],
+        send: [],
+        delete: [],
+        accountStore: undefined as Record<string, unknown>[] | undefined,
+        healthStore: undefined as { lastNewMail: string } | undefined,
+      };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+      await gotoReady(page, "/mail");
+
+      const setVisibility = (state: "hidden" | "visible") =>
+        page.evaluate((value) => {
+          Object.defineProperty(document, "visibilityState", { configurable: true, get: () => value });
+        }, state);
+
+      // ---- 不可见期间到了 2 封（未读 3 → 5） ----
+      await setVisibility("hidden");
+      calls.accountStore![0].unread = 5;
+      calls.healthStore!.lastNewMail = new Date(Date.now() + 60_000).toISOString();
+      await page.clock.runFor("00:31");
+      await expect(
+        page.locator('[data-slot="toast-title"]'),
+        "页面不可见时不该弹提醒（弹了读屏也听不见，回来反而错过）",
+      ).toHaveCount(0);
+
+      // ---- 回到页面：这一刻才弹（顺带完成播报） ----
+      await setVisibility("visible");
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await expect(page.locator('[data-slot="toast-title"]')).toContainText("收到 2 封新邮件");
     });
 
     /**
@@ -7199,6 +7253,10 @@ test.describe("站内邮件（/mail）", () => {
       await expect(page.locator('[data-slot="mail-sync-status"]')).toHaveCount(1);
       // 正常态没有告警文案（底栏右侧只有圆点 + 上次收到新邮件）
       await expect(page.locator('[data-slot="mail-sync-alert-text"]')).toHaveCount(0);
+      // 读屏播报口径（2026-10-11）：可见那句文案（含每秒跳动的「N 分钟前」）**不是**
+      // live region——否则读屏会跟着数字一遍一遍念，把「收到新邮件」的播报淹掉；
+      // 只有问题类文案才是（见「同步连续失败」用例）。
+      await expect(status.locator('[data-slot="mail-sync-latest"]')).not.toHaveAttribute("role", "status");
 
       // ---- 贯通：底栏左右缘分别与两栏面板对齐（不是只在左半区）----
       const geo = await page.evaluate(() => {
@@ -7300,6 +7358,8 @@ test.describe("站内邮件（/mail）", () => {
       const alertText = status.locator('[data-slot="mail-sync-alert-text"]');
       // 账号在底栏统一用**备注名**（与同一行的 agent 图标同一个称呼，见 useSyncStatus 的 names）
       await expect(alertText).toHaveText("主账号 合并视图同步失败：IMAP 连接被重置");
+      // 播报：**问题类那句自己就是 live region**（正常态与回填进度则不是，见「贯通底栏」用例）
+      await expect(alertText).toHaveAttribute("role", "status");
       // 邮件同步的告警是主状态时视觉：琥珀（色调在主状态容器上）
       await expect(primary).toHaveClass(/text-amber-700/);
       // agent 的问题缩成一枚图标，文案在 aria-label / 悬浮弹窗里

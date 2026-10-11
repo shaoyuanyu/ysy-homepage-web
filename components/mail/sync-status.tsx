@@ -571,9 +571,16 @@ export function SyncStatusIndicator({
         className={cn("flex min-w-0 items-center gap-1.5", TONE_TEXT[primary.tone])}
       >
         {primary.glyph}
+        {/* 读屏播报（2026-10-11）：**只有问题类（`warn`）文案才是 live region**，
+            正常态与进行中的文案挂上就是灾难——它们是「上次收到新邮件 3 分钟前」
+            「正在同步历史邮件 3072/6520」这类每秒都在变的数字，读屏会跟着念流水账，
+            把真正该被听见的「收到 N 封新邮件」（toast 那条 polite live region）淹掉。
+            ⚠ 不要为了“播报”再另开一个 sr-only 区域：那会把同一句话在 DOM 里放两份，
+               @「这句文案全页只出现一次」的用例（两个后台不可达那条）直接变红。
+            ⚠ 判据挂在 tone 而不是 key 上：将来加新的问题类状态，给 `warn` 就自动被播报。 */}
         <span
           data-slot={primary.slot}
-          role="status"
+          role={primary.tone === "warn" ? "status" : undefined}
           title={primary.title}
           className={cn(
             "hidden min-w-0 truncate min-[30rem]:inline",

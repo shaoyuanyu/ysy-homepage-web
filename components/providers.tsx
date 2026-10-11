@@ -4,7 +4,6 @@ import { useEffect } from "react";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/layout/theme-provider";
-import { ToastProvider, ToastViewport } from "@/components/ui/toast";
 import { MailNewMailWatcher } from "@/components/mail/new-mail-notifier";
 
 /**
@@ -31,13 +30,17 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <TooltipProvider>
-        <ToastProvider>
-          {children}
-          {/* 新邮件全局提醒（2026-10-06）：全站轮询未读，新邮件到达时 toast +
-              广播事件（/mail 大标题的未读角标订阅它）。游客自动不轮询。 */}
-          <MailNewMailWatcher />
-          <ToastViewport />
-        </ToastProvider>
+        {children}
+        {/* 新邮件全局提醒（2026-10-06）：全站轮询未读，新邮件到达时发一条 toast +
+            广播事件（/mail 大标题的未读角标订阅它）。游客自动不轮询。
+            ⚠ 这里**不要**再挂 toast 的 provider / viewport（2026-10-11 删掉的那对）：
+            toast 的落点是 `app/[locale]/layout.tsx` 的 `<Toaster />`（provider + portal +
+            viewport + list 一体）。两处都挂会在 DOM 里留下**两个**
+            `role="region" aria-label="Notifications"` 的 polite live region——一个永远
+            空着（读屏的地标列表里凭空多一个同名空区域），而「新邮件到达」的播报正是靠
+            这个 region（toast 插进去即播报），多一个就是给将来埋一次双份播报。
+            这里只需要能调到全局 `toast.add()`，不需要 provider。 */}
+        <MailNewMailWatcher />
       </TooltipProvider>
     </ThemeProvider>
   );

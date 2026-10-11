@@ -410,7 +410,7 @@ API 形状（均 JSON，下划线端点为站内代理的转发对象）：
 - **已读回执（MDN，RFC 8098）**：写信页「回执」胶囊 → `Disposition-Notification-To: <本账号地址>`（只写裸地址，displayName 可能含非 ASCII，自定义头不做 MIME 编码）。**回执是请求，不是保证**——收件方可以不发。
 - **备注名 vs 发件人姓名（2026-10-06 用户报障后分离）**：`displayName` = 站内备注名（如「我」），**绝不外发**；`senderName` = 随邮件发出的 `From` 显示名（空 = 只发地址）。曾把备注名当发件人姓名发出（收件人看到「我 <me@…>」），故两者在账号模型与账号管理弹窗里都是独立字段。
 - **账号编辑（`PUT /accounts/:id`，2026-10-06）**：备注名 / 发件人姓名 / 连接字段（主机、端口、SSL、用户名、密码留空=不改）都能改；**只有连接字段变化才先做 IMAP+SMTP 连接测试**，纯元数据改动即时落盘。
-- **新邮件提醒（2026-10-06）**：`components/mail/new-mail-notifier.tsx` 两个协作组件——`MailNewMailWatcher` 挂在 `Providers`（**全站**，30s 轮询 `/accounts` 与 `/health`）→ toast + 广播 `mail:new-mail`；`MailUnreadBadge`（`/mail` 的 h1 右上角）订阅 `mail:unread` 显示未读总数。⚠ 判据是 webmaild `/health` 的 `lastNewMail`，它只在**收件箱里增量抓进了信**时前进（判据在 `webmail/src/api.ts` 的 `doRunSync`）——未读总数上升不算数（用户自己「标为未读」也会让它上升），别的文件夹出现新副本不算数（发信留底、草稿镜像、「标为垃圾」搬进垃圾夹全是我们自己写进去的），用户自己搬动的信也不算数（`moved_by_user` 表：「移出垃圾」「撤销标为垃圾」搬回收件箱时服务端给的是新 UID，与刚到的新信无从区分）。⚠ 游客**一个请求都不发**（先读 `OWNER_CACHE_KEY` 判身份），否则游客控制台的 401 会让「页面无控制台错误」用例变红。⚠ 顶栏「邮箱」圆点是另一条 5 分钟轮询（`owner-nav-item.tsx`），与 30s 的 watcher 双源、短时间内可能不一致（已知小债）。
+- **新邮件提醒（2026-10-06）**：`components/mail/new-mail-notifier.tsx` 两个协作组件——`MailNewMailWatcher` 挂在 `Providers`（**全站**，30s 轮询 `/accounts` 与 `/health`）→ toast + 广播 `mail:new-mail`；`MailUnreadBadge`（`/mail` 的 h1 右上角）订阅 `mail:unread` 显示未读总数。⚠ 判据是 webmaild `/health` 的 `lastNewMail`，它只在**收件箱里增量抓进了信**时前进（判据在 `webmail/src/api.ts` 的 `doRunSync`）——未读总数上升不算数（用户自己「标为未读」也会让它上升），别的文件夹出现新副本不算数（发信留底、草稿镜像、「标为垃圾」搬进垃圾夹全是我们自己写进去的），用户自己搬动的信也不算数（`moved_by_user` 表：「移出垃圾」「撤销标为垃圾」搬回收件箱时服务端给的是新 UID，与刚到的新信无从区分）。⚠ 游客**一个请求都不发**（先读 `OWNER_CACHE_KEY` 判身份），否则游客控制台的 401 会让「页面无控制台错误」用例变红。⚠ 顶栏「邮箱」圆点是另一条 5 分钟轮询（`owner-nav-item.tsx`），与 30s 的 watcher 双源、短时间内可能不一致（已知小债）。⚠ 读屏播报与「不可见时先攒着」见 4.21。
 - **视图 tab 增至 5 个 = 全部 / 收件 / 发件 / 草稿 / 垃圾（2026-10-08 用户要求）**：新增「垃圾」tab，空间不够时收进 tab 条末尾的 **chevron 下拉**（用户原话：「可以做成一个 V 型符号下拉的」）。
   - ⚠ **「垃圾」不是被否掉的「文件夹」视图重演**（2026-10-07 删除它的理由仍然成立）：那是"让用户随便挑一个文件夹看"（数据位置混进数据切片）；「垃圾」是**一个固定的特殊用途**（服务商自己认定的 `\Junk`），与「草稿」（`\Drafts`）同级，故可以进 tab 条。**勿再加"任意文件夹"的 tab**。
   - **空间账（改文案前必须重量）**：左栏内容宽 384px，右侧两个开关中文 134px / 英文 175px，于是留给 tab 的宽度**中文 234px / 英文 193px**；5 个 tab 实测占 **232px（中文）/ 272px（英文）**。所以：中文 5 个全显示（余 2px），英文收成 3 个 + chevron（190px）。
@@ -859,6 +859,17 @@ API 形状（均 JSON，下划线端点为站内代理的转发对象）：
 **测试**：E2E「系统『减弱动态效果』：过渡与进出场动画全关，但开关行为不变」。判据取 **computed style 而不是类名**（类名在不在 DOM 里根本说明不了谁赢），并配**对照组**——默认设置下同一个菜单必须有动画名，否则「类名整体丢失」会静默通过；再锁「没有动画也要当帧卸载」——Base UI 用 `element.getAnimations()` 判断，动画被关时它返回空数组、立即卸载（实测降级下开菜单 `getAnimations() === 0`、按 Esc 当帧从 DOM 移除，正常模式下仍播 `enter`）。摘掉 `!` 变异验证过一次：用例变红（`Received: "enter"`）。
 
 **未做（范围外）**：`/mail` 以外页面的过渡本次没审；手风琴的降级只有 CSS 层证据（它只出现在 agent 页，`mailagentd` 没跑时那页取不到数据，做不了交互实测）。
+
+### 4.21 新邮件到达的读屏播报（2026-10-11）
+
+**播报通道就是那条 toast 本身**，不需要另加 sr-only live region：Base UI 的 toast viewport 就是 `role="region" aria-live="polite" aria-relevant="additions text"`（toast 挿进去即被播报），而 `app/[locale]/layout.tsx` 的 `<Toaster />` 是唯一一份落点。据此修了三处**真问题**：
+
+1. **同一类 live region 在 DOM 里有两份**（`Providers` 里孤立的 `<ToastProvider>` + `<ToastViewport>` 与 layout 里的 `<Toaster />` 各一份）→ 两个同名「Notifications」地标、其中一个永远空着，而「新邮件到达」的播报正是靠这个 region，多一个就是给将来埋一次双份播报。已删掉 `Providers` 里那份（那里只需要能调到全局 `toast.add()`）。E2E 锁两件事：「全站只有 1 个 Notifications region」+「toast 标题确实落在它**里面**」（这才是「插入即播报」的事实依据）。
+2. **底栏那句 `role="status"` 是流水账**：它挂的是「上次收到新邮件 3 分钟前」「正在同步历史邮件 3072/6520」这类每秒都在变的数字。改成**只有问题类（`tone === "warn"`）文案才带 `role="status"`**，正常态与进度都不播报——否则读屏一直在念「收到新邮件」，真正该被听见的那条反而被淹掉。⚠ **不要**另开一个 sr-only 区域装播报：那会把同一句话在 DOM 里放两份，「两个后台都不可达时这句文案全页只出现一次」的用例会立刻变红（第一版就是这么写的，实测变红）。
+3. **页面不可见时先攒着**：用户在别的标签页时 polite 播报念完等于没念（视觉上等价——toast 的倒计时在窗口失焦时本来就暂停）。watcher 因此在 `document.visibilityState === "hidden"` 时只累加 `pendingDelta`，回到页面（`visibilitychange`）才弹一次，多次到达会合并成一条「收到 N 封新邮件」。
+   · 测试用 `page.clock.install()` + `runFor("00:31")` 快进 30s 的轮询间隔，`document.visibilityState` 打桩成 hidden/visible，不依赖真实切窗口；断言「不可见期间 0 条 toast、回到页面才弹」。
+
+**没做的（有意）**：不改成 `priority: "high"`——那是 assertive，会打断用户正在听的内容（且 Base UI 的高优先级会把可见的 toast 从无障碍树里摘掉）；`MailUnreadBadge` 不加 live 语义（它是 h1 里的角标，聚焦时可读，加了就是二重奏）；`Skeleton` / `Spinner` 的动画不关（见 4.20）。
 
 ---
 

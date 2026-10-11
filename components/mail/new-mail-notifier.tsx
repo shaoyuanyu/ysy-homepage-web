@@ -26,6 +26,16 @@ import { toast } from "@/components/ui/toast";
  *   控制台留下 Failed to load resource 错误（E2E「页面无控制台错误」变红）。
  * ⚠ 轮询是**本机回环**请求（Next 路由 → webmaild），成本极低；30s 与 webmaild
  *   的 60s 同步周期配合，新邮件最迟约 1 分半内弹提醒。
+ *
+ * ⚠ **「新邮件到达」的读屏播报通道就是这条 toast**：Base UI 的 viewport 是
+ *   `role="region" aria-live="polite" aria-relevant="additions text"`，toast 插进去
+ *   即播报（`app/[locale]/layout.tsx` 的 `<Toaster />` 是唯一一份，勿再挂第二个
+ *   viewport——见 providers.tsx 的注释）。据此有三条红线：
+ *   · **不要再自己加一个 sr-only live region**：同一句话会被念两遍；
+ *   · **不要改成 `priority: "high"`**：那是 assertive，会打断用户正在听的内容，
+ *     新邮件不值得（且高优先级会把可见的 toast 从无障碍树里摘掉）；
+ *   · 页面不可见时先攒着、回到页面再弹（见 `onVisible`）：polite 播报在用户听不见的
+ *     时候念完等于没念。视觉上等价——toast 的倒计时在窗口失焦时本来就暂停。
  */
 export const MAIL_UNREAD_EVENT = "mail:unread";
 export const MAIL_NEW_MAIL_EVENT = "mail:new-mail";
@@ -74,12 +84,20 @@ export function MailNewMailWatcher() {
     let lastTotal: number | null = null;
     /** 各账号上次看到的 lastNewMail（真·新邮件信号；首轮只建基线不提示） */
     let lastNewMailSeen: Map<string, string | null> | null = null;
+    /** 页面不可见期间攒下的新邮件封数（回到页面再弹一次，见 onVisible） */
+    let pendingDelta: number | null = null;
 
     const clearTimer = () => {
       if (timer !== undefined) {
         window.clearInterval(timer);
         timer = undefined;
       }
+    };
+
+    /** 弹提醒——**同时就是读屏播报**（见文件头 ⚠），所以它只在这一处发 */
+    const announce = (delta: number) => {
+      window.dispatchEvent(new CustomEvent(MAIL_NEW_MAIL_EVENT, { detail: { delta } }));
+      toast.add({ title: t("newMailToast", { count: delta }), type: "info" });
     };
 
     const poll = async () => {
@@ -128,8 +146,10 @@ export function MailNewMailWatcher() {
         lastNewMailSeen = nextSeen;
         if (hadBaseline && advanced) {
           const delta = lastTotal !== null && total > lastTotal ? total - lastTotal : 1;
-          window.dispatchEvent(new CustomEvent(MAIL_NEW_MAIL_EVENT, { detail: { delta } }));
-          toast.add({ title: t("newMailToast", { count: delta }), type: "info" });
+          // 页面不可见（用户在别的标签页）时先攒着：polite 播报只有用户听得见才有意义，
+          // 回到页面那一刻再弹一次——见 onVisible 与文件头 ⚠
+          if (document.visibilityState === "visible") announce(delta);
+          else pendingDelta = (pendingDelta ?? 0) + delta;
         }
       }
       lastTotal = total;
@@ -146,12 +166,20 @@ export function MailNewMailWatcher() {
     // 切回标签页立即重取（用户回来第一眼就看到最新未读，不用等下个轮询周期；
     // E2E 也借它触发「模拟新邮件到达 → 提醒」的时序）
     const onVisible = () => {
-      if (document.visibilityState === "visible") void poll();
+      if (document.visibilityState !== "visible") return;
+      // 攒下的新邮件：回到页面的这一刻才弹（顺带完成读屏播报）
+      if (pendingDelta !== null) {
+        const delta = pendingDelta;
+        pendingDelta = null;
+        announce(delta);
+      }
+      void poll();
     };
     document.addEventListener("visibilitychange", onVisible);
     // 登录 / 登出后重新判定（游客期间停掉的轮询在登录后必须复活）
     const onAuth = () => {
       lastTotal = null; // 重建基线（登录后首次拉取不误报）
+      pendingDelta = null; // 换身份后不把上一个身份的提醒带过来
       start();
     };
     window.addEventListener(OWNER_AUTH_CHANGED_EVENT, onAuth);
