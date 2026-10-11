@@ -63,6 +63,7 @@ export function MailBatchBar({
   total,
   allMatching,
   matchCount,
+  excludedCount,
   deleteBlocked,
   deleteLimit,
   busy,
@@ -86,6 +87,8 @@ export function MailBatchBar({
   allMatching: boolean;
   /** 全部匹配的封数（拉取中 / 失败时为 null）；仅用于「全选」的提示文案 */
   matchCount: number | null;
+  /** 「全部匹配」里被用户**逐行取消掉**的封数：> 0 时把「已排除 M 封」写出来 */
+  excludedCount: number;
   /** 删除被封数上限挡住（> `deleteLimit`，或封数未知）：按钮变灰并说明原因 */
   deleteBlocked: boolean;
   /** 删除的封数上限（与后端同名常量同一个数） */
@@ -118,6 +121,10 @@ export function MailBatchBar({
         )}
       >
         {allMatching ? t("batchSelectedAll", { count }) : t("batchSelected", { count })}
+        {/* 「全选 → 再点掉几封」时把排除数说出来：否则计数比全选的数小，看起来像算错了 */}
+        {excludedCount > 0 && (
+          <span className="ml-1 font-normal">{t("batchExcluded", { count: excludedCount })}</span>
+        )}
       </span>
       {/* 处理中：没有「退出」按钮之后，这里是 busy 唯一的落点（不要挪进胶囊里——
           胶囊宽度会随文字变，跳动比多一个 12px 圆环更显眼） */}

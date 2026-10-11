@@ -6106,6 +6106,12 @@ test.describe("站内邮件（/mail）", () => {
       // 可访问名带上「全部匹配」的封数（12 > 已加载的 4 —— 范围不再等于看到的那几行）
       await bar.getByRole("button", { name: "全选全部匹配（12 封）" }).click();
       await expect(bar).toContainText("已选 12 封（全部匹配）");
+      /**
+       * ⚠ 列表里已加载的行必须**显示为勾选**：它们确实在范围内（同一套筛选的前缀）。
+       * 此前全选只改计数、不动行，界面上「已选 12 封」下面每一行都是空的——自相矛盾
+       * （2026-10-11 用户截图报障：「UI 完全没有反映出来」）。
+       */
+      await expect(rows.locator('[data-mail-row][aria-pressed="true"]')).toHaveCount(4);
 
       // 删除的确认文案要点明**范围**（可能含没加载出来的那些）
       await bar.getByRole("button", { name: "删除", exact: true }).click();
@@ -6116,12 +6122,28 @@ test.describe("站内邮件（/mail）", () => {
       // 取消不发请求（"点了取消但请求已发出"是最坏的一种错觉）
       expect(calls.delete.length).toBe(0);
 
-      // 标记走 scope：body 里没有 messageIds（12 封里有 8 封根本没加载出来）
+      /**
+       * 点一行 = 把这一封从「全部匹配」里**排除**（Gmail 同款）：勾选态翻成未选、计数减一、
+       * 批量条把排除数说出来。⚠ 排除名单必须发给服务端 —— 否则界面写着 11 封、实际动 12 封。
+       */
+      const firstRow = rows.first().locator("[data-mail-row]");
+      await firstRow.click();
+      await expect(firstRow).toHaveAttribute("aria-pressed", "false");
+      await expect(bar).toContainText("已选 11 封（全部匹配）");
+      await expect(bar).toContainText("已排除 1 封");
+
+      // 标记走 scope + exclude：body 里没有 messageIds（12 封里有 8 封根本没加载出来）
       await bar.getByRole("button", { name: "标为已读" }).click();
       await expect.poll(() => calls.flags.length).toBe(1);
-      const flagsBody = calls.flags[0] as { messageIds?: unknown; scope?: string; seen?: boolean };
+      const flagsBody = calls.flags[0] as {
+        messageIds?: unknown;
+        scope?: string;
+        exclude?: string[];
+        seen?: boolean;
+      };
       expect(flagsBody.messageIds).toBeUndefined();
-      expect(typeof flagsBody.scope).toBe("string");
+      expect(flagsBody.scope).toBe("direction=received");
+      expect(flagsBody.exclude).toHaveLength(1);
       expect(flagsBody.seen).toBe(true);
       // 处理完退出「全部匹配」模态
       await expect(bar).toContainText("已选 0 封");

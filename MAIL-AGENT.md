@@ -314,8 +314,8 @@ API 形状（均 JSON，下划线端点为站内代理的转发对象）：
 | `GET /message/:id` | 完整邮件（正文 sanitize + 远程资源占位，见 4.4） |
 | `GET /message/:id/thread` | 同一会话的邮件元数据列表（按时间升序，组装规则见 4.7） |
 | `POST /send` | 发信（SMTP + `APPEND` 留底，同一份字节） |
-| `POST /flags` | 已读 / 星标（对该消息的所有副本一起写）。传 `messageId` 单条、`messageIds[]` 多选，或 `scope`（列表查询串）= 当前筛选范围内**全部匹配**（见 4.19） |
-| `POST /move`、`POST /delete` | 移动与删除。`/delete` 另接受 `scope`（同 `/flags`），但**一次最多 20 封**（`MAX_SCOPE_DELETE_MESSAGES`，超了 400）；`/move` 不接受 `scope` |
+| `POST /flags` | 已读 / 星标（对该消息的所有副本一起写）。传 `messageId` 单条、`messageIds[]` 多选，或 `scope`（列表查询串）+ 可选 `exclude` = 当前筛选范围内**全部匹配**减去排除掉的那几封（见 4.19） |
+| `POST /move`、`POST /delete` | 移动与删除。`/delete` 另接受 `scope` + `exclude`（同 `/flags`），但**一次最多 20 封**（`MAX_SCOPE_DELETE_MESSAGES`，超了 400）；`/move` 不接受 `scope` |
 | `POST /unmove` | 把邮件从垃圾夹里搬走：拉整个垃圾夹的 Message-ID 头在本地定位（撤销「标为垃圾」→ 回原文件夹，见 4.18）。⚠ **不是**给「移出垃圾」用的——那个走普通的 `POST /move` |
 | `POST /sync` | 立即增量同步 |
 
@@ -818,7 +818,14 @@ API 形状（均 JSON，下划线端点为站内代理的转发对象）：
 - 后端把 `listMessages` 里的查询参数解析与 where 拼接抽成 `parseListQuery` / `listWhere`（`webmail/src/api.ts`），**列表分页、计数、范围执行三处共用同一份**。口径漂移在这里是最难查的一类不一致（本仓库已经栽过两次：加粗却筛不出来、改了界面不变）。
 - `GET /messages/count?<与 /messages 同一套参数>`：给前端一个数字。
 - `POST /flags` / `POST /delete` 新增可选 `scope` **= 列表那串查询串**（不带 `?`）。前端把加载列表时用的那串原样发过来，服务端用同一个 `parseListQuery` 解析后**在本地索引里现算全部匹配**（`matchingMessageIds` / `scopeMessageIds`）。⚠ 传输用查询串而不是物化 `messageId[]`：几千封既灌不进请求体，也没必要——而且口径不可能漂移。
-- 前端范围串只在 `load()` 里构造一处（`setListQuery(params.toString())`，**不含 `before` 游标**），`batchFlags` / `batchDelete` 直接引用它。
+- 前端范围串只在 `load()` 里构造一处（`setListQuery(params.toString())`，**不含 `before` 游标**），`batchFlags` / `batchDelete` 直接引用它。⚠ 它是 `string | null`：**空串是合法范围**（「全部」tab + 全部账号 + 无筛选 = 不加任何参数），只有 `null` 才表示「列表还没加载」。写成 `!listQuery` 判定会让最常见的那个视图失效（点全选一直显示「已选 0 封」）。
+
+**已加载的行要显示为勾选，逐行点击 = 从范围里排除（2026-10-11 用户截图报障后补）。**
+
+- 「全选」后列表里所有行都应该是勾上的（它们确实在范围内：同一套筛选的前缀）。只改计数、行一律未选，界面就自相矛盾——用户的原话是「列表 UI 完全没有反映出来」。
+- 点某一行 = **把这一封排除**（`excluded` 集合，勾选态翻成未选、计数减一、批量条写「已排除 M 封」）。⚠ 不能改成「退出模态、只留这一封」（与用户意图相反），也不能什么都不做（死交互）。
+- ⚠ **排除名单必须发给服务端**（`POST /flags|/delete` 的 `exclude: string[]`，非空才带）：服务端算完匹配集合后减掉它们。否则界面写着「已选 6562 封」、实际动 6563 封——这正是本仓库反复栽的那类不一致。
+- 计数、`deleteBlocked`、删除确认标题用的都是 **`matchCount - excluded.size`**（真正会动的数）。
 
 **删除有封数上限（用户 2026-10-11 定稿：一次不超过 20 封）。** 删除不可撤销，且「全部匹配」在真实邮箱里动辄上千——所以前端把删除按钮**变灰并用可访问名说明原因**，后端另有一道**独立**的同值上限（`MAX_SCOPE_DELETE_MESSAGES`，超了 400）。⚠ 按钮态不是边界：键盘、直接打接口都能绕过它，两道都要有。⚠ 两个包各持一份常量（前端 `MAX_BATCH_DELETE`），改必须同步。标记类动作（已读 / 未读 / 星标）**不受**这个上限约束。
 

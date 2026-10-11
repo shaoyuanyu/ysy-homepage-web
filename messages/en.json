@@ -641,6 +641,7 @@
     "batchExit": "Exit selection",
     "batchSelected": "{count} selected",
     "batchSelectedAll": "{count} selected (all matches)",
+    "batchExcluded": "({count} excluded)",
     "batchSelectAll": "Select all {count} matches",
     "batchClearAll": "Clear selection",
     "batchDone": "{count} messages updated",

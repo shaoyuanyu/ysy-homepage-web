@@ -243,6 +243,9 @@ export function MailClient({
    * 「全选」的两种范围（2026-10-11 用户定稿）：逐行勾选 = 只选这几封；点「全选」= 选中
    * **当前筛选范围内全部匹配**（服务端现算，不受已加载页数限制）。
    * - `allMatching` 是**模态标志**：为真时选中集合为空、批量动作走 `scope` 而不是 messageIds；
+   * - `excluded` = 「全部匹配」里用户**逐行取消掉**的那几封（Gmail 同款：先全选、再点掉个别）。
+   *   已加载的行勾选态 = `allMatching ? !excluded.has(id) : selected.has(id)`；
+   *   名单会随请求发给服务端（`exclude`），保证「界面说的数」= 「真正动的数」；
    * - `matchCount` = 服务端给的范围封数（拉取中 / 失败时为 null）：既显示给用户，也用来判
    *   「删除是不是超了 20 封上限」；
    * - `listQuery` = 最近一次列表加载用的查询串（**不含 `before` 游标**），即「当前筛选」
@@ -252,6 +255,7 @@ export function MailClient({
    *   「点了全选，一直显示 已选 0 封」（2026-10-11 用户截图报障）。
    */
   const [allMatching, setAllMatching] = useState(false);
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [matchCount, setMatchCount] = useState<number | null>(null);
   const [listQuery, setListQuery] = useState<string | null>(null);
   /**
@@ -798,15 +802,21 @@ export function MailClient({
   useEffect(() => {
     setSelected(new Set());
     setAllMatching(false);
+    setExcluded(new Set());
   }, [view, accountFilter, q]);
 
   /**
-   * 「将要删除的封数」= 全部匹配模式看服务端计数，逐行模式看勾选数。
+   * 「将要删除的封数」= 全部匹配模式看服务端计数**减掉逐行取消掉的那些**，逐行模式看勾选数。
    * `deleteBlocked`：超过 20 封、或封数未知（计数没拉到时宁可不许删）
    * —— 上限常量与后端同一个数，见 `MAX_BATCH_DELETE`。
    */
-  const deleteTargetCount = allMatching ? matchCount : selected.size;
-  const deleteBlocked = deleteTargetCount === null || deleteTargetCount > MAX_BATCH_DELETE;
+  const excludedCount = allMatching ? excluded.size : 0;
+  const matchedCount = allMatching
+    ? matchCount === null
+      ? null
+      : Math.max(0, matchCount - excludedCount)
+    : selected.size;
+  const deleteBlocked = matchedCount === null || matchedCount > MAX_BATCH_DELETE;
 
   const exitSelectMode = useCallback(() => {
     setSelectMode(false);
@@ -815,6 +825,7 @@ export function MailClient({
     //   按钮直接显示「取消全选」、批量条挂着上一次的封数（E2E 抓到过：退出再进来，
     //   「全选」的名字找不到了，因为它已经变成「取消全选」）
     setAllMatching(false);
+    setExcluded(new Set());
   }, []);
 
   /**
@@ -828,20 +839,42 @@ export function MailClient({
     if (allMatching) {
       setAllMatching(false);
       setSelected(new Set());
+      setExcluded(new Set());
       return;
     }
     setAllMatching(true);
     setSelected(new Set());
+    setExcluded(new Set());
   }, [allMatching]);
 
-  const toggleSelect = useCallback((messageId: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(messageId)) next.delete(messageId);
-      else next.add(messageId);
-      return next;
-    });
-  }, []);
+  /**
+   * 行点击（选择模式下）：
+   * - 逐行模式：照旧是勾选 / 取消这一封；
+   * - 「全部匹配」模式：点一行 = **把这一封从范围内排除**（勾选态翻成未选、计数减一，
+   *   排除名单随请求发给服务端）。⚠ 不能清空整个模态、只留这一封——那和用户点“取消这一行”
+   *   的意图相反；也不能什么都不做——那这一下就是死交互（2026-10-11 用户报“列表完全没反映”，
+   *   根源就是当时 `selected` 留空、行一律渲染成未选）。
+   */
+  const toggleSelect = useCallback(
+    (messageId: string) => {
+      if (allMatching) {
+        setExcluded((prev) => {
+          const next = new Set(prev);
+          if (next.has(messageId)) next.delete(messageId);
+          else next.add(messageId);
+          return next;
+        });
+        return;
+      }
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(messageId)) next.delete(messageId);
+        else next.add(messageId);
+        return next;
+      });
+    },
+    [allMatching],
+  );
 
   /**
    * 批量标记（已读 / 未读）。
@@ -854,15 +887,18 @@ export function MailClient({
     async (change: { seen?: boolean; flagged?: boolean }) => {
       const scope = allMatching && listQuery !== null ? listQuery : null;
       if (scope === null && selected.size === 0) return;
+      /** 「全部匹配」下被逐行取消掉的那几封：**非空才带**（空数组等于没排除，不必出现在 body 里） */
+      const excludePatch = excluded.size > 0 ? { exclude: [...excluded] } : {};
       /**
        * `seen` 只作用于**有已读状态的**消息（`hasReadState`，判据在服务端 `readCopiesOf`：
        * 收件箱副本优先、没有收件箱副本时才认当前视图的副本）——选中项里混着发件 / 归档时，
        * 提示里的封数要按真正会变的那些算，否则又是一次「提示说改了 N 封、刷新后有几封没变」
        * （用户报过的不同步观感）。
-       * ⚠ 「全部匹配」模式下 `selectedItems` 是空的，故乐观改的是**已加载的那些行**——
-       *   它们正是匹配集合的前缀（同一套筛选、同一排序），改它们是安全的。
+       * ⚠ 「全部匹配」模式下 `selectedItems` 是空的，故乐观改的是**已加载的那些行**
+       *   （去掉用户逐行取消掉的那几封）——它们正是匹配集合的前缀（同一套筛选、同一排序）。
        */
-      const pool = scope !== null ? items : selectedItems;
+      const pool =
+        scope !== null ? items.filter((m) => !excluded.has(m.messageId)) : selectedItems;
       const targets =
         change.seen !== undefined ? pool.filter((m) => m.hasReadState !== false) : pool;
       if (scope === null && targets.length === 0) {
@@ -881,7 +917,11 @@ export function MailClient({
         const res = await fetch("/api/mail/flags", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(scope !== null ? { scope, ...change } : { messageIds: targetIds, ...change }),
+          body: JSON.stringify(
+            scope !== null
+              ? { scope, ...excludePatch, ...change }
+              : { messageIds: targetIds, ...change },
+          ),
         });
         if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
         const data = (await res.json()) as { updated: number; messages?: number; skipped: unknown[] };
@@ -910,7 +950,7 @@ export function MailClient({
         setBatchBusy(false);
       }
     },
-    [selected, selectedItems, items, allMatching, listQuery, reload, loadAccounts, t, patchItem, unseenActive, flaggedActive],
+    [selected, selectedItems, items, allMatching, listQuery, excluded, reload, loadAccounts, t, patchItem, unseenActive, flaggedActive],
   );
 
   /**
@@ -923,9 +963,11 @@ export function MailClient({
     const scope = allMatching && listQuery !== null ? listQuery : null;
     const copies = selectedItems.flatMap((m) => m.copies);
     if (scope === null && copies.length === 0) return;
-    // 乐观摘行。范围模式下匹配集合 ≤ 20 封（否则按钮已灰），而首页就可能把匹配的行全装下
-    // —— 摘掉前 `matchCount` 行与真实结果一致；逐行模式摘的就是用户勾的那些。
-    const removed = scope !== null ? items.slice(0, matchCount ?? items.length) : selectedItems;
+    /** 「全部匹配」下被逐行取消掉的那几封：**非空才带**（空数组等于没排除） */
+    const excludePatch = excluded.size > 0 ? { exclude: [...excluded] } : {};
+    // 乐观摘行。范围模式下匹配集合 ≤ 20 封（否则删除按钮已灰），首屏就能把它们全装下——
+    // 摘掉「已加载的行里没被用户取消掉的那些」与真实结果一致；逐行模式摘的就是用户勾的那些。
+    const removed = scope !== null ? items.filter((m) => !excluded.has(m.messageId)) : selectedItems;
     // 乐观：弹窗立刻关、选中项清空、那几行**立刻**摘掉，请求在后台跑
     // （选择模式本身留着——批量条退回「已选 0 封」，用户可以接着选下一批）
     setBatchDeleteOpen(false);
@@ -937,7 +979,7 @@ export function MailClient({
       const res = await fetch("/api/mail/delete", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(scope !== null ? { scope } : { copies }),
+        body: JSON.stringify(scope !== null ? { scope, ...excludePatch } : { copies }),
       });
       if (!res.ok) throw new Error();
       toast.add({ title: t("batchDeleted", { count: removed.length }), type: "success" });
@@ -953,7 +995,7 @@ export function MailClient({
     } finally {
       setBatchBusy(false);
     }
-  }, [selectedItems, items, allMatching, listQuery, matchCount, loadAccounts, t, removeRow, restoreRow]);
+  }, [selectedItems, items, allMatching, listQuery, excluded, loadAccounts, t, removeRow, restoreRow]);
 
   const loadMore = useCallback(async () => {
     // ⚠ `loading`（整体重载）也要拦：重载在飞时续页会把**旧游标**的下一页追加到即将被
@@ -2011,10 +2053,11 @@ export function MailClient({
           「退出多选」就在这条栏的最右端（✕，单实例）；另有隐式出口：点列表空白处、按 Esc */}
       {selectMode && view !== "drafts" && (
         <MailBatchBar
-          count={allMatching ? (matchCount ?? 0) : selected.size}
-          total={allMatching ? (matchCount ?? 0) : items.length}
+          count={matchedCount ?? 0}
+          total={allMatching ? (matchedCount ?? 0) : items.length}
           allMatching={allMatching}
           matchCount={matchCount}
+          excludedCount={excludedCount}
           deleteBlocked={deleteBlocked}
           deleteLimit={MAX_BATCH_DELETE}
           busy={batchBusy}
@@ -2195,7 +2238,7 @@ export function MailClient({
                 <MailRow
                   item={lead}
                   active={activeMessageId === lead.messageId}
-                  selected={selected.has(lead.messageId)}
+                  selected={allMatching ? !excluded.has(lead.messageId) : selected.has(lead.messageId)}
                   selectMode={selectMode}
                   showAccountDots={accounts.length > 1}
                   accountsById={accountsById}
@@ -2300,7 +2343,7 @@ export function MailClient({
         onOpenChange={setBatchDeleteOpen}
         title={
           allMatching
-            ? t("batchDeleteAllTitle", { count: matchCount ?? 0 })
+            ? t("batchDeleteAllTitle", { count: matchedCount ?? 0 })
             : t("batchDeleteTitle", { count: selected.size })
         }
         description={allMatching ? t("batchDeleteAllBody") : t("batchDeleteBody")}
