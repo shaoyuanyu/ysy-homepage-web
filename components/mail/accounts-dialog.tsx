@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
 import { accountDotProps } from "@/components/mail/account-dot";
+import { accountDisplayName, accountName } from "@/components/mail/account-label";
 import { cn } from "@/lib/utils";
 import { mailErrorText } from "@/lib/mail/error-text";
 import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
@@ -693,12 +694,16 @@ export function AccountsDialog() {
                       />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium">
-                          {a.displayName}
+                          {accountName(a)}
                           {!a.enabled && (
                             <span className="ml-2 text-xs text-muted-foreground">{t("disabled")}</span>
                           )}
                         </p>
-                        <p className="truncate text-xs text-muted-foreground">{a.email}</p>
+                        {/* 标题已经是名字（备注名 / 发件人姓名）时单列一行邮箱；
+                            标题本身就是邮箱时（两者都空）不重复（2026-10-11） */}
+                        {accountDisplayName(a) ? (
+                          <p className="truncate text-xs text-muted-foreground">{a.email}</p>
+                        ) : null}
                       </div>
                       <Button
                         variant="ghost"
@@ -747,6 +752,7 @@ export function AccountsDialog() {
                       <Input
                         id="acct-name"
                         value={form.displayName}
+                        placeholder={t("displayNamePlaceholder")}
                         onChange={(e) => patch({ displayName: e.target.value })}
                       />
                     </Field>

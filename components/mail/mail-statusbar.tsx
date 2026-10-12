@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 
 import { cn } from "@/lib/utils";
 import { accountDotProps } from "@/components/mail/account-dot";
-import { accountLabel } from "@/components/mail/account-label";
+import { accountLabel, accountName } from "@/components/mail/account-label";
 import {
   SyncStatusIndicator,
   type BackfillState,
@@ -188,7 +188,7 @@ export function MailStatusbar({
                 <span key={a.id} className="flex min-w-0 items-center gap-1">
                   {i > 0 && <span aria-hidden>·</span>}
                   <span className={cn("size-2 shrink-0 rounded-full", d.className)} style={d.style} aria-hidden />
-                  <span className="max-w-40 truncate">{a.displayName}</span>
+                  <span className="max-w-40 truncate">{accountName(a)}</span>
                 </span>
               );
             })}
@@ -209,7 +209,7 @@ export function MailStatusbar({
                 <span key={a.id} className="flex min-w-0 items-center gap-1">
                   {i > 0 && <span aria-hidden>·</span>}
                   <span className={cn("size-2 shrink-0 rounded-full", d.className)} style={d.style} aria-hidden />
-                  <span className="max-w-40 truncate">{a.displayName}</span>
+                  <span className="max-w-40 truncate">{accountName(a)}</span>
                 </span>
               );
             })}

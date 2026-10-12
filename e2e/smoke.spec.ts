@@ -4445,6 +4445,28 @@ test.describe("站内邮件（/mail）", () => {
       // 独立那封没有计数（不聚合的单封行与从前逐像素一致）
       await expect(rows.nth(1).locator('[data-slot="mail-thread-toggle"]')).toHaveCount(0);
 
+      // ⚠ 行尾几何（2026-10-12 用户截图报「日期被挤成一团」）：日期（非悬浮）与悬浮动作条
+      //   都必须**完全落在计数按钮左侧**。旧实现是按「箭头只有 20px」估的 reserve（40px），
+      //   而计数按钮实际从行右缘吃掉 ≈67px：非悬浮时日期与「N 封」叠印成「10月10日封」，
+      //   悬浮时动作条右端的「删除」被它压掉一半（点下去命中的是计数按钮）。
+      const toggleBox = (await toggle.boundingBox())!;
+      const dateBox = (await rows.nth(0).locator("span.ml-auto").boundingBox())!;
+      expect(
+        dateBox.x + dateBox.width,
+        "日期右缘必须落在计数按钮左侧（否则两者叠印）",
+      ).toBeLessThanOrEqual(toggleBox.x);
+      await rows.nth(0).hover();
+      await expect(rows.nth(0).locator("span.ml-auto"), "悬浮时日期让位").toHaveCSS(
+        "visibility",
+        "hidden",
+      );
+      const delBox = (await rows.nth(0).getByRole("button", { name: "删除" }).boundingBox())!;
+      expect(
+        delBox.x + delBox.width,
+        "悬浮动作条不许压到计数按钮（否则「删除」点不到）",
+      ).toBeLessThanOrEqual(toggleBox.x);
+      await page.mouse.move(0, 0);
+
       // 就地展开：多出组内其它两封
       await toggle.click();
       await expect(page.locator('[data-slot="mail-thread-child"]')).toHaveCount(2);
@@ -5697,6 +5719,196 @@ test.describe("站内邮件（/mail）", () => {
       // 「第一个未被占用的色」分配（弹窗里的颜色选择器已整体移除）
       expect(put.body.color, "编辑不该带颜色：颜色由后端保留/分配").toBeUndefined();
       expect(put.body.password).toBeUndefined();
+    });
+
+    /**
+     * 备注名可留空（2026-10-11 用户需求「有时我就希望账号以邮箱地址的形式显示」）。
+     *
+     * 以前后端把备注名当必填（`缺少显示名称`），想用邮箱显示的人只能把邮箱填进备注名里
+     * （编辑表单里看着像自己起过名）。现在留空 = 没有备注名，**凡是显示账号名的位置
+     * 一律退回邮箱地址**（`account-label.ts::accountName()`）。
+     * 契约：① 底栏账号一览显示邮箱地址（旧实现是空白）；② 账号管理列表标题行就是邮箱、
+     * 且**只出现一次**（副行不再把邮箱重复一遍）；③ 表单留空有提示、且原样下发空串。
+     */
+    test("账号没有备注名：底栏与账号列表都显示邮箱地址，留空可保存", async ({ page }) => {
+      const calls = {
+        flags: [] as unknown[],
+        send: [] as unknown[],
+        delete: [] as unknown[],
+        accounts: [] as unknown[],
+        accountStore: undefined as Record<string, unknown>[] | undefined,
+      };
+      await stubMailApi(page, calls);
+      calls.accountStore![0].displayName = ""; // acc1 = 没有备注名
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      // ① 底栏账号一览：没有备注名 → 邮箱地址（旧实现在这里是一片空白）
+      const legend = page.locator('[data-slot="mail-statusbar-accounts"]');
+      await expect(legend).toContainText("me@mail.example.cn");
+      // 对照组：有备注名的账号照旧显示备注名（证明不是「一律显示邮箱」）
+      await expect(legend).toContainText("学校");
+
+      // ② 账号管理列表：标题行是邮箱，且整行只出现一次（副行不再重复）
+      await page.getByRole("button", { name: "账号", exact: true }).click();
+      const dialog = page.locator('[data-slot="dialog-content"]');
+      const rows = dialog.locator('[data-slot="account-list"] > li');
+      await expect(rows).toHaveCount(2);
+      const rowText = await rows.nth(0).innerText();
+      expect(rowText).toContain("me@mail.example.cn");
+      expect(
+        rowText.split("me@mail.example.cn").length - 1,
+        "没有备注名时邮箱只该占一行（标题行已经是它，副行别再来一遍）",
+      ).toBe(1);
+
+      // ③ 表单：备注名确实是空的 + 有「留空则显示邮箱地址」的提示；留空保存能原样下发
+      await page.getByRole("button", { name: "编辑账号 me@mail.example.cn" }).click();
+      await expect(page.locator("#acct-name")).toHaveValue("");
+      await expect(page.locator("#acct-name")).toHaveAttribute(
+        "placeholder",
+        "留空则显示邮箱地址",
+      );
+      await dialog.getByRole("button", { name: "保存", exact: true }).click();
+      await expect.poll(() => calls.accounts.length).toBe(1);
+      const put = calls.accounts[0] as {
+        method: string;
+        id: string;
+        body: Record<string, unknown>;
+      };
+      expect(put.method).toBe("PUT");
+      expect(put.id).toBe("acc1");
+      expect(put.body.displayName, "留空要原样下发（后端据此清掉备注名）").toBe("");
+    });
+
+    /**
+     * 账号选择器的显示名优先级（2026-10-11 用户定稿）：
+     * **备注名 + 地址 > 发件人姓名 + 地址 > 只剩地址**——只有备注名与发件人姓名**都**空时
+     * 才只显示地址，且地址**不放大字号**（此前那一支走「单行放大一档」的 text-base 16px，
+     * 邮箱地址比账号名（14px）还大；2026-10-12 再降一档到 text-xs 12px）。
+     */
+    test("账号选择器：显示名优先级 备注名 > 发件人姓名 > 地址，只剩地址时不放大", async ({
+      page,
+    }) => {
+      const calls = {
+        flags: [] as unknown[],
+        send: [] as unknown[],
+        delete: [] as unknown[],
+        accountStore: undefined as Record<string, unknown>[] | undefined,
+      };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      const trigger = page.getByRole("button", { name: "按账号筛选" });
+      // ⚠ 触发器内部还有一份**不可见**的测量探针（同样的 AccountText 结构），故一律用
+      //   `:visible` 限定到真正上屏的那份，否则严格模式会因为两个命中直接报错
+      const visible = (slot: string) => trigger.locator(`[data-slot="${slot}"]:visible`);
+      const fontOf = (slot: string) =>
+        visible(slot).evaluate((el) => getComputedStyle(el).fontSize);
+      const pickAcc1 = async (menuName: RegExp) => {
+        await trigger.click();
+        await page.getByRole("menuitem", { name: menuName }).click();
+      };
+
+      // ① 有备注名 → 「备注名 + 地址」
+      await gotoReady(page, "/mail");
+      await pickAcc1(/主账号/);
+      await expect(visible("account-name")).toHaveText("主账号");
+      await expect(visible("account-email")).toHaveText("me@mail.example.cn");
+
+      // ② 备注名清空、有发件人姓名 → 「发件人姓名 + 地址」（换账号时会重新读 /accounts）
+      calls.accountStore![0].displayName = "";
+      calls.accountStore![0].senderName = "Yu Shaoyuan";
+      await gotoReady(page, "/mail");
+      await pickAcc1(/Yu Shaoyuan/);
+      await expect(visible("account-name")).toHaveText("Yu Shaoyuan");
+      await expect(visible("account-email")).toHaveText("me@mail.example.cn");
+      // 菜单项与触发器同源（都走 accountLabel）——菜单里也认发件人姓名
+      await trigger.click();
+      await expect(
+        page.getByRole("menuitem", { name: /Yu Shaoyuan<me@mail\.example\.cn>/ }),
+      ).toBeVisible();
+      await page.keyboard.press("Escape");
+
+      // ③ 备注名与发件人姓名都空 → 只剩地址，且**不跟着放大**
+      calls.accountStore![0].senderName = "";
+      await gotoReady(page, "/mail");
+      await pickAcc1(/me@mail\.example\.cn/);
+      await expect(visible("account-address")).toHaveText("me@mail.example.cn");
+      // 只有一行了：两行形态的邮箱行不该再出现（否则同一串地址显示两遍）
+      await expect(trigger.locator('[data-slot="account-email"]')).toHaveCount(0);
+      // ⚠ 字号要等过渡跑完再读（触发器的 font-size 走 MOTION_SIZE 过渡，切账号后立刻取
+      //   会读到 14.7px 这种中间帧）——故用会重试的 poll，不用瞬时快照
+      await expect
+        .poll(() => fontOf("account-address"), {
+          message: "地址与两行形态的邮箱行同档（text-xs）",
+        })
+        .toBe("12px");
+      // 对照组：切回「全部账号」，它的单行标签仍放大一档（16px）——
+      // 两条断言一起才说明「12px 不是整体字号变了」，而是地址这一支刻意不放大
+      await trigger.click();
+      await page.getByRole("menuitem", { name: /全部账号/ }).click();
+      await expect(visible("account-name")).toHaveText("全部账号");
+      await expect
+        .poll(() => fontOf("account-name"), { message: "「全部账号」保持放大一档" })
+        .toBe("16px");
+    });
+
+    /**
+     * 行 1 宽度分配（2026-10-12 用户要求：「写邮件缩成图标不就能把邮箱地址显示全吗」）：
+     * 账号格**实测**需求宽 > 「写邮件保持完整」时的可用宽 ⇒ 写邮件收成纯图标（让出 46px），
+     * 账号地址随即完整上屏；切回短文案（「全部账号」/ 短备注名）自动恢复文字。
+     * ⚠ 判据必须是**实测**需求宽，不是固定预算——2026-10-05 那版按常量预算算，单行账号
+     *   `我<邮箱>` 就要 233px，于是英文（Compose 95px）下恒为真：写邮件永远没文字、取消
+     *   搜索也不恢复（用户两次报障后整条规则被删）。本用例第 ① 段就是这条的对照组。
+     */
+    test("长地址账号：写邮件自动收成图标把地址让出来，切回短文案即恢复", async ({ page }) => {
+      const calls = {
+        flags: [] as unknown[],
+        send: [] as unknown[],
+        delete: [] as unknown[],
+        accountStore: undefined as Record<string, unknown>[] | undefined,
+      };
+      await stubMailApi(page, calls);
+      // acc1：备注名与发件人姓名都空（→ 触发器只剩地址）+ 一条**刚好**放不下的地址：
+      // 写邮件保持完整时账号格 202px，而它需要 ≈218px；写邮件收成图标后账号格 248px → 218 装得下。
+      // ⚠ 地址不能任意长：再长（如 46 字符）收成图标也放不下，那样「不裁」的断言就不成立
+      calls.accountStore![0].displayName = "";
+      calls.accountStore![0].senderName = "";
+      calls.accountStore![0].email = "shaoyuan@example-univ.cn";
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+      await gotoReady(page, "/mail");
+
+      const trigger = page.getByRole("button", { name: "按账号筛选" });
+      // ⚠ 写邮件文字段收起后宽度为 0（grid 轨道 0fr + overflow-hidden）——**不能**用
+      //   `:visible` 限定：收起后就再也匹配不到，poll 会卡在最后一次可见时的中间值上
+      //   （实测：报 `Received: 0.123382` + 5s 超时，像是振荡，其实只是定位器失配）。
+      //   它一直在 DOM 里（可访问名靠它保稳定），直接取计算透明度即可。
+      const composeTextOpacity = () =>
+        page
+          .locator('[data-slot="compose-label"] > span')
+          .evaluate((el) => getComputedStyle(el).opacity);
+
+      // ① 对照组：「全部账号」文案短 → 写邮件保持完整文字
+      await expect.poll(composeTextOpacity, { message: "短文案下写邮件该有文字" }).toBe("1");
+      // ② 选中长地址账号 → 写邮件收成图标，地址**完整**上屏
+      await trigger.click();
+      await page.getByRole("menuitem", { name: /shaoyuan@example-univ\.cn/ }).click();
+      await expect.poll(composeTextOpacity, { message: "长地址账号下写邮件该收成图标" }).toBe("0");
+      const addr = trigger.locator('[data-slot="account-address"]:visible');
+      await expect(addr).toHaveText("shaoyuan@example-univ.cn");
+      // ⚠ 「显示全」的判据是**没有溢出**（scrollWidth ≤ clientWidth）：文本一直在 DOM 里，
+      //   只断言内容会假过——被 ellipsis 裁掉的部分并未从 textContent 消失
+      expect(
+        await addr.evaluate((el) => el.scrollWidth - el.clientWidth),
+        "地址不该被裁（写邮件让出的宽度就是给它用的）",
+      ).toBeLessThanOrEqual(0);
+      // ③ 切回「全部账号」→ 文字恢复：规则不能是单向常驻（2026-10-05 的教训）
+      await trigger.click();
+      await page.getByRole("menuitem", { name: /全部账号/ }).click();
+      await expect.poll(composeTextOpacity, { message: "切回短文案后写邮件该恢复文字" }).toBe("1");
     });
 
     test("账号颜色：历史缺省色按色板渲染（不是原样内联），五个色板色互不相同", async ({ page }) => {
@@ -7411,8 +7623,9 @@ test.describe("站内邮件（/mail）", () => {
       const status = page.locator('[data-slot="mail-sync-status"]');
       const primary = status.locator('[data-slot="mail-sync-primary"]');
       const alertText = status.locator('[data-slot="mail-sync-alert-text"]');
-      // 账号在底栏统一用**备注名**（与同一行的 agent 图标同一个称呼，见 useSyncStatus 的 names）
-      await expect(alertText).toHaveText("主账号 合并视图同步失败：IMAP 连接被重置");
+      // 账号在底栏统一用**备注名**（与同一行的 agent 图标同一个称呼，见 useSyncStatus 的 names），
+      // 且备名带「」——光写「主账号」/「我」时读起来像用户本人在同步（2026-10-11 用户报）
+      await expect(alertText).toHaveText("账号「主账号」合并视图同步失败：IMAP 连接被重置");
       // 播报：**问题类那句自己就是 live region**（正常态与回填进度则不是，见「贯通底栏」用例）
       await expect(alertText).toHaveAttribute("role", "status");
       // 邮件同步的告警是主状态时视觉：琥珀（色调在主状态容器上）
@@ -7421,12 +7634,89 @@ test.describe("站内邮件（/mail）", () => {
       const issue = status.locator('[data-slot="mail-sync-issue"]');
       await expect(issue).toHaveCount(1);
       const label = await issue.getAttribute("aria-label");
-      expect(label).toContain("Agent 信箱 连续 3 次同步失败");
+      expect(label).toContain("账号「Agent 信箱」连续 3 次同步失败");
       expect(label).toContain("从未成功");
       // 悬浮文字走**原生 title**（站内邮件界面通行的做法，2026-10-08 第二轮用户反馈）
       expect(await issue.getAttribute("title")).toContain("从未成功");
       // 不再有独立的展开告警条（顶部/上方都不该有）
       await expect(page.locator('[data-slot="mail-sync-alerts"]')).toHaveCount(0);
+    });
+
+    /**
+     * 底栏告警文案的措辞与 NaN 兜底（2026-10-11 用户报「我已 NaN 天前未能同步」）。
+     *
+     * 旧文案 `"{name} 已 {time} 未能同步"` 有两个毛病：
+     * ① `{name}` 是账号备名，光写「我」读起来像用户**本人**在同步，而不是名叫「我」的账号；
+     * ② `{time}` 是时间点（「1 天前」），塞进「已 … 未能同步」这个要**时段**的句型里是病句
+     *    （英文 `not synced for 1 day ago` 同样不通）。
+     * 另外 `/health` 少给一个 `lastSync` 时，旧实现把 NaN 一路印进这句里——而它是
+     * `role="status"`，读屏会把这句念出来。
+     * 契约：账号名带「」、时间点是完整短语、任何情况下不出现 `NaN`。
+     */
+    test("底栏告警文案：账号名带引号、时间点是完整短语、非法时间戳不出 NaN", async ({ page }) => {
+      const calls = { flags: [], send: [], delete: [] };
+      const stale = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+      // ① lastSync 有效但陈旧（超过 15 分钟阈值）→ 「未能同步（最后成功 x 前）」
+      await stubMailApi(page, calls, {
+        webmail: {
+          status: 200,
+          body: {
+            ok: true,
+            accounts: [
+              { id: "acc1", enabled: true, lastSync: stale, lastError: null, lastNewMail: null },
+            ],
+          },
+        },
+      });
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+      await gotoReady(page, "/mail");
+
+      const status = page.locator('[data-slot="mail-sync-status"]');
+      const alertText = status.locator('[data-slot="mail-sync-alert-text"]');
+      await expect(alertText).toHaveText("账号「主账号」未能同步（最后成功 1 天前）");
+      // ⚠ 这句会被读屏念出来（role=status），「NaN」在盲人那里就是乱码
+      await expect(alertText).not.toContainText("NaN");
+      await expect(alertText).toHaveAttribute("role", "status");
+
+      // ② `lastSync` 键整个缺失（后端少给字段 / 老版本）→ 不算 NaN，也不假装知道时间
+      await page.route("**/api/mail/health", (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            accounts: [{ id: "acc1", enabled: true, lastError: null, lastNewMail: null }],
+          }),
+        }),
+      );
+      await gotoReady(page, "/mail");
+      await expect(alertText).toContainText("账号「主账号」未能同步（从未成功）");
+      await expect(alertText).not.toContainText("NaN");
+
+      // ③ `lastNewMail` 给了坏串 + 同步本身健康 → 不许把坏串当成「上次收到新邮件 <乱码>」，
+      //    退回基线文案「同步正常」
+      await page.route("**/api/mail/health", (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            accounts: [
+              {
+                id: "acc1",
+                enabled: true,
+                lastSync: new Date().toISOString(),
+                lastError: null,
+                lastNewMail: "not-a-timestamp",
+              },
+            ],
+          }),
+        }),
+      );
+      await gotoReady(page, "/mail");
+      await expect(status.locator('[data-slot="mail-sync-latest"]')).toHaveText("同步正常");
+      await expect(status.locator('[data-slot="mail-sync-alert-text"]')).toHaveCount(0);
     });
 
     /**
@@ -7470,7 +7760,7 @@ test.describe("站内邮件（/mail）", () => {
       const issue = status.locator('[data-slot="mail-sync-issue"]');
       await expect(issue).toHaveCount(1);
       await expect(issue).toHaveClass(/text-amber-700/);
-      await expect(issue).toHaveAttribute("aria-label", /Agent 信箱 连续 3 次同步失败/);
+      await expect(issue).toHaveAttribute("aria-label", /账号「Agent 信箱」连续 3 次同步失败/);
       // 主状态在前、图标在右
       const primaryBox = (await primary.boundingBox())!;
       const issueBox = (await issue.boundingBox())!;
@@ -7634,9 +7924,9 @@ test.describe("站内邮件（/mail）", () => {
       const issue = status.locator('[data-slot="mail-sync-issue"]');
       await expect(issue).toHaveCount(1);
       expect(await issue.getAttribute("aria-label"), "图标悬浮文案 = 完整告警").toContain(
-        "Agent 信箱 连续 3 次同步失败",
+        "账号「Agent 信箱」连续 3 次同步失败",
       );
-      expect(await issue.getAttribute("title")).toContain("Agent 信箱 连续 3 次同步失败");
+      expect(await issue.getAttribute("title")).toContain("账号「Agent 信箱」连续 3 次同步失败");
 
       // 顺序：主状态在**最左**（第一条），图标在它右边——否则感叹号读起来像在修饰同步文案
       const issueBox = (await issue.boundingBox())!;

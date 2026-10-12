@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/mail/format";
 import { isJunkOnly, isSentItem } from "@/lib/mail/kind";
 import { accountDotProps } from "@/components/mail/account-dot";
+import { accountName } from "@/components/mail/account-label";
 import { JunkIcon, NotJunkIcon } from "@/components/mail/junk-icons";
 import { MailRowCheckbox } from "@/components/mail/mail-batch-bar";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -136,6 +137,14 @@ function MailRowImpl({
   const t = useTranslations("mail");
   /** 有会话才给行尾留出箭头的位置（无会话时行布局与从前逐像素一致） */
   const showsThread = threadCount > 1;
+  /**
+   * 行尾常驻的会话计数按钮是否渲染（选择模式下不渲染——见下方气泡栏注释）。
+   * ⚠ 它**不是**只占 20px 的小箭头：`「N 封」+ 箭头 + px-1` 实测 **55px**（三位数 ≈65px），
+   *   加 `right-3` 后从行右缘往左吃掉 **≈67px**。日期与悬浮动作条都得按这个**真实**宽度让位
+   *   （2026-10-12 用户截图报「日期被挤成一团」：日期右缘在 right-40、按钮左缘在 right-67，
+   *   非悬浮时二者叠印成「10月10日封」；悬浮时动作条右端的「删除」也被它压掉一半）。
+   */
+  const hasThreadToggle = showsThread && !stale && !selectMode;
   /** 这封只在垃圾夹里 → 整理动作换成「移出垃圾」（见 isJunkOnly 的注释） */
   const junkOnly = isJunkOnly(m.copies);
   const sent = isSentItem(m.copies);
@@ -274,7 +283,7 @@ function MailRowImpl({
             {showAccountDots && (
               <span
                 className="flex shrink-0 items-center gap-0.5"
-                title={m.accounts.map((id) => accountsById.get(id)?.displayName ?? id).join("、")}
+                title={m.accounts.map((id) => accountName(accountsById.get(id), id)).join("、")}
               >
                 {m.accounts.map((id) => (
                   <span
@@ -291,6 +300,9 @@ function MailRowImpl({
               className={cn(
                 "ml-auto shrink-0 text-xs tabular-nums group-hover/row:invisible group-has-[:focus-visible]/row:invisible",
                 m.seen ? "text-muted-foreground" : "font-medium text-foreground",
+                // 会话行：计数按钮常驻在行尾，日期再往左让 40px（行本身已 pr-10 让了 40）
+                // —— 合计 80px ≥ 按钮的 ≈67px（三位数 ≈77px），两者不再叠印
+                hasThreadToggle && "mr-10",
               )}
             >
               {dateText}
@@ -329,9 +341,11 @@ function MailRowImpl({
           data-slot="mail-row-actions"
           className={cn(
             "absolute top-2 right-3 hidden items-center gap-0.5 rounded-lg border border-border bg-background p-0.5 shadow-sm group-hover/row:flex group-has-[:focus-visible]/row:flex",
-            // 会话行尾的展开箭头常驻在 right-3（同一块地方）——悬浮操作条整体
-            // 左移一档，两者不重叠（箭头右缘 right-3+20px < 操作条的 right-10）
-            showsThread && "right-10",
+            // 会话行尾的计数按钮常驻在 right-3（「N 封」实宽 ≈55px，含 right-3 共吃掉 ≈67px）
+            // ——悬浮操作条整体再左移一档到 right-20（80px），间隙 ≥ 3px。
+            // ⚠ 旧的 right-10（40px）是按「箭头只有 20px」估的，实际把右端的「删除」
+            //   压在按钮下面（点不到、还叠印），2026-10-12 一并修正
+            hasThreadToggle && "right-20",
           )}
         >
           <Button
@@ -409,7 +423,7 @@ function MailRowImpl({
       {/* 会话展开箭头（2026-10-10）：常驻在行尾、与行主按钮**平级**（不能嵌在按钮里
           ——HTML 不允许嵌套 button，读屏也会把两枚按钮的意思混在一起）。
           日期在悬浮时让位（与行内动作条同一规则），箭头始终可点。 */}
-      {!selectMode && showsThread && !stale && (
+      {hasThreadToggle && (
         <button
           type="button"
           data-slot="mail-thread-toggle"

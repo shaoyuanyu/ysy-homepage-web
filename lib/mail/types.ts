@@ -2,6 +2,10 @@
 
 export interface MailAccount {
   id: string;
+  /**
+   * 备注名（仅站内显示，**不外发**）。**可能是空串**（2026-10-11：没有备注名）——
+   * 凡是显示账号名的地方一律退回 `email`，走 `components/mail/account-label.ts::accountName()`。
+   */
   displayName: string;
   email: string;
   provider: string;

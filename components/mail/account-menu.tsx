@@ -6,7 +6,7 @@ import { useTranslations } from "next-intl";
 
 import { cn } from "@/lib/utils";
 import { accountDotProps } from "@/components/mail/account-dot";
-import { accountLabel } from "@/components/mail/account-label";
+import { accountDisplayName, accountLabel } from "@/components/mail/account-label";
 import { MOTION_SIZE, TOOLBAR_MS } from "@/components/mail/motion";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,10 +24,15 @@ const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayout
 /**
  * 账号选择下拉（2026-10-05 用户定稿，A 方案：工具行留在左侧栏）：单选——「全部账号」或某个账号。
  *
- * 显示格式（2026-10-05 用户定稿）：
+ * 显示格式（2026-10-05 用户定稿；显示名优先级 2026-10-11 用户补充）：
+ * - **显示名优先级 = 备注名 > 发件人姓名 > 地址**（`accountDisplayName()`）：有名字就
+ *   「名字 + 地址」，两个都没有才只剩地址；
  * - **触发器**：具体账号 = 两行（上行账号名、下行邮箱，text-xs 弱化色、无 `<>` 包裹）——
  *   横向只占「两行中最宽的行」，比单行 `名<邮箱>` 省 ≈28px；「全部账号」= 单行 +
  *   字号放大一档（text-base）、垂直居中在固定的 h-9 里（切换账号工具栏高度不变）；
+ *   ⚠ 只剩地址时**不**走「单行放大一档」，而是 text-xs 弱化色（2026-10-11 用户要求
+ *   「地址的字号不能太大」——此前邮箱地址会被放大成 16px，比账号名还大；同日再降一档到
+ *   12px，与两行形态的邮箱行同一档）。
  * - 菜单项、底栏悬浮提示、写邮件页发件账号选择沿用单行 `accountLabel()`（`名<邮箱>`）——
  *   那些是紧凑列表 / 提示场景，两行会变笨重。
  *
@@ -68,6 +73,7 @@ export function AccountMenu({
   collapsedNameMaxPx,
   countOverride,
   accountName,
+  onNeedWidth,
 }: {
   accounts: MailAccount[];
   /** "all" 或账号 id（含 extraItems 里的档位值） */
@@ -90,6 +96,10 @@ export function AccountMenu({
   /** 账号档名称的自定义格式化（默认 displayName||email）；联系人面板传「{名}的联系人」
    *  ——只换名字，邮箱行照旧（邮箱仍在 title / 菜单里） */
   accountName?: (account: MailAccount) => string;
+  /** 触发器**需要**多宽（px；2026-10-12）：父级据此决定「写邮件」要不要收成图标。
+   *  = 完整文案宽（labelW，含色点缩进与余量）+ 装饰宽（内边距 / 间距 / 箭头 / 边框，实测）。
+   *  ⚠ 只在量到真值时上报（隐藏挂载量不出，见下面 `w === 0` 的守卫） */
+  onNeedWidth?: (w: number) => void;
 }) {
   const t = useTranslations("mail");
   const current = accounts.find((a) => a.id === value) ?? null;
@@ -102,17 +112,22 @@ export function AccountMenu({
   /**
    * 触发器两行文案（2026-10-05 用户定稿）：上行账号名、下行邮箱（不再用 `<>`——
    * 两行布局天然分开两者，横向省出「名字 + 尖括号」≈ 28px）。
-   * 无备注名时上行直接是邮箱、下行空；「全部」与额外档位时上行是它、下行空（高度恒定）。
+   * 上行名字的优先级 = **备注名 > 发件人姓名**（2026-10-11 用户定稿）；两者都空时上行
+   * 留空串，由 `AccountText` 走「只有地址」的单行形态（地址不放大，见那里）。
+   * 「全部」与额外档位时上行是它、下行空（高度恒定）。
    * ⚠ accountName 只替换上行名字（联系人面板「我的联系人」），下行邮箱行**照旧显示**
    * ——用户 2026-10-05 明确：改的是名字，邮箱不能因此消失。
    */
   const name = current
     ? accountName
       ? accountName(current)
-      : current.displayName || current.email
+      : accountDisplayName(current)
     : (extra?.label ?? all);
-  // 邮箱行：只有「无备注名的账号」（上行本身就是邮箱）才省略，避免上下重复
-  const email = current && current.displayName ? current.email : "";
+  /**
+   * 下行地址：**具体账号就给**（哪怕名字为空——那时地址是唯一内容，见 AccountText
+   * 的「只剩地址」分支）；「全部账号」/ 额外档位没有地址，故为空。
+   */
+  const email = current ? current.email : "";
   const countValue = countOverride ?? accounts.length;
   const dot = accountDotProps(current?.color ?? "");
   // 展开 / 压缩两态都是同一段过渡：max-width + 字号 + 高度 —— 曲线与时长统一走 MOTION_SIZE / MOTION_TEXT（motion.ts）
@@ -141,9 +156,20 @@ export function AccountMenu({
       //   max-width 2px → 触发器塌成 41px、名字被裁；用户报「邮箱 ⇄ 写邮件往返后账号组件
       //   出问题」的根因）。labelW 为 0 时名称段不设 max-width（自然宽），与量到真值等价。
       if (w === 0) return;
-      setLabelW(w + inset + TRIGGER_SPARE_PX);
+      const nextLabelW = w + inset + TRIGGER_SPARE_PX;
+      setLabelW(nextLabelW);
       const nameW = nameProbeRef.current?.offsetWidth ?? 0;
       if (nameW > 0) setNameW12(nameW);
+      // 「需要多宽」上报（2026-10-12）：名称段自然宽 + 装饰宽（左内边距 / 与箭头的间距 /
+      // 箭头 / 右内边距 / 边框）。⚠ 装饰宽用**实测差值**（触发器宽 − 名称段宽）而不是写死
+      // 常量：名称段是这行里唯一会被裁的部分，差值因此在「被裁」与「不裁」两种状态下恒定；
+      // 写死常量则会在改内边距 / 换图标后静默失准（2026-10-05 那版翻车的原因之一）。
+      const btn = el.parentElement;
+      const labelSpan = btn?.querySelector('[data-slot="account-label"]');
+      if (btn && labelSpan) {
+        const decor = btn.getBoundingClientRect().width - labelSpan.getBoundingClientRect().width;
+        if (decor > 0) onNeedWidth?.(nextLabelW + decor);
+      }
     };
     report();
     // 字体加载完成后重测（Inter 未就绪时量出的文字宽偏小）
@@ -152,7 +178,7 @@ export function AccountMenu({
     //   （账号列表 / 联系人总数都是 fetch 后才有）——不重测的话 labelW 停在「不含计数」
     //   的旧值，名称段 max-width 少 30px，「全部联系人 (n)」会被裁成「全部…」
     //   （2026-10-05 联系人面板实测）。邮箱状态此前只是靠字体 effect 的时序侥幸未暴露。
-  }, [label, hasDot, countValue]);
+  }, [label, hasDot, countValue, onNeedWidth]);
 
   /**
    * 收起态（搜索展开时）名称段的宽度上限：**min(名字实际宽, 4 字) + 色点/间距 + 余量**。
@@ -221,6 +247,7 @@ export function AccountMenu({
                 animating && MOTION_SIZE,
               )}
               style={{ maxWidth: collapsed ? collapsedLabelW : labelW || undefined }}
+              data-slot="account-label"
             >
               {current && (
                 <span className={cn("size-2 shrink-0 rounded-full", dot.className)} style={dot.style} aria-hidden />
@@ -259,7 +286,9 @@ export function AccountMenu({
               aria-hidden
               className="pointer-events-none invisible absolute whitespace-nowrap text-xs [&_*]:transition-none"
             >
-              {name}
+              {/* 名字为空（只剩地址）时量地址：收起态的宽度上限只对「名字」有意义，
+                  而此刻名字就是地址 */}
+              {name || email}
             </span>
           </Button>
         }
@@ -378,12 +407,14 @@ function AccountCount({ count, collapsed }: { count: number; collapsed?: boolean
 }
 
 /**
- * 触发器内的账号文案（2026-10-05 用户定稿）：
- * - 具体账号（有备注名）= **两行**：上行账号名（主字号）、下行邮箱（text-xs 弱化色，
- *   不再用 `<>` 包裹——两行布局天然分开两者）；
- * - 无邮箱的形态（「全部账号」、或没填备注名的账号——那时 name 本身就是邮箱）= **单行**：
- *   字号放大一档（text-base）——只占一行时若仍用 14px，在 36px 高的按钮里会显得
- *   又小又浮在上面（用户定稿：单行 + 加大 + 垂直居中）。
+ * 触发器内的账号文案（2026-10-05 用户定稿；只剩地址的形态 2026-10-11 加）：
+ * - 具体账号（有名字 = 备注名 / 发件人姓名）= **两行**：上行名字（text-sm）、下行邮箱
+ *   （text-xs 弱化色，不再用 `<>` 包裹——两行布局天然分开两者）；
+ * - **只剩地址**（备注名与发件人姓名都空）= **单行、text-xs 弱化色**：地址不是标题，
+ *   不跟着「全部账号」放大一档（用户 2026-10-11：「地址的字号不能太大」，同日再降一档到
+ *   12px）——与两行形态的邮箱行同档，顺带把固有宽降下来，145px 的行宽预算里能多放几个字符；
+ * - 无邮箱的形态（「全部账号」/ 额外档位）= **单行**：字号放大一档（text-base）——
+ *   只占一行时若仍用 14px，在 36px 高的按钮里会显得又小又浮在上面（用户定稿）。
  * ⚠ 收起态（collapsed，搜索展开时）：字号缩小一档（14/16 → 12，font-size 过渡）
  *   并截断到 ≤ 4 个汉字（外层 maxWidth 由 collapsedLabelW 动态限制，4 字上限使
  *   「全部账号」恰好完整）；邮箱行同时**淡出并把高度压到 0**（h-4 → h-0 过渡），
@@ -403,9 +434,27 @@ function AccountText({
   /** 过渡进行中：邮箱行去掉省略号（纯裁切，见下方注释） */
   animating?: boolean;
 }) {
+  // 只有地址：单行 + 不放大（2026-10-11 用户要求；2026-10-12 再降一档到 text-xs）。
+  // ⚠ 以前这一支走的是下面的「无邮箱」分支（那时 name 直接塞的地址），于是地址拿到了
+  //   单行放大一档的 text-base(16px)——比账号名行（14px）还大，看着像个标题。
+  //   现在 12px = 与两行形态的邮箱行完全同档，地址本就是「弱化信息」。
+  if (!name) {
+    return (
+      <span
+        data-slot="account-address"
+        className={cn(
+          "min-w-0 truncate text-xs text-muted-foreground transition-[font-size]",
+          MOTION_SIZE,
+        )}
+      >
+        {email ?? ""}
+      </span>
+    );
+  }
   if (!email) {
     return (
       <span
+        data-slot="account-name"
         className={cn(
           "min-w-0 truncate text-base transition-[font-size]",
           MOTION_SIZE,
@@ -419,6 +468,7 @@ function AccountText({
   return (
     <span className="flex min-w-0 flex-col items-start text-left leading-tight">
       <span
+        data-slot="account-name"
         className={cn(
           "w-full truncate text-sm transition-[font-size]",
           MOTION_SIZE,

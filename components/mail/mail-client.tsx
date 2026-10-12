@@ -43,6 +43,7 @@ import { AccountMenu } from "@/components/mail/account-menu";
 import { MailBatchBar } from "@/components/mail/mail-batch-bar";
 import { MailRow, ThreadChildRow } from "@/components/mail/mail-row";
 import { accountDotProps } from "@/components/mail/account-dot";
+import { accountName } from "@/components/mail/account-label";
 import { MOTION_SIZE, TOOLBAR_MS } from "@/components/mail/motion";
 import { usePublishMailBar } from "@/components/mail/mail-statusbar";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -118,6 +119,12 @@ function isViewFilter(v: string | null): v is ViewFilter {
  *   改这一行常量前先重量：`.cache/probe-select-pos.mjs` 会同时报账号宽与邮箱裁切量。
  */
 const ROW_FIXED_W = 28 * 3 + 24;
+
+/**
+ * 「写邮件」缩为纯图标时的宽（边框 2 + 内边距 12 + 图标 14 = 28；与搜索/刷新图标钮对齐）。
+ * ⚠ 行 1 分配里用它当「收窄后的写邮件宽」，完整态宽另由 `composeFullW` 实测。
+ */
+const COMPOSE_ICON_W = 28;
 
 /**
  * 一次批量删除的**封数**上限（2026-10-11 用户定稿：一次不超过 20 封）。
@@ -287,25 +294,36 @@ export function MailClient({
    */
   const [searchClosing, setSearchClosing] = useState(false);
 
-  // ---- 行 1 的宽度分配（2026-10-05 定稿，二稿简化）----
-  // 规则：「写邮件」**只在搜索展开时**缩为图标；其余任何情况都保持完整文字。宽度预算不够
-  // 时由账号自己的 max-width 吸收（超出部分截断，完整值在悬浮 title 与账号下拉里）。
-  // ⚠ 曾按「账号需求宽 + 写邮件完整宽 + 固定开销 > 行宽 → 缩写邮件」（单行账号时代
-  //   `我<邮箱>` 233px 连中文都放不下的设计）。两行版账号把需求降到 198px 后中文天然放得下，
-  //   判据只剩英文触发（Compose 95px，选中「我」差 19px）→ 英文下写邮件**常驻**图标态、搜索
-  //   取消也不恢复（2026-10-05 用户两次报障、不接受取舍）→ 规则与探针上报整体移除；英文文案
-  //   同日改「Write」（68px），英文下 200 + 68 + 108 = 376 ≤ 384 也完整放得下。写邮件是主
-  //   操作，其文字优先级高于账号邮箱的末几个字符。
-  // 另：搜索模式（searchOpen）固定缩为图标（2026-10-05 用户要求）——搜索框才是主角。
-  // ⚠ 2026-10-05 二稿：「缩为图标」不再是瞬变，而是与账号同曲线动画（gap + grid 轨道 +
+  // ---- 行 1 的宽度分配（2026-10-05 定稿；2026-10-12 恢复「装不下就缩写邮件」）----
+  // 两条规则：
+  //   ① 搜索展开时「写邮件」缩为图标（2026-10-05 用户要求）——搜索框才是主角；
+  //   ② **账号格真的装不下时**也缩（2026-10-12 用户要求：长地址也该显示全）：账号触发器的
+  //      **实测**需求宽 > 「写邮件保持完整」时的可用宽 ⇒ 压成图标（让出 74−28 = 46px），
+  //      账号地址随即完整上屏；切回短文案（「全部账号」、短备注名）自动恢复文字。
+  // ⚠ 判据两边都必须是**稳定量**，否则会在「收窄 → 变宽 → 又不收窄」之间振荡：
+  //   需求宽 = AccountMenu 探针实测的完整文案宽（与当前形态无关）；
+  //   可用宽 = rowW − 固定开销 − composeFullW（写邮件**完整态**的缓存宽，不是当前形态）。
+  // ⚠ 别再退回 2026-10-05 那版「账号需求宽按常量预算算」的写法：单行账号时代 `我<邮箱>` 就要
+  //   233px，判据在英文（Compose 95px）下**恒为真** → 写邮件永远没文字、取消搜索也不恢复
+  //   （用户两次报障后整条规则被删）。现在的判据只在选中长文案账号时为真，且与搜索态解耦。
+  // ⚠ 2026-10-05 二稿：「缩为图标」不是瞬变，而是与账号同曲线动画（gap + grid 轨道 +
   //   文字透明度，见 motion.ts）——写邮件宽度本身就是搜索框（flex-1）宽度的来源之一，
   //   它的收窄与账号收窄是**同一段联动动画**的两个声部。
   const rowRef = useRef<HTMLDivElement>(null);
   const [rowW, setRowW] = useState(384); // 初值 = 桌面左栏内容宽；挂载后按实测（窄屏行 1 是全宽）
   const [composeFullW, setComposeFullW] = useState(0);
-  const composeCompact = searchOpen;
+  /** 账号触发器需要的宽（px；由 AccountMenu 的探针实测上报，0 = 还没量到） */
+  const [accountWantW, setAccountWantW] = useState(0);
+  /** 「写邮件保持完整文字」时账号格最多能有多大 */
+  const accountAvailFull = Math.max(72, rowW - ROW_FIXED_W - composeFullW);
+  /** + 1 是亚像素余量：恰好相等时不该判成「装不下」 */
+  const accountSqueezed = accountWantW > 0 && accountWantW > accountAvailFull + 1;
+  const composeCompact = searchOpen || accountSqueezed;
   /** 账号触发器的 max-width：除去固定开销与写邮件（按当前形态）的宽全给它 */
-  const accountMaxW = Math.max(72, rowW - ROW_FIXED_W - (composeCompact ? 28 : composeFullW));
+  const accountMaxW = Math.max(
+    72,
+    rowW - ROW_FIXED_W - (composeCompact ? COMPOSE_ICON_W : composeFullW),
+  );
 
   useEffect(() => {
     const el = rowRef.current;
@@ -1444,18 +1462,25 @@ export function MailClient({
     }
   }, [pendingDraftDelete, t]);
 
-  const accountName = useMemo(() => {
+  /**
+   * 账号 id → 账号对象。
+   * ⚠ 叫 `accountById` 而不是 `accountName`（2026-10-11 改名）：`account-label.ts` 里已经
+   *   有一个 `accountName()`（给「显示用的名字」，没备注名时退回邮箱地址），两者同名不同物。
+   */
+  const accountById = useMemo(() => {
     const map = new Map(accounts.map((a) => [a.id, a]));
     return (id: string) => map.get(id);
   }, [accounts]);
 
   /**
    * 列表行要用的账号索引。`MailRow` 是 memo 组件，传给它的每个 prop 都必须是稳定引用；
-   * 行只读 `displayName` / `color`，故按「id + 显示名 + 颜色」组键缓存——未读数的
-   * 轮询刷新会换掉 `accounts` 数组，但不该换掉这个 Map（否则每 30 秒全部行重渲一次）。
+   * 行只读「显示用的名字」/ `color`，故按「id + 备注名 + 发件人姓名 + 颜色」组键缓存——
+   * 未读数的轮询刷新会换掉 `accounts` 数组，但不该换掉这个 Map（否则每 30 秒全部行重渲一次）。
+   * ⚠ 键必须覆盖 `accountName()` 读到的每个字段（显示名优先级 = 备注名 > 发件人姓名 > 地址）：
+   *   少一个 `senderName`，改完发件人姓名后行内色点的 `title` 会停在旧值。
    */
   const accountsByColorKey = useMemo(
-    () => accounts.map((a) => `${a.id}:${a.displayName}:${a.color}`).join("|"),
+    () => accounts.map((a) => `${a.id}:${a.displayName}:${a.senderName ?? ""}:${a.color}`).join("|"),
     [accounts],
   );
   const accountsById = useMemo(() => {
@@ -1674,15 +1699,15 @@ export function MailClient({
             {accounts.length > 1 && (
               <span
                 className="flex shrink-0 items-center gap-0.5"
-                title={accountName(d.accountId)?.displayName ?? d.accountId}
+                title={accountName(accountById(d.accountId), d.accountId)}
                 data-slot="draft-account"
               >
                 <span
                   className={cn(
                     "inline-block size-1.5 rounded-full",
-                    accountDotProps(accountName(d.accountId)?.color ?? "").className,
+                    accountDotProps(accountById(d.accountId)?.color ?? "").className,
                   )}
-                  style={accountDotProps(accountName(d.accountId)?.color ?? "").style}
+                  style={accountDotProps(accountById(d.accountId)?.color ?? "").style}
                 />
               </span>
             )}
@@ -1748,6 +1773,7 @@ export function MailClient({
               onChange={setAccountFilter}
               collapsed={searchOpen}
               maxW={accountMaxW}
+              onNeedWidth={setAccountWantW}
             />
           )}
           {/* 搜索区（2026-10-05 用户定稿）：`flex-1` 吸掉剩余空间，让**「搜索 / 刷新 / 写邮件」
@@ -1845,8 +1871,9 @@ export function MailClient({
           >
             {refreshing ? <Spinner /> : <RefreshCwIcon data-icon="default" />}
           </Button>
-          {/* 「写邮件」：**只在搜索展开时**缩为纯图标（2026-10-05 定稿，二稿不再按行宽
-              自适应——见上方「行 1 的宽度分配」）；搜索收起即恢复完整文字。
+          {/* 「写邮件」：**搜索展开时**或者**账号格真的装不下时**缩为纯图标
+              （2026-10-05 定稿 + 2026-10-12 恢复；判据见上方「行 1 的宽度分配」）；
+              两种情况都消失后自动恢复完整文字。
               ⚠ 2026-10-05 二稿（用户定稿「动画统一联动」）：收起/展开**不再瞬切**——
               同一结构 + 过渡：文字段用 grid 轨道 1fr↔0fr 折叠（纯 CSS 自动宽，无需测量）、
               按钮 gap 同步收到 0、文字 opacity 同步淡出；三者与账号的 max-width 共用

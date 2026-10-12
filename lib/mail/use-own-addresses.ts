@@ -8,6 +8,8 @@ import type { MailOwnAddress } from "@/lib/mail/types";
 interface RawAddress {
   id?: string;
   displayName?: string;
+  /** 发件人姓名：没备注名时用它当显示名（2026-10-11 用户定稿的优先级） */
+  senderName?: string;
   email?: string;
   enabled?: boolean;
 }
@@ -24,7 +26,12 @@ function normalize(data: unknown, kind: MailOwnAddress["kind"]): MailOwnAddress[
     .filter((r) => typeof r.email === "string" && r.email.includes("@") && r.enabled !== false)
     .map((r) => ({
       id: typeof r.id === "string" && r.id ? r.id : r.email!,
-      name: typeof r.displayName === "string" ? r.displayName : "",
+      // 显示名优先级（2026-10-11）：**备注名 > 发件人姓名 > 邮箱地址**（以前只认备注名，
+      // 没备注名时会给空串 = 「我的账号」里一行没名字的条目）
+      name:
+        (typeof r.displayName === "string" && r.displayName.trim() ? r.displayName : "") ||
+        (typeof r.senderName === "string" && r.senderName.trim() ? r.senderName : "") ||
+        r.email!,
       email: r.email!,
       kind,
     }));

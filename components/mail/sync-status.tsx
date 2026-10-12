@@ -100,6 +100,17 @@ const ACTIVE_POLL_MS = 5_000;
  */
 const STALE_MS = 15 * 60 * 1000;
 
+/**
+ * 时间戳是否可用（2026-10-11 用户报「我已 NaN 天前未能同步」）：
+ * `/health` 少给一个 `lastSync`（或给个非法串）时，`rel()` 里 `new Date(iso).getTime()`
+ * 得到 NaN，下面三个 `if` 全不成立、直落最后一档「{count} 天前」——底栏就印出 `NaN`，
+ * 而底栏告警那句是 `role="status"`，读屏会把「N A N」念出来。
+ * 缺/坏时间戳一律当作「没有这项数据」，不许进 `rel()`。
+ */
+function hasTime(iso: string | null | undefined): iso is string {
+  return !!iso && !Number.isNaN(Date.parse(iso));
+}
+
 interface Problem {
   key: string;
   text: string;
@@ -144,7 +155,11 @@ export function useSyncStatus(): {
 
   const rel = useCallback(
     (iso: string): string => {
-      const diff = Math.max(0, Date.now() - new Date(iso).getTime());
+      // ⚠ 兜底：所有调用点都先过了 `hasTime()`，正常到不了这里；万一到了也绝不吐 NaN
+      //   （NaN 会穿过下面三个 if 直落「{count} 天前」，见 hasTime 的注释）
+      const ts = Date.parse(iso);
+      if (Number.isNaN(ts)) return t("timeUnknown");
+      const diff = Math.max(0, Date.now() - ts);
       const minutes = Math.floor(diff / 60_000);
       if (minutes < 1) return t("justNow");
       if (minutes < 60) return t("minutesAgo", { count: minutes });
@@ -160,8 +175,13 @@ export function useSyncStatus(): {
     const loadNames = () => {
       fetchWithTimeout("/api/mail/accounts", { cache: "no-store" })
         .then((r) => (r.ok ? r.json() : []))
-        .then((list: { id: string; displayName?: string }[]) =>
-          setNames(Object.fromEntries(list.map((a) => [a.id, a.displayName?.trim() || a.id]))),
+        .then((list: { id: string; displayName?: string; email?: string }[]) =>
+          setNames(
+            // 没备注名 → 邮箱地址（2026-10-11；旧写法退回 `a.id`，底栏会念出「账号「me」」）
+            Object.fromEntries(
+              list.map((a) => [a.id, a.displayName?.trim() || a.email || a.id]),
+            ),
+          ),
         )
         .catch(() => {});
     };
@@ -179,11 +199,13 @@ export function useSyncStatus(): {
     // 恒新鲜、永远显示「刚刚」没有信息量（2026-10-04 用户反馈）；心跳仍用于
     // 下面的陈旧/失败判定（那才是它的职责）。
     let latestNew: string | null = null;
-    const considerNew = (iso: string | null) => {
-      if (iso && (!latestNew || iso > latestNew)) latestNew = iso;
+    // ⚠ 只认能解析的时间戳（2026-10-11）：坏串若当上 latestNew，正常态那句
+    //   「上次收到新邮件 {time}」就会跟着印出兜底文案
+    const considerNew = (iso: string | null | undefined) => {
+      if (hasTime(iso) && (!latestNew || iso > latestNew)) latestNew = iso;
     };
-    const isStale = (iso: string | null): boolean =>
-      !iso || Date.now() - new Date(iso).getTime() > STALE_MS;
+    const isStale = (iso: string | null | undefined): boolean =>
+      !hasTime(iso) || Date.now() - Date.parse(iso) > STALE_MS;
 
     const [mailagentdRes, webmailRes] = await Promise.allSettled([
       fetchWithTimeout("/api/mail/agent/health", { cache: "no-store" }),
@@ -249,9 +271,14 @@ export function useSyncStatus(): {
           problems.push({
             source: "agent",
             key: `mailagentd-stale-${a.id}`,
-            text: a.lastOk
-              ? t("stale", { name: a.displayName, time: rel(a.lastOk) })
-              : t("stale", { name: a.displayName, time: t("lastOkNever") }),
+            // 时间点给**完整短语**（「最后成功 x 前」/「从未成功」），不再把「x 前」直接
+            // 塞进「未能同步」的句型里——旧文案「我已 1 天前 未能同步」是病句
+            // （2026-10-11 用户报）。判据用 `hasTime` 而非 `a.lastOk` 的真假：解不出来的
+            // 串同样没资格冒充「最后成功」
+            text: t("stale", {
+              name: a.displayName,
+              time: hasTime(a.lastOk) ? t("lastOkAt", { time: rel(a.lastOk) }) : t("lastOkNever"),
+            }),
           });
         }
       }
@@ -293,7 +320,13 @@ export function useSyncStatus(): {
           problems.push({
             source: "webmail",
             key: `webmail-stale-${a.id}`,
-            text: t("stale", { name: nameOf(a.id), time: rel(a.lastSync) }),
+            // 同上：时间点是完整短语；缺/坏时间戳说「从未成功」，而不是算个 NaN 出来
+            text: t("stale", {
+              name: nameOf(a.id),
+              time: hasTime(a.lastSync)
+                ? t("lastOkAt", { time: rel(a.lastSync) })
+                : t("lastOkNever"),
+            }),
           });
         }
       }

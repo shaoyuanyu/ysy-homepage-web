@@ -10,6 +10,7 @@ import { Link } from "@/lib/i18n/navigation";
 import { useOwnAddresses } from "@/lib/mail/use-own-addresses";
 import { AccountMenu } from "@/components/mail/account-menu";
 import { accountDotProps } from "@/components/mail/account-dot";
+import { accountName } from "@/components/mail/account-label";
 import { MOTION_SIZE } from "@/components/mail/motion";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -145,8 +146,12 @@ export function MailContactsPane() {
 
   /** 账号 id → 色点（联系人行与底栏图例共用「邮箱列表同一套颜色逻辑」） */
   const colorOf = (accountId: string) => accounts.find((a) => a.id === accountId)?.color ?? "";
+  /** 账号 id → 显示名（没备注名 → 邮箱地址，2026-10-11；`accountId` 只在真找不到账号时兜底） */
   const nameOf = (accountId: string) =>
-    accounts.find((a) => a.id === accountId)?.displayName ?? accountId;
+    accountName(
+      accounts.find((a) => a.id === accountId),
+      accountId,
+    );
 
   return (
     <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1">
@@ -171,7 +176,7 @@ export function MailContactsPane() {
           extraItems={[{ value: LOCAL_FILTER, label: t("contactsPane.filterLocal") }]}
           collapsedNameMaxPx={96}
           countOverride={totalCount}
-          accountName={(a) => t("contactsPane.accountFilter", { name: a.displayName || a.email })}
+          accountName={(a) => t("contactsPane.accountFilter", { name: accountName(a) })}
         />
         {/* 搜索区（2026-10-05 用户定稿：与邮箱状态同一套伸缩交互）——常态是一个图标
             按钮，点击向左展开为输入框；Esc / 失焦且为空收起。
