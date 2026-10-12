@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-10-11",
+  "fetchedAt": "2026-10-12",
   "source": "ccfddl/ccf-deadlines (allconf.yml)",
   "conferences": [
     {
@@ -3230,6 +3230,31 @@
             {
               "t": "2026-04-21 23:59:59",
               "c": "Spring"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "a": "ESWC",
+      "n": "European Semantic Web Conference",
+      "l": "C",
+      "f": "数据库/数据挖掘/内容检索",
+      "d": "https://dblp.org/db/conf/esws/",
+      "years": [
+        {
+          "y": 2026,
+          "link": "https://2026.eswc-conferences.org/",
+          "tz": "Etc/GMT+12",
+          "date": "May 12-14, 2026",
+          "place": "Dubrovnik, Croatia",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2025-11-27 23:59:00"
+            },
+            {
+              "t": "2025-12-04 23:59:00"
             }
           ]
         }
@@ -7178,19 +7203,11 @@
           "timeline": [
             {
               "k": "abstract",
-              "t": "2026-04-11 23:59:59"
-            },
-            {
-              "t": "2026-05-07 23:59:59",
-              "c": "ESWC transfer"
-            },
-            {
-              "k": "abstract",
               "t": "2026-05-02 23:59:59"
             },
             {
               "t": "2026-05-07 23:59:59",
-              "c": "Regular route"
+              "c": "ESWC resubmissions must be committed by April 11, 2026"
             }
           ]
         }
