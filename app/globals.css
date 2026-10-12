@@ -690,6 +690,14 @@ section[id^="ccf-field"] {
     flex-flow: row wrap;
     align-content: flex-start;
     gap: 0.1875rem;
+    /* 上内边距 6px → 4px（2026-10-12）：格高实测 64px、页脚 28px ⇒ 内容区
+       36px，而最紧的一格需要「圆点行 8px + 间距 3px + 「+N」20px」= 31px，加上
+       REUI 默认的 pt-1.5(6px) 就是 37px —— **溢出 1px**，`overflow-hidden` 会把
+       「+N」下沿静默裁掉（「今天」那格还要再少 2px 的底边框宽度，见
+       calendar-view.tsx 的 todayClassName）。收到 4px 后 = 35px < 36px，不再溢出。
+       ⚠ 间距必须 ≥ 3px：圆点的触摸热区靠 ::after 各向外扩 2px，间距小于 3px
+         相邻热区会重叠。 */
+    padding-top: 0.25rem;
   }
   /* 跨天条的车道占位块独占一行（flex-basis: 100%），圆点不侵入条带区域 */
   .calendar-month-cell-content

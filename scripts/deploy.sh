@@ -45,7 +45,7 @@
 set -euo pipefail
 
 # 脚本修订号：改动本脚本时一并更新，便于在日志里确认 VPS 上跑的是哪一版
-DEPLOY_REV="2026-10-07.2"
+DEPLOY_REV="2026-10-12.1"
 
 REGISTRY="${REGISTRY:-crpi-pko4rr79dtavwpp5.cn-shanghai.personal.cr.aliyuncs.com}"
 NAMESPACE="${NAMESPACE:-shaoyuanyu}"
@@ -61,7 +61,11 @@ WEB_CMD_MARKER="server.js"
 WEBMAIL_CMD_MARKER="tsx"
 # 容器内健康探测（node 一定在镜像里：web 的 Cmd 就是 node，webmail 跑 tsx）
 WEB_PROBE="fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-WEBMAIL_PROBE="fetch('http://127.0.0.1:9710/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+# ⚠ webmail 的 /health 也要内部密钥：api.ts 会校验站点代理注入的 `x-internal-key`
+#   （绑非回环地址时后端强制要求配置密钥）。探测在 **webmail 容器内**跑，密钥就在它
+#   自己的环境里。密钥为空（本地/回环）时发空串 —— 服务端密钥为空就不校验，向后兼容。
+#   2026-10-12 教训：漏了这个头 → /health 恒 401 → 健康探测 120s 超时 → 部署假红。
+WEBMAIL_PROBE="fetch('http://127.0.0.1:9710/health',{headers:{'x-internal-key':process.env.WEBMAIL_INTERNAL_KEY||''}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # 脚本与 docker-compose.yml 同目录（VPS 上即 ~/personal-homepage/）
 COMPOSE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

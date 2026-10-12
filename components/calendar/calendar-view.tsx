@@ -800,13 +800,19 @@ export function CalendarView() {
                 onRangeChange={handleRangeChange}
                 onDateChange={handleDateChange}
                 dayClassName={dayClassName}
-                // 今日改为空心圆圈语义：去掉 REUI 内置的实底圆/顶部条高亮
-                todayClassName="bg-transparent border-b-transparent"
+                // 今日改为空心圆圈语义：去掉 REUI 内置的实底圆/顶部条高亮。
+                // ⚠ 必须连**宽度**一起清零（border-b-0）：只把颜色变透明的话，
+                //   那 2px 下边框还在，照样从格子内容高度里扣掉 2px —— 手机端
+                //   今天那格「3 枚圆点 + 「+N」」因此溢出（2026-10-12 CI 红）。
+                todayClassName="bg-transparent border-b-0"
                 maxEventsPerCell={3}
                 i18n={ecI18n}
                 // 手机端压缩高度（桌面 h-[640px] 不变）：窄屏格子只放圆点（8px）
-                // 不再有标题行，6 行月历用不着 640px；31rem（格高约 64px）刚好装下
-                // 「跨天条车道 18px + 圆点行 8px + 「+N」行 16px」中最紧的组合，
+                // 不再有标题行，6 行月历用不着 640px；31rem 下格高实测 64px，
+                // 内容区 = 64 − 页脚 28 = 36px，要装下最紧的那格：
+                //   上内边距 4px + 圆点行 8px + 间距 3px + 「+N」20px = 35px
+                // （数字见 globals.css 的 `.calendar-month-cell-content` 窄屏规则；
+                //   「+N」不是 16px —— 它带纵向 2px 内边距撑触摸目标，实测 20px）
                 // 且让「月视图 + 下方日程列表」在手机上一屏内同现
                 className="h-[31rem] w-full sm:h-[640px]"
               >
