@@ -1936,6 +1936,31 @@
               "c": "June Cycle"
             }
           ]
+        },
+        {
+          "y": 2027,
+          "link": "https://conferences.sigcomm.org/co-next/2027/#!/home",
+          "tz": "Etc/GMT+12",
+          "date": "December 6-9, 2027 (To be confirmed)",
+          "place": "Rio de Janeiro, Brazil",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2026-11-27 23:59:59"
+            },
+            {
+              "t": "2026-12-04 23:59:59",
+              "c": "December Cycle"
+            },
+            {
+              "k": "abstract",
+              "t": "2027-05-28 23:59:59"
+            },
+            {
+              "t": "2027-06-04 23:59:59",
+              "c": "June Cycle"
+            }
+          ]
         }
       ]
     },
