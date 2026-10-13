@@ -2560,6 +2560,28 @@
       ]
     },
     {
+      "a": "DEXA",
+      "n": "International Conference on Database and Expert Systems Applications",
+      "l": "C",
+      "f": "数据库/数据挖掘/内容检索",
+      "d": "https://dblp.org/db/conf/dexa/",
+      "years": [
+        {
+          "y": 2026,
+          "link": "https://www.dexa.org/2026/dexa2026.html",
+          "tz": "Etc/GMT+12",
+          "date": "August 11-13, 2026",
+          "place": "Graz, Austria",
+          "timeline": [
+            {
+              "t": "2026-04-10 23:59:59",
+              "c": "Final and firm main conference deadline"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "a": "DFRWS",
       "n": "Digital Forensic Research Workshop",
       "l": "C",
@@ -6095,6 +6117,23 @@
               "t": "2026-01-28 00:00:00"
             }
           ]
+        },
+        {
+          "y": 2027,
+          "link": "https://idc.acm.org/2027/",
+          "tz": "Etc/GMT+12",
+          "date": "June 21-24, 2027",
+          "place": "Seattle, Washington, USA",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-01-18 23:59:59"
+            },
+            {
+              "t": "2027-01-25 23:59:59",
+              "c": "Full and Short Papers; abstract deadline includes author information"
+            }
+          ]
         }
       ]
     },
@@ -6878,6 +6917,23 @@
             },
             {
               "t": "2025-11-17 23:59:59"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://iscaconf.org/isca2027/",
+          "tz": "Etc/GMT+12",
+          "date": "June 5-9, 2027",
+          "place": "Atlanta, Georgia, USA",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2026-11-09 23:59:59"
+            },
+            {
+              "t": "2026-11-16 23:59:59",
+              "c": "Main Track; rebuttal/revision period: February 16-March 8, 2027"
             }
           ]
         }
@@ -9194,6 +9250,23 @@
             },
             {
               "t": "2026-02-23 23:59:59",
+              "c": "Research Papers"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://conf.researchr.org/home/RE-2027",
+          "tz": "Etc/GMT+12",
+          "date": "August 23-27, 2027",
+          "place": "Milan, Italy",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-02-22 23:59:59"
+            },
+            {
+              "t": "2027-03-01 23:59:59",
               "c": "Research Papers"
             }
           ]
