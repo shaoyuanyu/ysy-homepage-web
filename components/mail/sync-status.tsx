@@ -22,7 +22,7 @@ import { MAIL_ACCOUNTS_CHANGED_EVENT } from "@/components/mail/accounts-dialog";
  * 工具栏账号行右侧在账号多时挤 chips；随后确定底栏贯通、统计在左/状态在右）：
  *   - 底栏右侧 = 小圆点 + 「上次收到新邮件 x 前」（12px muted；从未收到 = 「同步正常」）；
  *     窄屏只留圆点。⚠ 显示的时间是「抓进新邮件」的时刻（webmaild lastNewMail），
- *     不是同步心跳（60s 一轮恒新鲜，显示它永远「刚刚」无信息量）。
+ *     不是同步心跳（5s 一轮恒新鲜，显示它永远「刚刚」无信息量）。
  *   - 底栏左侧 = 列表统计（已加载 / 未读），由 MailStatusbar 渲染。
  *   - 异常态 = 指示变告警图标 + 「同步异常」，底栏上方展开**无边框**告警行
  *     （沿用加载错误行的版式），逐条列出问题。
@@ -85,18 +85,11 @@ export interface BackfillState {
   total: number;
 }
 
-/** 轮询间隔：与 webmaild 的 60s 同步周期对齐 */
-const POLL_MS = 60_000;
-/**
- * **有抓取任务在跑**时的轮询间隔（2026-10-08）：进度条要动起来、列表要跟着刷新，
- * 60s 一跳太钝。两种情形都算「在跑」——① 有历史回填（`backfill`，进度是数字）；
- * ② 有账号首轮还没跑完（`lastSync === null`，进度还数不出来，但确实在下载）。
- * 平静期仍是 60s。
- */
-const ACTIVE_POLL_MS = 5_000;
+/** 轮询间隔（2 秒）：底栏状态（含抓取进度）与「上次收到新邮件」的刷新节拍 */
+const POLL_MS = 2_000;
 /**
  * 陈旧阈值：距上次成功抓取超过该时长视为异常。
- * mailagentd 兜底轮询 3 分钟一轮、webmaild 60 秒一轮，15 分钟足够宽松（只抓真卡死）。
+ * mailagentd 兜底轮询 3 分钟一轮、webmaild 5 秒一轮，15 分钟足够宽松（只抓真卡死）。
  */
 const STALE_MS = 15 * 60 * 1000;
 
@@ -195,7 +188,7 @@ export function useSyncStatus(): {
   const load = useCallback(async () => {
     const problems: Problem[] = [];
     // 全部源里最近的一次「抓进新邮件」（ISO Z 结尾，字典序即时间序）。
-    // ⚠ 显示时间只取 lastNewMail：lastSync/lastOk 是 60s/3min 一轮的同步心跳，
+    // ⚠ 显示时间只取 lastNewMail：lastSync/lastOk 是 5s/3min 一轮的同步心跳，
     // 恒新鲜、永远显示「刚刚」没有信息量（2026-10-04 用户反馈）；心跳仍用于
     // 下面的陈旧/失败判定（那才是它的职责）。
     let latestNew: string | null = null;
@@ -348,19 +341,18 @@ export function useSyncStatus(): {
     }
   }, [t, rel, nameOf]);
 
-  // 轮询：平静期 60s；**有抓取任务在跑时 5s**（进度条要动、列表要跟着刷新）
-  const active = backfill !== null || firstSync;
+  // 轮询：固定 2 秒一拍（抓取进度与「上次收到新邮件」都跟着它刷新）
   useEffect(() => {
     void load();
-    const timer = setInterval(() => void load(), active ? ACTIVE_POLL_MS : POLL_MS);
+    const timer = setInterval(() => void load(), POLL_MS);
     return () => clearInterval(timer);
-  }, [load, active]);
+  }, [load]);
 
   /**
    * 账号增删 / 白名单变更后**立刻**重取一次状态（2026-10-08）。
    *
-   * 新账号的首轮抓取进度必须当场出现在底栏——常规轮询是 60s 一拍，只靠它的话用户加完
-   * 账号要干等一分钟才看到任何动静（正是「加了账号、不知道有没有在下载」的观感）。
+   * 新账号的首轮抓取进度必须当场出现在底栏——只靠 2 秒的常规轮询也会晚一拍，
+   * 这里不等（正是「加了账号、不知道有没有在下载」的观感）。
    * 事件由账号管理弹窗在增删/编辑提交成功后广播。
    */
   useEffect(() => {

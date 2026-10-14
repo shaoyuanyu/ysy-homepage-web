@@ -3220,7 +3220,7 @@ function stubMailApi(
   calls.listStore = MAIL_LIST;
   // 「上次收到新邮件」桩（2026-10-06）：/health 的 lastNewMail。**默认固定值**（历次
   // 轮询不前进 → 不误报）；用例要模拟新邮件时改这个对象再触发 visibilitychange。
-  // ⚠ 曾用「请求时刻」作值：每个轮询周期都会「前进」，提醒器会每 30s 弹一条假提醒。
+  // ⚠ 曾用「请求时刻」作值：每个轮询周期都会「前进」，提醒器会每拍弹一条假提醒。
   const healthStore = { lastNewMail: "2026-01-01T00:00:00.000Z" };
   calls.healthStore = healthStore;
   // 草稿内存桩（2026-10-06）：POST/PUT/DELETE 真实改数组，GET 反映最新状态
@@ -3350,7 +3350,7 @@ function stubMailApi(
       domainStore = next;
       return json({ domains: domainStore });
     }
-    // 健康端点（5.5）：状态条每 60s 轮询这两个；默认全部健康（时间取请求时刻 → 显示「刚刚」）
+    // 健康端点（5.5）：状态条每 2 秒轮询这两个；默认全部健康（时间取请求时刻 → 显示「刚刚」）
     // lastNewMail = 上次抓进新邮件的时刻：acc1 用可控桩（见 healthStore，提醒器只认它前进）、acc2 从未收到（null）
     // ⚠ 账号列表取自 `accountStore`（真后端就是这样）：**刚添加的账号 `lastSync` 为 null**
     //   =「首轮同步还没跑完」——底栏据此显示「正在首次同步邮件…」（2026-10-08 用例用）
@@ -5994,8 +5994,8 @@ test.describe("站内邮件（/mail）", () => {
      * 没念（视觉上等价，toast 的倒计时在窗口失焦时本来就暂停）。
      *
      * 写法：① `document.visibilityState` 打桩伪造「不可见」，不依赖真实切窗口；
-     * ② watcher 在不可见时只能靠 30s 的 interval 发现新邮件，故装假时钟快进 31s
-     * （真实等半分钟太慢）。假时钟必须在 goto 之前装——interval 是用它建出来的。
+     * ② watcher 在不可见时只能靠 2 秒的 interval 发现新邮件，装假时钟快进 31 秒
+     * 覆盖多拍（真实等 31 秒太慢）。假时钟必须在 goto 之前装——interval 是用它建出来的。
      */
     test("新邮件提醒：页面不可见时先攒着，回到页面才弹（读屏才听得到）", async ({ page }) => {
       await page.clock.install();
@@ -7944,8 +7944,8 @@ test.describe("站内邮件（/mail）", () => {
      * 新增账号后底栏**当场**显示「正在首次同步邮件…」（2026-10-08 用户要求）。
      *
      * 背景：加完邮箱，后端立刻起一轮同步（先钉水位线、再按块倒序回填），但这段时间
-     * `/health` 的 `backfill` 还没有 x/y 数字（第一块还没落库）——旧实现下这一段在界面上
-     * 完全不可见：① 平静期的状态轮询是 60s 一拍，加完账号最多要等一分钟才刷新；
+     * `/health` 的 `backfill` 还没有 x/y 数字（第一块还没落库）——这一段旧实现里界面上
+     * 完全不可见：① 状态刷新只靠轮询，加完账号要等下一拍才刷新；
      * ② `lastSync === null` 时底栏显示的是「上次收到新邮件 x 前」，与真相正好相反
      * （邮箱正在下载，界面却在说上一封信是什么时候到的）。
      * 这里锁定两条契约：加完账号立刻切到首次同步态，且抓取期间列表照常静默自动刷新。
@@ -7983,7 +7983,7 @@ test.describe("站内邮件（/mail）", () => {
       await page.keyboard.press("Escape");
       await expect(dialog).toHaveCount(0);
 
-      // ⚠ 关键断言：不等 60s 轮询，加完账号底栏立刻切到首次同步态
+      // ⚠ 关键断言：不等轮询，加完账号底栏立刻切到首次同步态
       await expect(status.locator('[data-slot="mail-sync-first-sync"]')).toHaveText(
         "正在首次同步邮件…",
       );
@@ -7992,7 +7992,7 @@ test.describe("站内邮件（/mail）", () => {
       // 也别再显示「上次收到新邮件 x 前」（此刻它读起来正好是反的）
       await expect(status.locator('[data-slot="mail-sync-latest"]')).toHaveCount(0);
 
-      // ---- 抓取期间列表自动刷新（15s 一拍）----
+      // ---- 抓取期间列表自动刷新（2s 一拍）----
       const rows = page.locator('[data-slot="mail-list"] > li');
       const before = await rows.count();
       calls.listStore = [

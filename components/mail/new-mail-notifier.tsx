@@ -12,7 +12,7 @@ import { toast } from "@/components/ui/toast";
  * 新邮件到达的全局提醒（2026-10-06 用户需求）。
  *
  * 两个协作组件 + 两个 window 事件（同页组件解耦）：
- * - `MailNewMailWatcher`（挂在 `Providers`，**全站**）：每 30s 拉一次
+ * - `MailNewMailWatcher`（挂在 `Providers`，**全站**）：每 2 秒拉一次
  *   `/api/mail/accounts`（各账号未读总数，广播给角标）与 `/api/mail/health`
  *   （各账号 `lastNewMail`，判断有没有新邮件）；判定有新邮件 → toast 弹窗提醒
  *   （于是在写邮件页、博客等任何页面都能收到提醒）+ 广播 `mail:new-mail`。
@@ -24,8 +24,8 @@ import { toast } from "@/components/ui/toast";
  *   非站主直接不启动轮询；登录/登出由 `owner-auth-changed` 事件重启判定。
  *   **勿改回「先请求、收到 401 再停」**——那两个 401 会在游客浏览器的
  *   控制台留下 Failed to load resource 错误（E2E「页面无控制台错误」变红）。
- * ⚠ 轮询是**本机回环**请求（Next 路由 → webmaild），成本极低；30s 与 webmaild
- *   的 60s 同步周期配合，新邮件最迟约 1 分半内弹提醒。
+ * ⚠ 轮询是**本机回环**请求（Next 路由 → webmaild），成本极低；2 秒一拍配合
+ *   webmaild 的 5 秒同步节拍，新邮件通常数秒内弹提醒。
  *
  * ⚠ **「新邮件到达」的读屏播报通道就是这条 toast**：Base UI 的 viewport 是
  *   `role="region" aria-live="polite" aria-relevant="additions text"`，toast 插进去
@@ -40,8 +40,8 @@ import { toast } from "@/components/ui/toast";
 export const MAIL_UNREAD_EVENT = "mail:unread";
 export const MAIL_NEW_MAIL_EVENT = "mail:new-mail";
 
-/** 轮询间隔（webmaild 同步周期 60s 的一半，保证提醒即使隔一轮也有存在感） */
-const POLL_MS = 30_000;
+/** 轮询间隔（2 秒；配合 webmaild 的 5 秒同步节拍） */
+const POLL_MS = 2_000;
 
 /** 是否已知为站主：读与首帧内联脚本、OwnerNavItem 同一份 localStorage 缓存 */
 const isKnownOwner = () => {

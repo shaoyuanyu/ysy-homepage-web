@@ -157,7 +157,7 @@ function ListSkeleton() {
  * 邮件合并视图：默认全部账号合并，工具栏可筛选账号与状态（4.2）。
  *
  * `backfill` / `firstSync`（2026-10-08）：由 MailShell 的同步状态轮询传下来——有新账号
- * 的**历史回填**（有 x/y 数字）或**首轮还没跑完**（数字还出不来）在跑时，列表每 15 秒
+ * 的**历史回填**（有 x/y 数字）或**首轮还没跑完**（数字还出不来）在跑时，列表每 2 秒
  * 静默重取一次（不带 loading，不闪），于是「最新优先」抓到的邮件会自己冒出来，
  * 用户不必反复手动刷新等结果。
  */
@@ -707,11 +707,11 @@ export function MailClient({
    * 抓取期间的列表自动刷新（2026-10-08）。
    *
    * 新账号的首轮是「最新优先、按块推进」的倒序回填：邮件是一批批冒出来的，
-   * 不刷新就只能看见点进来那一刻已有的那些。这里在抓取期间每 15 秒**静默**重取
+   * 不刷新就只能看见点进来那一刻已有的那些。这里在抓取期间每 2 秒**静默**重取
    * 当前列表（`loadCurrent` 不置 loading，不闪骨架、不打断滚动），抓完就停。
    * 两种「在跑」都算：有回填数字（`backfill`）与首轮刚起步、数字还没出来（`firstSync`）。
-   * ⚠ 依赖用 boolean 而不是 `backfill` 对象：状态轮询每 5 秒给一个新对象，
-   *   直接依赖它会让定时器每 5 秒重建一次（永远等不到 15 秒）。
+   * ⚠ 依赖用 boolean 而不是 `backfill` 对象：状态轮询每拍给一个新对象，
+   *   直接依赖它会让定时器跟着重建（重取节拍不稳）。
    * ⚠ 搜索态不自动刷新：正在看搜索结果时列表自己变会让人困惑。
    */
   const syncing = !!backfill || !!firstSync;
@@ -719,7 +719,7 @@ export function MailClient({
     if (!syncing || view === "drafts" || q.trim()) return;
     const timer = window.setInterval(() => {
       void loadCurrent().catch(() => {});
-    }, 15_000);
+    }, 2_000);
     return () => window.clearInterval(timer);
   }, [syncing, view, q, loadCurrent]);
 
@@ -1201,7 +1201,7 @@ export function MailClient({
           body: JSON.stringify({ messageId: m.messageId, ...payload }),
         });
         if (!res.ok) throw new Error();
-        // 计数与筛选跟随（此前只打补丁：h1 角标/底栏要等下个 30s 轮询才更新）
+        // 计数与筛选跟随（此前只打补丁：h1 角标/底栏要等下一拍轮询才更新）
         applyItemChange({ messageId: m.messageId, ...change });
         // 写成功后再广播一次：服务端索引此时才更新（与详情页同一套语义，见 postFlags 注释）
         broadcastItemChange({ messageId: m.messageId, ...change, source: "list" });
@@ -1475,7 +1475,7 @@ export function MailClient({
   /**
    * 列表行要用的账号索引。`MailRow` 是 memo 组件，传给它的每个 prop 都必须是稳定引用；
    * 行只读「显示用的名字」/ `color`，故按「id + 备注名 + 发件人姓名 + 颜色」组键缓存——
-   * 未读数的轮询刷新会换掉 `accounts` 数组，但不该换掉这个 Map（否则每 30 秒全部行重渲一次）。
+   * 未读数的轮询刷新会换掉 `accounts` 数组，但不该换掉这个 Map（否则每拍全部行重渲一次）。
    * ⚠ 键必须覆盖 `accountName()` 读到的每个字段（显示名优先级 = 备注名 > 发件人姓名 > 地址）：
    *   少一个 `senderName`，改完发件人姓名后行内色点的 `title` 会停在旧值。
    */
