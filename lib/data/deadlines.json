@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-10-13",
+  "fetchedAt": "2026-10-14",
   "source": "ccfddl/ccf-deadlines (allconf.yml)",
   "conferences": [
     {
@@ -3302,6 +3302,23 @@
             },
             {
               "t": "2025-12-04 23:59:00"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://2027.eswc-conferences.org/",
+          "tz": "Etc/GMT+12",
+          "date": "May 23-27, 2027",
+          "place": "Limassol, Cyprus",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2026-12-10 23:59:59"
+            },
+            {
+              "t": "2026-12-17 23:59:59",
+              "c": "Research track; rebuttal period January 26-29, 2027"
             }
           ]
         }
