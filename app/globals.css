@@ -787,10 +787,10 @@ section[id^="ccf-field"] {
 
 /* 打印邮件（2026-10-07）：只留邮件本体——顶栏 / 页脚 / 左栏列表 / 详情工具栏 / 底栏 /
    页内快速回复 / **邮件页的页头（标题 + 通讯录/账号/agent 入口）** / **右下角浮动导航钮**
-   全部隐藏，右栏内容占满整页宽。挂 `data-print="hide"` 的元素 = 详情页工具栏与主题行右侧
-   的「更多」按钮（`message-view.tsx`）、邮件页页头（`mail/(mailbox)/layout.tsx`）、
-   浮动导航钮（`layout/nav-fab.tsx`）——后两个是 2026-10-07 打了一份真实 PDF 才发现的：
-   页头与圆钮会跟着印到纸上。
+   全部隐藏，右栏内容占满整页宽。挂 `data-print="hide"` 的元素 = 详情页工具栏、主题行
+   右侧的视图开关（全屏查看 / 关闭，`message-view.tsx`）、邮件页页头
+   （`mail/(mailbox)/layout.tsx`）、浮动导航钮（`layout/nav-fab.tsx`）——后两个是
+   2026-10-07 打了一份真实 PDF 才发现的：页头与圆钮会跟着印到纸上。
 
    ⚠ 用 `!important`：这些元素带着 Tailwind 的 `flex` / `sticky` 等工具类，
    不加会被同优先级的类名盖掉（打印样式表在最后加载，但工具类的选择器权重相同、
@@ -812,7 +812,6 @@ section[id^="ccf-field"] {
      所以这条规则本身就盖住标题了——原来那条靠 `:has()` 追到 section 的补丁已删；
      若将来把槽位挪回内层，记得把标题一起藏掉，否则纸上会剩一个孤零零的小标题 */
   [data-slot="mail-thread"],
-  [data-slot="mail-avatar"],
   [data-print="hide"] {
     display: none !important;
   }

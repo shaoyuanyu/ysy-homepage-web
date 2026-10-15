@@ -4078,7 +4078,7 @@ test.describe("站内邮件（/mail）", () => {
      * 一并覆盖 `/calendar`、`/ideas`：同为 owner 页面，跳转时标题位置同样不能晃。
      */
     test("容器宽度：与站点栏（顶栏 / 页脚）同一列宽，不比其它页面宽", async ({ page }) => {
-      test.slow(); // 6 条 owner 路由整页导航，见文件顶部「超时预算」
+      test.slow(); // 7 条 owner 路由整页导航，见文件顶部「超时预算」
       const calls = { flags: [] as unknown[], send: [], delete: [] };
       await stubMailApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
@@ -4089,6 +4089,7 @@ test.describe("站内邮件（/mail）", () => {
         "/mail",
         "/mail/compose",
         "/mail/contacts",
+        "/mail/settings",
         "/mail/agent",
         "/calendar",
         "/ideas",
@@ -4132,7 +4133,7 @@ test.describe("站内邮件（/mail）", () => {
       page.on("pageerror", onPageError);
 
       try {
-        for (const path of ["/mail", "/mail/compose", "/mail/contacts", "/mail/agent"]) {
+        for (const path of ["/mail", "/mail/compose", "/mail/contacts", "/mail/settings", "/mail/agent"]) {
           errors.length = 0;
           await gotoReady(page, path); // 含 waitForHydration → 水合确实跑过
           await page.waitForTimeout(800); // 让挂载后的轮询/取数也把话说出来
@@ -5085,13 +5086,24 @@ test.describe("站内邮件（/mail）", () => {
     /**
      * 展开「快速回复」不应该让整个右栏变成可滚动的（2026-10-08 用户报）：
      * 正文是那一列里**唯一可伸缩**的项，多出来的高度由它让出（内部滚动），外层保持不滚。
-     * 用例给一封超长正文的邮件（详情桩局部覆盖），断言展开前后外层都没有可滚动的余量。
+     * 用例给一封超长正文的邮件（详情桩局部覆盖），断言展开后外层没有可滚动的余量。
+     *
+     * ⚠ **2026-10-14 改成「等动画落地再判」**（原写法直接量，实测在本机 HEAD 上也稳定
+     *   变红：量到的是「快速回复」grid 轨道动画的中间帧，溢出值随帧数在 0～25px 之间乱跳，
+     *   与代码改不改无关）。两处改动：
+     *   · 视口加高到 1080：原 720 下面板只有 370px，正文早已触到 `min-h-[6rem]` 的地板，
+     *     多出来的 66px 按设计**本来就该退回外层滚动**（见 message-view 的优先级③）——
+     *     那种尺寸下「外层不滚」根本不可能成立，断言自然只能靠中间帧侥幸命中；
+     *   · 展开后用 `expect.poll` 等稳定态（动画跑完自然会满足；真放不下会一路超时变红）。
      */
     test("快速回复：展开后由正文让出高度（正文内部滚动），外层不出现滚动", async ({ page }) => {
       const calls = { flags: [] as unknown[], send: [], delete: [] };
       await stubMailApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
       await loginWithCode(page, code);
+
+      // 视口加高：让面板有真正的余量，「外层不滚」才是可判的（见上方注释）
+      await page.setViewportSize({ width: 1280, height: 1080 });
 
       // 这封的正文足够长（远超右栏高度）：局部覆盖详情桩（/thread 仍走通用桩）。
       // ⚠ 必须自己拼响应，**不能 `route.fetch()` 再改**——`route.fetch()` 是绕过所有桩
@@ -5132,7 +5144,10 @@ test.describe("站内邮件（/mail）", () => {
       await page.getByRole("button", { name: "快速回复" }).click();
       await expect(page.locator('[data-slot="mail-quick-reply"]')).toHaveAttribute("data-open", "true");
       await expect(page.getByRole("button", { name: "发送" })).toBeVisible();
-      expect(await overflow(), "展开快速回复后右栏不该出现滚动").toBeLessThanOrEqual(1);
+      // ⚠ 用 poll 等动画落地（见用例顶部注释）：直接量会量到中间帧
+      await expect
+        .poll(overflow, { message: "展开快速回复后右栏不该出现滚动" })
+        .toBeLessThanOrEqual(1);
       const bodyHeightAfter = (await page.locator(".mail-body").boundingBox())!.height;
       expect(bodyHeightAfter, "正文应该变矮，把高度让给快速回复").toBeLessThan(bodyHeightBefore);
       // 正文自己是可以滚的（内容没被裁掉）
@@ -6142,7 +6157,7 @@ test.describe("站内邮件（/mail）", () => {
     });
 
     test("详情页：远程图片占位 + 「显示图片」逐封加载 + 打开即标已读", async ({ page }) => {
-      const calls = { flags: [] as unknown[], send: [], delete: [] };
+      const calls = { flags: [] as unknown[], send: [], delete: [], whitelist: [] as unknown[] };
       await stubMailApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
       await loginWithCode(page, code);
@@ -6166,10 +6181,157 @@ test.describe("站内邮件（/mail）", () => {
       ).toHaveCount(1);
 
       // 「显示图片」：占位图换回原远程 URL，提示条消失
-      await page.getByRole("button", { name: "显示图片" }).click();
+      // ⚠ 2026-10-15 起两个出口合并成一颗组合按钮（用户要求）：主按钮 = 「显示图片」
+      //   （一次点击直达），右侧 caret 菜单里 = 「显示图片并加入白名单」。主按钮的
+      //   可访问名不再与别的按钮撞名（白名单那个现在是 menuitem），exact 只为稳妥
+      const showBtn = page.getByRole("button", { name: "显示图片", exact: true });
+      const caretBtn = page.getByRole("button", { name: "图片显示选项", exact: true });
+      const [mainBox, caretBox] = await Promise.all([showBtn.boundingBox(), caretBtn.boundingBox()]);
+      expect(
+        Math.abs(caretBox!.x - (mainBox!.x + mainBox!.width)),
+        "caret 必须紧贴主按钮右缘（共边，中间不留缝）",
+      ).toBeLessThanOrEqual(0.5);
+      await showBtn.click();
       await expect(body.locator("img[data-remote-src]")).toHaveCount(0);
       await expect(body.locator('img[src="https://tracker.example.com/pixel.png"]')).toHaveCount(1);
       await expect(page.getByText(/已拦截 1 张外部图片/)).toHaveCount(0);
+
+      // 「显示图片并加入白名单」（2026-10-14 用户要求；2026-10-15 收进 caret 菜单）：
+      // 同样当场显示，另把图片域名并入白名单——先 GET 现值，再 PUT 合并后的全量数组
+      // （edu.cn 已在名单里，不重复加）。
+      // ⚠ 重新打开这封：`remoteShown` 是组件内存态，导航离开再回来提示条就回来了
+      await gotoReady(page, "/mail");
+      await page.locator('[data-slot="mail-list"] > li').nth(1).locator("[data-mail-row]").click();
+      await expect(page).toHaveURL(/\/mail\/message\//);
+      await expect(page.getByText(/已拦截 1 张外部图片/)).toBeVisible();
+      await caretBtn.click();
+      const remoteMenu = page.locator('[data-slot="dropdown-menu-content"]');
+      await expect(remoteMenu.getByRole("menuitem", { name: "显示图片并加入白名单" })).toBeVisible();
+      await remoteMenu.getByRole("menuitem", { name: "显示图片并加入白名单" }).click();
+      await expect(body.locator("img[data-remote-src]")).toHaveCount(0);
+      await expect(body.locator('img[src="https://tracker.example.com/pixel.png"]')).toHaveCount(1);
+      await expect.poll(() => calls.whitelist.length).toBe(1);
+      expect(calls.whitelist[0]).toMatchObject({ domains: ["edu.cn", "tracker.example.com"] });
+      // toast 里报出加了哪些域名——白名单是「记住」而不是「这一次」，用户据此知道记住了什么
+      await expect(page.locator('[data-slot="toast-title"]')).toContainText("已加入白名单");
+      await expect(page.locator('[data-slot="toast-description"]')).toContainText(
+        "tracker.example.com",
+      );
+    });
+
+    /**
+     * 切账号重置右栏（2026-10-14 用户要求）：「切换邮箱账号时，右半区的邮件查看页面应该重置」。
+     *
+     * 右栏正看着的那封属于旧账号的列表，换了账号它多半已不在列表里（连左栏高亮都没了），
+     * 留在右栏就是一封「无主」的信。判据 = 路由回到 `/mail`（右栏回到「选择一封邮件」）。
+     * ⚠ 重选**当前**档不该重置：值没变 = 什么都没做，不该把正读着的信踢掉。
+     */
+    test("切换账号：右栏正看着的邮件收起（回到占位），重选当前档不动它", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await gotoReady(page, "/mail");
+      await page.locator('[data-slot="mail-list"] > li').nth(0).locator("[data-mail-row]").click();
+      await expect(page).toHaveURL(/\/mail\/message\//);
+
+      const trigger = page.getByRole("button", { name: "按账号筛选" });
+      const detail = page.locator('[data-slot="mail-pane-detail"]');
+
+      // ① 切到「学校」→ 回列表页 + 右栏占位（宽屏两栏，左栏列表照旧在）
+      await trigger.click();
+      await page.getByRole("menuitem", { name: /学校/ }).click();
+      await expect(page).toHaveURL(/\/mail(\?|$)/);
+      await expect(detail).toContainText("选择一封邮件");
+      await expect(page.locator('[data-slot="mail-pane-list"]')).toBeVisible();
+
+      // ② 切回「全部账号」（此刻不在详情页，无重置语义）→ 打开一封
+      await trigger.click();
+      await page.getByRole("menuitem", { name: /全部账号/ }).click();
+      await page.locator('[data-slot="mail-list"] > li').nth(0).locator("[data-mail-row]").click();
+      await expect(page).toHaveURL(/\/mail\/message\//);
+      // ③ 重选当前档（值没变）→ 详情留着不被踢
+      const opened = page.url();
+      await trigger.click();
+      await page.getByRole("menuitem", { name: /全部账号/ }).click();
+      await expect(page).toHaveURL(opened);
+      await expect(detail).not.toContainText("选择一封邮件");
+    });
+
+    /**
+     * 详情页的两个「看这一栏」控件（2026-10-14 用户要求，两轮挪过位置）：**关闭**
+     * （右栏回到占位）与**全屏查看**（隐藏左栏列表、详情占满面板；再点或按 `Esc` 还原）。
+     *
+     * ⚠ 位置（第六轮定稿，别再退回）：全屏是**中缝把手**（`mail-shell.tsx` 的
+     *   `mail-pane-fullscreen`：贴在两栏分界线上、竖直居中、lg 才渲染）；关闭在**操作栏
+     *   **第一枚**（「更多」的左边，`hidden lg:inline-flex`）。
+     *   经历：第一版两枚并排主题行右上角（被点名「飘在标题上」）→ 第四轮全屏进中缝
+     *   把手、关闭留标题行 → 第五轮关闭进操作栏（右端）→ 第六轮挪左端（「更多」之后）
+     *   → 第七轮按用户要求移到「更多」左边、成为第一枚。
+     *   宽度账：关闭在左端后操作栏合计中文 613 / 英文 622 ≤ 可用 637（余 24 / 15px）
+     *   ——**英文的 markRead/markUnread 缩成了 Read/Unread**（en.json），别再放长。
+     */
+    test("详情页：关闭按钮收起右栏；全屏查看隐藏左栏、Esc 还原", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await gotoReady(page, "/mail");
+      await page.locator('[data-slot="mail-list"] > li').nth(0).locator("[data-mail-row]").click();
+      await expect(page).toHaveURL(/\/mail\/message\//);
+
+      const list = page.locator('[data-slot="mail-pane-list"]');
+      const detail = page.locator('[data-slot="mail-pane-detail"]');
+      const widthOf = (loc: typeof detail) =>
+        loc.evaluate((el) => Math.round(el.getBoundingClientRect().width));
+
+      // 全屏开关是**中缝把手**：不在操作栏、也不在主题行（它在 pane-detail 里）
+      await expect(
+        page.locator('[data-slot="message-actions"]').getByRole("button", { name: "全屏查看" }),
+      ).toHaveCount(0);
+      await expect(
+        page.locator('[data-slot="mail-pane-detail"] [data-slot="mail-pane-fullscreen"]'),
+      ).toHaveAttribute("aria-label", "全屏查看");
+      // 把手竖直居中：中心与 pane-detail 中心对齐（±2px）
+      const offCenter = await page
+        .locator('[data-slot="mail-pane-fullscreen"]')
+        .evaluate((el) => {
+          const h = el.getBoundingClientRect();
+          const d = document
+            .querySelector('[data-slot="mail-pane-detail"]')
+            ?.getBoundingClientRect();
+          return d ? Math.abs(h.top + h.height / 2 - (d.top + d.height / 2)) : -1;
+        });
+      expect(offCenter, "把手竖直居中").toBeLessThanOrEqual(2);
+      // 关闭：操作栏第一枚（「更多」的左边）
+      const actionButtons = page.locator('[data-slot="message-actions"] button');
+      await expect(actionButtons.nth(0)).toHaveAttribute("aria-label", "关闭");
+      await expect(actionButtons.nth(1)).toHaveAttribute("aria-label", "更多");
+      await expect(page.getByRole("button", { name: "关闭", exact: true })).toBeVisible();
+
+      // ① 全屏查看：左栏收起、详情占满（比普通形态宽出 26rem 那一档）
+      const normalW = await widthOf(detail);
+      await page.getByRole("button", { name: "全屏查看" }).click();
+      await expect(list).toBeHidden();
+      await expect(page.getByRole("button", { name: "退出全屏" })).toBeVisible();
+      const fullW = await widthOf(detail);
+      expect(fullW, "全屏下详情应占满面板").toBeGreaterThan(normalW + 300);
+
+      // ② Esc 还原（弹窗 / 菜单没开时 Esc 归全屏开关）
+      await page.keyboard.press("Escape");
+      await expect(list).toBeVisible();
+      await expect(page.getByRole("button", { name: "全屏查看" })).toBeVisible();
+      expect(await widthOf(detail), "退出全屏后宽度复位").toBe(normalW);
+
+      // ③ 关闭：回列表页、右栏回到占位（左栏列表仍在）
+      await page.getByRole("button", { name: "关闭", exact: true }).click();
+      await expect(page).toHaveURL(/\/mail(\?|$)/);
+      await expect(detail).toContainText("选择一封邮件");
+      await expect(list).toBeVisible();
     });
 
     test("写邮件：表单提交发出正确请求体", async ({ page }) => {
@@ -6613,7 +6775,7 @@ test.describe("站内邮件（/mail）", () => {
      * ② 「回复全部」并进「回复」右侧的下拉（分裂按钮，见回复用例）；
      * ③ 整行必须一行放下——加按钮前先量宽度。
      */
-    test("详情页操作栏：1280 宽下一行放下；「更多」在最左、低频动作在菜单里", async ({ page }) => {
+    test("详情页操作栏：1280 宽下一行放下；「关闭」「更多」排最左、低频动作在菜单里", async ({ page }) => {
       const calls = { flags: [] as unknown[], send: [], delete: [] };
       await stubMailApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
@@ -6641,14 +6803,21 @@ test.describe("站内邮件（/mail）", () => {
       await expect(bar.getByRole("button", { name: "标为垃圾", exact: true })).toBeVisible();
       await expect(bar.getByRole("button", { name: "移动", exact: true })).toHaveCount(0);
 
-      // 「更多」在操作栏里，且是这一行**最左**的可见动作（用户 2026-10-07 指定）
+      // 「关闭」「更多」在操作栏里、排最左。⚠ 2026-10-15：这句断言原为「『更多』是最左」
+      // （2026-10-07 用户指定）——2026-10-14 第七轮用户又定「关闭」进操作栏、在「更多」
+      // 左边（第一枚），旧断言从此恒红；现改为：最左 = 「关闭」，次左 = 「更多」
       const more = bar.getByRole("button", { name: "更多" });
       await expect(more).toHaveCount(1);
+      const close = bar.getByRole("button", { name: "关闭", exact: true });
+      await expect(close, "窄屏不渲染关闭按钮（hidden lg:inline-flex），本用例在 1280 下跑").toBeVisible();
       const xs = await bar.locator("a, button").evaluateAll((els) =>
         els.filter((el) => el.checkVisibility()).map((el) => Math.round(el.getBoundingClientRect().x)),
       );
+      const [leftmost, secondLeftmost] = [...xs].sort((a, b) => a - b);
+      const closeBox = (await close.boundingBox())!;
       const moreBox = (await more.boundingBox())!;
-      expect(Math.round(moreBox.x), "「更多」应是最左端那个动作").toBe(Math.min(...xs));
+      expect(Math.round(closeBox.x), "「关闭」应是最左端那个动作").toBe(leftmost);
+      expect(Math.round(moreBox.x), "「更多」应紧随「关闭」之后").toBe(secondLeftmost);
 
       // 收在「更多」菜单里
       await more.click();
@@ -6748,13 +6917,19 @@ test.describe("站内邮件（/mail）", () => {
       await expect(page.locator('[data-slot="mail-statusbar"]')).toBeHidden();
       await expect(page.locator(".site-header")).toBeHidden();
       await expect(page.getByRole("button", { name: "更多" })).toBeHidden();
+      // 「全屏查看」中缝把手与操作栏里的「关闭」都挂 data-print="hide"：纸上不要按钮
+      await expect(page.getByRole("button", { name: "关闭", exact: true })).toBeHidden();
+      await expect(page.getByRole("button", { name: "全屏查看" })).toBeHidden();
       // 正文仍然可见（打印的就是它）
       await expect(page.locator(".mail-body")).toBeVisible();
       // 被拦截的远程图片：纸上不留虚线空框；改成**打印用的**说明文案 + 去掉「显示图片」入口
       // （2026-10-08 用户报「打印渲染还有很多问题」后定的：读者要知道"这里少了几张图"）
       await expect(page.locator(".mail-body img[data-remote-src]")).toBeHidden();
-      // 头像（含方向角标）是屏幕上的识别辅助，纸上没有交互与色彩语境（2026-10-08 排版轮）
-      await expect(page.locator('[data-slot="mail-avatar"]')).toBeHidden();
+      // 方向角标是屏幕上的识别辅助，纸上没有色彩语境（2026-10-15 头部重排轮：
+      // 详情页头像已删——角标缩成名字前小图标、独立进流后自带 data-print="hide"）
+      await expect(
+        page.locator('[data-slot="mail-pane-detail"] [data-slot="mail-direction-badge"]'),
+      ).toBeHidden();
       // 提示条在纸上压平成一行小字：虚线框印出来像一只"没填的输入框"
       const noticeBox = await page
         .locator('[data-slot="mail-remote-notice"]')
@@ -6764,13 +6939,14 @@ test.describe("站内邮件（/mail）", () => {
         });
       expect(noticeBox.border, "拦截提示在纸上不要描边").toBe(0);
       expect(noticeBox.padding, "拦截提示在纸上不要内边距").toBe(0);
-      await expect(page.getByRole("button", { name: "显示图片" })).toBeHidden();
+      await expect(page.getByRole("button", { name: "显示图片", exact: true })).toBeHidden();
+      await expect(page.getByRole("button", { name: "图片显示选项", exact: true })).toBeHidden();
       await expect(page.getByText(/已拦截 \d+ 张外部图片/)).toBeHidden();
       await expect(page.getByText(/\d+ 张外部图片未随打印件输出/)).toBeVisible();
       await page.emulateMedia({ media: "screen" });
       await page.keyboard.press("Escape");
       // 回到屏幕上：提示条恢复成"防追踪"那句 + 「显示图片」按钮可用
-      await expect(page.getByRole("button", { name: "显示图片" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "显示图片", exact: true })).toBeVisible();
       await expect(page.getByText(/已拦截 \d+ 张外部图片/)).toBeVisible();
       // 附件在纸上是「内容」不是「按钮」（描边 / 图标去掉，只留文件名 + 大小）
       await page.emulateMedia({ media: "print" });
@@ -7009,7 +7185,7 @@ test.describe("站内邮件（/mail）", () => {
      * 取证能力（2026-10-07）：普通账号此前既看不到原始邮件头，也下载不到 .eml——
      * 只有 agent 只读页有。超大邮件（truncated）更是点开一片空白且无任何提示。
      */
-    test("原始邮件：头部按原文展示 + .eml 下载；超大邮件给出补取入口", async ({ page }) => {
+    test("原始邮件：头部按原文展示 + .eml 下载；超大邮件给出下载入口", async ({ page }) => {
       const calls = {
         flags: [] as unknown[],
         send: [],
@@ -7038,30 +7214,31 @@ test.describe("站内邮件（/mail）", () => {
       expect(text.indexOf("From:")).toBeLessThan(text.indexOf("Subject:"));
       const eml = rawDialog.getByRole("link", { name: "下载 .eml 原件" });
       await expect(eml).toHaveAttribute("href", /\/api\/mail\/message\/.+\/source$/);
-      // 没有「补取原文」提示（这封有原文）
-      await expect(rawDialog.getByText(/只入库了索引/)).toHaveCount(0);
+      // 没有「先下载完整邮件」的说明（这封有原文）
+      await expect(rawDialog.getByText(/先点正文上方/)).toHaveCount(0);
       await page.keyboard.press("Escape");
 
-      // 超大邮件：正文区给出说明 + 「取回原文」按钮，点了才发 POST /source
+      // 超大邮件：正文区给出说明 + 「下载完整邮件」按钮，点了才发 POST /source
       await page.locator('[data-slot="mail-list"] > li').nth(2).locator("[data-mail-row]").click();
       const notice = page.locator('[data-slot="mail-truncated-notice"]');
       await expect(notice).toBeVisible();
       await expect(notice).toContainText("正文与附件还没下载");
-      // 文案不再写死阈值（2026-10-08 起缺省 1MB，可由 MAIL_AGENT_MAX_SOURCE_BYTES 调）
-      await expect(notice).toContainText("正文与附件等点开再取");
-      await notice.getByRole("button", { name: "取回原文" }).click();
+      // 文案不再写死阈值与「省流量/磁盘」之类内部理由（2026-10-14 重写）
+      await expect(notice).toContainText("通常只要几秒");
+      await notice.getByRole("button", { name: "下载完整邮件" }).click();
       await expect.poll(() => calls.source?.length ?? 0).toBe(1);
       expect(String(calls.source?.[0])).toContain("/message/");
-      await expect(page.getByText("已取回原文")).toBeVisible();
+      await expect(page.getByText("已下载完整邮件")).toBeVisible();
     });
 
     /**
-     * 精简原文（附件门控，2026-10-08）：**正文照常可读**，只有附件没随同步下载；
-     * 附件列表照常列出（标「未下载，点击取回」），点它由服务端按需取那一个部件。
+     * 精简原文（附件门控，2026-10-08）：**正文照常可读**，附件没随同步下载——
+     * 界面上**没有任何**「未下载」痕迹（2026-10-14 用户第三轮反馈），附件就是普通的
+     * 可点开条目，点它由服务端按需取那一个部件。
      *
      * 与「超大邮件只存索引」的区别就在这里：那种情况正文也是空的（上一块提示管那个）。
      */
-    test("精简原文：正文可读、附件标成按需取回（不是空邮件）", async ({ page }) => {
+    test("精简原文：正文可读、附件照常列出可点（不是空邮件）", async ({ page }) => {
       const calls = { flags: [], send: [], delete: [], partialIds: ["mid:w02@test.local"] as string[] };
       await stubMailApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
@@ -7071,22 +7248,28 @@ test.describe("站内邮件（/mail）", () => {
       await page.locator('[data-slot="mail-list"] > li').nth(2).locator("[data-mail-row]").click();
       // 正文可读（这正是这个功能的要点）
       await expect(page.getByText("本周要闻：正文照常可读。")).toBeVisible();
-      // 不是那块「正文与附件都没下载」的空态告警，而是一句轻提示
+      // 不是那块「正文与附件都没下载」的空态告警；也**没有**任何「未下载」痕迹——
+      // 全局提示条（第二轮）与附件行标记（第三轮）都已删除：内部状态不进 UI
       await expect(page.locator('[data-slot="mail-truncated-notice"]')).toHaveCount(0);
-      await expect(page.locator('[data-slot="mail-partial-notice"]')).toContainText("附件没有随同步下载");
+      await expect(page.locator('[data-slot="mail-partial-notice"]')).toHaveCount(0);
 
-      // 附件照常列出；未下载的那个带标记与悬浮说明
+      // 附件照常列出，就是一条普通的可点条目（无标记、无「取回」类悬浮说明）
       const items = page.locator('[data-slot="mail-pane-detail"] a[download]');
       await expect(items).toHaveCount(1);
       await expect(items.first()).toContainText("report.pdf");
-      await expect(items.first().locator('[data-slot="attachment-deferred"]')).toHaveText(
-        "未下载，点击取回",
-      );
-      await expect(items.first()).toHaveAttribute("title", "未下载，点击取回");
+      await expect(items.first().locator('[data-slot="attachment-deferred"]')).toHaveCount(0);
+      await expect(items.first()).not.toHaveAttribute("title");
       await expect(items.first()).toHaveAttribute(
         "href",
         /\/api\/mail\/message\/.+\/attachment\/1$/,
       );
+
+      // 「原始邮件」对话框（2026-10-14）：partial 给说明而不是 .eml 下载链接
+      await page.getByRole("button", { name: "更多" }).click();
+      await page.getByRole("menuitem", { name: "原始邮件" }).click();
+      const rawDialog = page.locator('[data-slot="dialog-content"]');
+      await expect(rawDialog.getByText("附件还没有下载，暂时不能下载 .eml 原件。")).toBeVisible();
+      await expect(rawDialog.getByRole("link", { name: "下载 .eml 原件" })).toHaveCount(0);
     });
 
     test("通讯录：空态 → 新增 → 编辑 → 自动收录一键存入 → 删除", async ({ page }) => {
@@ -7096,8 +7279,8 @@ test.describe("站内邮件（/mail）", () => {
       await loginWithCode(page, code);
 
       await gotoReady(page, "/mail/contacts");
-      // 页头（4.13）：左上角「返回邮件」（曾放右上角且叫「返回收件箱」，与 /mail 的 h1「邮件」对不上——用户 2026-10 反馈）
-      const back = page.getByRole("link", { name: "返回邮件" });
+      // 页头（4.13）：左上角「返回邮箱」（曾放右上角且叫「返回收件箱」，与 /mail 的 h1「邮箱」对不上——用户 2026-10 反馈）
+      const back = page.getByRole("link", { name: "返回邮箱" });
       await expect(back).toBeVisible();
       const mainBox = (await page.locator("main").boundingBox())!;
       const backBox = (await back.boundingBox())!;
@@ -7234,6 +7417,9 @@ test.describe("站内邮件（/mail）", () => {
       await expect(rows).toHaveCount(2);
       await expect(rows.nth(0)).toContainText("主账号");
       await expect(rows.nth(0)).toContainText("me@mail.example.cn");
+      // 远程图片白名单不在这个弹窗里（2026-10-14 起它在独立的设置页 /mail/settings，见 4.4）：
+      // 它是全站设置，放在账号表单下方会被读成「随保存一起提交」的东西
+      await expect(dialog.locator('[data-slot="remote-image-whitelist"]')).toHaveCount(0);
 
       // 色点一致性（2026-10-09 用户报「账号管理页显示的账号颜色和底栏指示器有色差」）：
       // 同一个账号在弹窗列表与底栏必须逐字节同色。弹窗曾把色板名（cyan/pink/…）当 CSS 颜色
@@ -7247,6 +7433,9 @@ test.describe("站内邮件（/mail）", () => {
 
       // 新增：展开表单 → 填写 → 提交（未填密码时后端 400 的分支不在此覆盖，由 webmail 单测锁定）
       await dialog.getByRole("button", { name: "添加账号" }).click();
+      // 表单打开 = 这一屏只属于正在编辑的那个账号：账号列表整块收起
+      // （2026-10-14 用户反馈：列表贴着表单字段，会被读成这个账号的资料的一部分）
+      await expect(dialog.locator('[data-slot="account-list"]')).toHaveCount(0);
       // 账号颜色（2026-10-10）：表单里**没有**颜色选择器，颜色完全由后端在落盘时分配
       // （旧实现有五个色钮 + 一段「系统会自动挑、你也能改」的解释文案，用户反馈多余）
       await expect(dialog.locator('[data-slot="account-color-picker"]')).toHaveCount(0);
@@ -7263,6 +7452,7 @@ test.describe("站内邮件（/mail）", () => {
       });
       // 前端不下发 color：分配权在后端（`nextAccountColor()`，新建 = 第一个未被占用的色名）
       expect((calls.accounts?.[0] as { body: Record<string, unknown> }).body.color).toBeUndefined();
+      // 保存后回到管理视图：列表连同新账号一起回来
       await expect(rows).toHaveCount(3);
       await expect(rows.nth(2)).toContainText("mirror@example.com");
 
@@ -7377,7 +7567,8 @@ test.describe("站内邮件（/mail）", () => {
      * 用户照着它勾选，会把**别的账号的文件夹路径**写进这个账号的白名单。
      *
      * 契约：① 每个账号各探测一次；② 面板里只有**当前账号**的文件夹（换账号就换清单，
-     * 上一个账号的清单一条都不许留）；③ 面板属于「一次表单会话」，关掉表单后不该再弹开着。
+     * 上一个账号的清单一条都不许留）；③ 面板属于「一次表单会话」，关掉表单后不该再弹开着；
+     * ④ 表单打开时账号列表**收起**（2026-10-14 起，换账号要先「取消」回列表）。
      */
     test("账号管理：文件夹清单按账号探测，不串用上一个账号的清单", async ({ page }) => {
       const calls = {
@@ -7400,6 +7591,8 @@ test.describe("站内邮件（/mail）", () => {
 
       // acc1 的清单：INBOX / 已发送 / 垃圾邮件 / 项目（桩里 acc2 才有 Sent）——编辑即自动读
       await dialog.getByRole("button", { name: "编辑账号 me@mail.example.cn" }).click();
+      // 表单打开 = 这一屏属于这一个账号：账号列表收起，切换账号得先「取消」
+      await expect(dialog.locator('[data-slot="account-list"]')).toHaveCount(0);
       await expect(sync).toContainText("垃圾邮件");
       await expect(more).toContainText("其他文件夹（1 个）");
       await expect(sync.getByText("项目")).toHaveCount(0); // 折叠区默认收起
@@ -7407,7 +7600,8 @@ test.describe("站内邮件（/mail）", () => {
       await expect(sync.getByText("项目")).toBeVisible();
       await expect(sync, "「Sent」是 acc2 的文件夹").not.toContainText("Sent");
 
-      // ② 表单还开着、直接改编辑另一个账号：面板必须换成 acc2 的清单（旧实现复用 acc1 的）
+      // ② 取消回列表、改编辑另一个账号：面板必须换成 acc2 的清单（旧实现复用 acc1 的）
+      await dialog.getByRole("button", { name: "取消", exact: true }).click();
       await dialog.getByRole("button", { name: "编辑账号 ysy@edu.example.cn" }).click();
       await expect(sync).toContainText("我发出的邮件");
       await expect(sync, "acc2 没有垃圾文件夹，这一行不该在").not.toContainText("垃圾邮件");
@@ -7467,19 +7661,24 @@ test.describe("站内邮件（/mail）", () => {
       await expect(smtpHost).toHaveValue("smtp.example.org");
     });
 
-    test("账号管理：远程图片白名单增删即时落盘，保存失败有提示（4.4）", async ({ page }) => {
+    test("远程图片白名单：设置页（/mail/settings）列表呈现，增删即时生效，保存失败有提示（4.4）", async ({ page }) => {
       const calls = { flags: [], send: [], delete: [], whitelist: [] as unknown[] };
       await stubMailApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
       await loginWithCode(page, code);
 
+      // 入口是一条**链接**（2026-10-14 用户要求：跳转到设置页面，不挤小弹窗）
       await gotoReady(page, "/mail");
-      await page.getByRole("button", { name: "账号", exact: true }).click();
-      const dialog = page.locator('[data-slot="dialog-content"]');
-      const wl = dialog.locator('[data-slot="remote-image-whitelist"]');
+      await page.getByRole("link", { name: "设置", exact: true }).click();
+      await expect(page).toHaveURL(/\/mail\/settings$/);
+      // 独立整页 + 共享页头（与通讯录 / agent 邮件同规格）
+      await expect(page.getByRole("heading", { name: "设置", level: 1 })).toBeVisible();
+      const wl = page.locator('[data-slot="remote-image-whitelist"]');
       await expect(wl).toBeVisible();
+      // 白名单是**列表**（一行一个域名 + 行尾移除按钮），不再是排成一片的小胶囊；
       // 初始列表来自 GET /remote-image-domains
       await expect(wl).toContainText("edu.cn");
+      await expect(wl.locator("li")).toHaveCount(1);
 
       // 新增：大小写归一化为小写，PUT 全量数组
       await wl.getByRole("textbox").fill("Springer.com");
@@ -7487,14 +7686,17 @@ test.describe("站内邮件（/mail）", () => {
       await expect.poll(() => calls.whitelist.length).toBe(1);
       expect(calls.whitelist[0]).toMatchObject({ domains: ["edu.cn", "springer.com"] });
       await expect(wl).toContainText("springer.com");
+      await expect(wl.locator("li")).toHaveCount(2);
 
-      // 移除：PUT 剩下的数组，chip 消失
+      // 移除：PUT 剩下的数组，那一行消失（行尾「移除」按钮常显，次要色）
+      await wl.locator("li").first().hover();
       await wl.getByRole("button", { name: "移除 edu.cn" }).click();
       await expect.poll(() => calls.whitelist.length).toBe(2);
       expect(calls.whitelist[1]).toMatchObject({ domains: ["springer.com"] });
       await expect(wl.getByText("edu.cn", { exact: true })).toHaveCount(0);
+      await expect(wl.locator("li")).toHaveCount(1);
 
-      // 保存失败：chip 不进列表（本地态不变），toast 报错
+      // 保存失败：那一行不进列表（本地态不变），toast 报错
       await wl.getByRole("textbox").fill("bad-domain.invalid");
       await wl.getByRole("button", { name: "添加", exact: true }).click();
       await expect.poll(() => calls.whitelist.length).toBe(3);
@@ -8442,9 +8644,9 @@ test.describe("agent 邮件入口（/mail/agent）", () => {
       await page.getByRole("link", { name: "agent 邮件" }).click();
       await expect(page).toHaveURL(/\/mail\/agent$/);
 
-      // 页头（4.13）：本次页 h1 + 左上角「返回邮件」（不是右上角、不叫「返回收件箱」）
+      // 页头（4.13）：本次页 h1 + 左上角「返回邮箱」（不是右上角、不叫「返回收件箱」）
       await expect(page.getByRole("heading", { name: "agent 邮件", level: 1 })).toBeVisible();
-      const agentBack = page.getByRole("link", { name: "返回邮件" });
+      const agentBack = page.getByRole("link", { name: "返回邮箱" });
       await expect(agentBack).toBeVisible();
       const agentH1 = (await page.getByRole("heading", { level: 1 }).boundingBox())!;
       const agentBackBox = (await agentBack.boundingBox())!;

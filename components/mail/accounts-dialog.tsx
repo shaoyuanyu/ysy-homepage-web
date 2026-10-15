@@ -12,7 +12,6 @@ import {
   PlusIcon,
   Trash2Icon,
   UserCogIcon,
-  XIcon,
 } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -239,10 +238,6 @@ export function AccountsDialog() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<MailAccount | null>(null);
   const [deleting, setDeleting] = useState(false);
-  // 远程图片白名单（4.4）：全局设置，与账号同级放在本弹窗；变更即时 PUT 全量
-  const [domains, setDomains] = useState<string[] | null>(null);
-  const [domainDraft, setDomainDraft] = useState("");
-  const [domainSaving, setDomainSaving] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetchWithTimeout("/api/mail/accounts");
@@ -250,61 +245,11 @@ export function AccountsDialog() {
     setAccounts((await res.json()) as MailAccount[]);
   }, []);
 
-  const loadDomains = useCallback(async () => {
-    const res = await fetchWithTimeout("/api/mail/remote-image-domains");
-    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
-    setDomains(((await res.json()) as { domains: string[] }).domains);
-  }, []);
-
   useEffect(() => {
     if (!open) return;
     setLoadError(null);
     load().catch((err) => setLoadError(err instanceof Error ? err.message : String(err)));
-    loadDomains().catch(() => toast.add({ title: t("whitelistFailed"), type: "error" }));
-  }, [open, load, loadDomains, t]);
-
-  /** 白名单变更即时落盘（PUT 全量数组，服务端归一化）；失败 toast 且不改本地态 */
-  const saveDomains = useCallback(
-    async (next: string[]): Promise<boolean> => {
-      setDomainSaving(true);
-      try {
-        const res = await fetch("/api/mail/remote-image-domains", {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ domains: next }),
-        });
-        if (!res.ok) {
-          throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
-        }
-        setDomains(((await res.json()) as { domains: string[] }).domains);
-        return true;
-      } catch (err) {
-        toast.add({
-          title: t("whitelistFailed"),
-          description: err instanceof Error ? err.message : String(err),
-          type: "error",
-        });
-        return false;
-      } finally {
-        setDomainSaving(false);
-      }
-    },
-    [t],
-  );
-
-  const addDomain = useCallback(async () => {
-    const d = domainDraft.trim().toLowerCase();
-    if (!d || !domains || domains.includes(d)) return;
-    if (await saveDomains([...domains, d])) setDomainDraft("");
-  }, [domainDraft, domains, saveDomains]);
-
-  const removeDomain = useCallback(
-    async (d: string) => {
-      if (!domains) return;
-      await saveDomains(domains.filter((x) => x !== d));
-    },
-    [domains, saveDomains],
-  );
+  }, [open, load]);
 
   const patch = useCallback((change: Partial<AddForm>) => {
     setForm((prev) => ({ ...prev, ...change }));
@@ -660,78 +605,87 @@ export function AccountsDialog() {
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 [scrollbar-color:var(--border)_transparent] [scrollbar-width:thin]"
           >
             <div className="flex flex-col gap-5">
-              {loadError && (
-                <p className="flex items-center gap-2 text-sm text-destructive">
-                  <CircleAlertIcon className="size-4" aria-hidden />
-                  {mailErrorText(loadError, tMail)}
-                </p>
-              )}
+              {/* 账号列表属于**账号管理视图**：表单（添加 / 编辑）打开时整块收起
+                  （2026-10-14 用户反馈）：它贴在表单字段上方，会被读成正在编辑的那个账号的
+                  资料的一部分。想改别的账号，先「取消」回到列表。 */}
+              {!adding && (
+                <>
+                  {loadError && (
+                    <p className="flex items-center gap-2 text-sm text-destructive">
+                      <CircleAlertIcon className="size-4" aria-hidden />
+                      {mailErrorText(loadError, tMail)}
+                    </p>
+                  )}
 
-              {/* 已添加账号列表 */}
-              <ul
-                data-slot="account-list"
-                className="flex flex-col divide-y divide-border rounded-lg border border-border"
-              >
-                {/* 加载态：账号还没回来时别留一个空边框盒子 */}
-                {accounts === null && !loadError && (
-                  <li className="flex items-center gap-2 px-3 py-5 text-sm text-muted-foreground">
-                    <Spinner /> {t("loading")}
-                  </li>
-                )}
-                {accounts?.map((a) => {
-                  // ⚠ 必须走 accountDotProps，**不能**直接把 a.color 当 CSS 颜色内联（2026-10-09 用户报
-                  //   「账号管理页显示的账号颜色和底栏指示器的有色差」）：色板色存的是**名字**
-                  //   （cyan/pink/violet/orange/teal），而它们恰好都是 **CSS 具名颜色**，`background-color: pink`
-                  //   解析出来是 `#FFC0CB`（淡粉），不是 Tailwind `pink-600` 的 `#DB2777`——不会报错、只是
-                  //   静默地画出另一个色，且没有 `dark:` 档。名字 → 类的映射只在 accountDotProps 里。
-                  const d = accountDotProps(a.color);
-                  return (
-                    <li key={a.id} className="flex items-center gap-3 px-3 py-2.5">
-                      <span
-                        className={cn("inline-block size-2.5 shrink-0 rounded-full", d.className)}
-                        style={d.style}
-                        aria-hidden
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">
-                          {accountName(a)}
-                          {!a.enabled && (
-                            <span className="ml-2 text-xs text-muted-foreground">{t("disabled")}</span>
-                          )}
-                        </p>
-                        {/* 标题已经是名字（备注名 / 发件人姓名）时单列一行邮箱；
-                            标题本身就是邮箱时（两者都空）不重复（2026-10-11） */}
-                        {accountDisplayName(a) ? (
-                          <p className="truncate text-xs text-muted-foreground">{a.email}</p>
-                        ) : null}
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={t("editAccount", { email: a.email })}
-                        title={t("editAccount", { email: a.email })}
-                        onClick={() => openEdit(a)}
-                      >
-                        <PencilIcon data-icon="default" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={t("deleteAccount", { email: a.email })}
-                        disabled={(accounts?.length ?? 0) <= 1}
-                        title={
-                          (accounts?.length ?? 0) <= 1
-                            ? t("keepOne")
-                            : t("deleteAccount", { email: a.email })
-                        }
-                        onClick={() => setPendingDelete(a)}
-                      >
-                        <Trash2Icon data-icon="default" />
-                      </Button>
-                    </li>
-                  );
-                })}
-              </ul>
+                  {/* 已添加账号列表 */}
+                  <ul
+                    data-slot="account-list"
+                    className="flex flex-col divide-y divide-border rounded-lg border border-border"
+                  >
+                    {/* 加载态：账号还没回来时别留一个空边框盒子 */}
+                    {accounts === null && !loadError && (
+                      <li className="flex items-center gap-2 px-3 py-5 text-sm text-muted-foreground">
+                        <Spinner /> {t("loading")}
+                      </li>
+                    )}
+                    {accounts?.map((a) => {
+                      // ⚠ 必须走 accountDotProps，**不能**直接把 a.color 当 CSS 颜色内联（2026-10-09 用户报
+                      //   「账号管理页显示的账号颜色和底栏指示器的有色差」）：色板色存的是**名字**
+                      //   （cyan/pink/violet/orange/teal），而它们恰好都是 **CSS 具名颜色**，`background-color: pink`
+                      //   解析出来是 `#FFC0CB`（淡粉），不是 Tailwind `pink-600` 的 `#DB2777`——不会报错、只是
+                      //   静默地画出另一个色，且没有 `dark:` 档。名字 → 类的映射只在 accountDotProps 里。
+                      const d = accountDotProps(a.color);
+                      return (
+                        <li key={a.id} className="flex items-center gap-3 px-3 py-2.5">
+                          <span
+                            className={cn("inline-block size-2.5 shrink-0 rounded-full", d.className)}
+                            style={d.style}
+                            aria-hidden
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium">
+                              {accountName(a)}
+                              {!a.enabled && (
+                                <span className="ml-2 text-xs text-muted-foreground">
+                                  {t("disabled")}
+                                </span>
+                              )}
+                            </p>
+                            {/* 标题已经是名字（备注名 / 发件人姓名）时单列一行邮箱；
+                                标题本身就是邮箱时（两者都空）不重复（2026-10-11） */}
+                            {accountDisplayName(a) ? (
+                              <p className="truncate text-xs text-muted-foreground">{a.email}</p>
+                            ) : null}
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={t("editAccount", { email: a.email })}
+                            title={t("editAccount", { email: a.email })}
+                            onClick={() => openEdit(a)}
+                          >
+                            <PencilIcon data-icon="default" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={t("deleteAccount", { email: a.email })}
+                            disabled={(accounts?.length ?? 0) <= 1}
+                            title={
+                              (accounts?.length ?? 0) <= 1
+                                ? t("keepOne")
+                                : t("deleteAccount", { email: a.email })
+                            }
+                            onClick={() => setPendingDelete(a)}
+                          >
+                            <Trash2Icon data-icon="default" />
+                          </Button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              )}
 
               {/* 添加 / 编辑账号：两张入口共用一张表单。
                   ⚠ **没有账号颜色选择器**（2026-10-10 用户要求）：色值完全由后端
@@ -997,62 +951,6 @@ export function AccountsDialog() {
                   </section>
                 </div>
               )}
-
-              {/* 远程图片白名单（4.4）：这些域名的图片直接显示不再拦截，子域名一并放行 */}
-              <section
-                data-slot="remote-image-whitelist"
-                className="flex flex-col gap-2 border-t border-border pt-4"
-              >
-                <div>
-                  <p className="text-sm font-medium">{t("whitelistTitle")}</p>
-                  <p className="text-xs text-muted-foreground">{t("whitelistDesc")}</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {domains?.map((d) => (
-                    <span
-                      key={d}
-                      className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs"
-                    >
-                      {d}
-                      <button
-                        type="button"
-                        aria-label={t("whitelistRemove", { domain: d })}
-                        disabled={domainSaving}
-                        onClick={() => void removeDomain(d)}
-                      >
-                        <XIcon className="size-3" aria-hidden />
-                      </button>
-                    </span>
-                  ))}
-                  {domains?.length === 0 && (
-                    <p className="text-xs text-muted-foreground">{t("whitelistEmpty")}</p>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <Input
-                    value={domainDraft}
-                    placeholder={t("whitelistPlaceholder")}
-                    aria-label={t("whitelistPlaceholder")}
-                    inputMode="url"
-                    onChange={(e) => setDomainDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        void addDomain();
-                      }
-                    }}
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0"
-                    disabled={domainSaving || !domainDraft.trim()}
-                    onClick={() => void addDomain()}
-                  >
-                    {t("whitelistAdd")}
-                  </Button>
-                </div>
-              </section>
             </div>
           </div>
 

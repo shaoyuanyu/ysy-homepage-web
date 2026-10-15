@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import {
   ArrowDownLeftIcon,
@@ -23,10 +23,12 @@ import {
   ReplyAllIcon,
   ReplyIcon,
   SendIcon,
+  ShieldCheckIcon,
   StarIcon,
   Trash2Icon,
   UserCheckIcon,
   UserPlusIcon,
+  XIcon,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -44,7 +46,7 @@ import { attachmentUrl, AttachmentPreview } from "@/components/mail/attachment-p
 import { CalendarInviteSection } from "@/components/mail/calendar-invite";
 import { JunkIcon, NotJunkIcon } from "@/components/mail/junk-icons";
 import { MOTION_SIZE, TOOLBAR_MS } from "@/components/mail/motion";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { useMailFullscreen } from "@/components/mail/pane-fullscreen";
 import { Badge } from "@/components/ui/badge";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { buttonVariants } from "@/components/ui/button";
@@ -76,6 +78,7 @@ import { toast } from "@/components/ui/toast";
 import { mailErrorText, mailErrorKind } from "@/lib/mail/error-text";
 import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
 import { JUNK_UNDO_WINDOW_MS } from "@/lib/mail/undo";
+import { useOwnAddresses } from "@/lib/mail/use-own-addresses";
 import type {
   MailAddress,
   MailAttachmentMeta,
@@ -88,6 +91,13 @@ import type {
  * 被压缩到不足一行时宁可整块折叠——露出半行文字的滚动条既看不清也点不准（见自动折叠）。
  */
 const THREAD_ROW_MIN_PX = 36;
+
+/**
+ * 域名形态（与服务端 `webmail/src/accounts.ts` 的 `DOMAIN_RE` 逐字一致：至少两个标签）。
+ * 「显示图片并加入白名单」只并入合形的域名——服务端对整单做校验，一个怪条目（IP 字面量
+ * 等）会让**整次**保存失败，不能因为一张图把其余的也带崩。
+ */
+const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 
 /**
  * 邮件状态变更广播（**双向**：详情页 ↔ 列表；2026-10-06 起只有「详情 → 列表」，
@@ -124,10 +134,6 @@ export function broadcastItemChange(change: MailItemChange): void {
   window.dispatchEvent(new CustomEvent(MAIL_ITEM_CHANGED_EVENT, { detail: change }));
 }
 
-function fmtAddress(list: MailAddress[]): string {
-  return list.map((a) => (a.name ? `${a.name} <${a.address}>` : (a.address ?? ""))).join(", ");
-}
-
 /**
  * 绝对日期时间（2026-10-04 用户指定）：详情页显示具体发出时间，
  * 不用「1 天前」这类相对措辞——读信场景要的是确切时间点。
@@ -158,16 +164,92 @@ function ActionLabel({ children }: { children: ReactNode }) {
   return <span className="hidden @min-[36rem]:inline">{children}</span>;
 }
 
-/** 收件人 / 抄送行（4.9）：超过 2 个折叠为「等 N 人」，点击展开 / 收起 */
-function AddressRow({ label, list }: { label: string; list: MailAddress[] }) {
+/** 方向箭头（2026-10-15 头部重排第三轮，用户定稿）——贴在**「我的账号」那个地址
+ *  旁边**：↙ 收件 / ↗ 发件，颜色沿用列表行角标（收件 emerald / 发件 amber）。
+ *
+ *  ⚠ 被用户否掉的三个位置（都实测过）：① 行首（名字 / 地址前）——把内容整体推右
+ *    约 20px，与「收件人」「日期」行的左缘对不齐，用户原话「空出太多间距，视觉
+ *    观感很差」；② 头像右下角角标（更早形态，头像已删）；③ 日期同行右上角。
+ *  ⚠ 间距 `ml-1`（4px）紧贴地址——用户明确要求「不要空出太多间距」。
+ *  ⚠ 「谁是我的账号」由 `useOwnAddresses()` 判定（webmail 账号 + agent 信箱）：
+ *    找不到我的地址时**不渲染**——判不出方向宁可不标，不做兜底猜测。
+ *  ⚠ `data-print="hide"`：纸上不印。
+ */
+function DirectionBadge({ dir, label }: { dir: "sent" | "received"; label: string }) {
+  return (
+    <span
+      data-slot="mail-direction-badge"
+      data-direction={dir}
+      role="img"
+      aria-label={label}
+      data-print="hide"
+      className="ml-1 inline-block align-[-2px]"
+    >
+      {dir === "sent" ? (
+        <ArrowUpRightIcon className="size-3.5 text-amber-600 dark:text-amber-400" aria-hidden />
+      ) : (
+        <ArrowDownLeftIcon className="size-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden />
+      )}
+    </span>
+  );
+}
+
+/** 收件人 / 抄送行（4.9）：超过 2 个折叠为「等 N 人」，点击展开 / 收起。
+ *
+ *  `ownEmails` + `badge`（2026-10-15 头部重排第三轮）：收件邮件里把方向箭头贴在
+ *  「我的账号」那个地址后面（判定与位置取舍见 DirectionBadge）。
+ *
+ *  ⚠ 2026-10-15 排版轮，断行策略两次修：
+ *  ① 原实现把整串地址 join 成一个字符串配 `break-all` → 断行从任意字符切开
+ *    （窄屏实测「sci-dean@ / sustech.e / du.cn」竖排碎片）。改成原子单元 + 显式
+ *    空格提供换行点。
+ *  ② 第一版把「姓名 <地址>」整体做成一个原子，但单个单元（~370px）超过窄容器时
+ *    浏览器会启用连字符断点（`<list-|math@sustech.edu.cn>`），地址还是被劈开；
+ *    拆成「姓名」「<地址>」两个原子后，放不下时整块换行到各自一行，地址内部
+ *    不会被拆（除非地址本身就比整行还宽，那时 `break-words` 兜底）。
+ *  ⚠ 逗号跟在地址原子内部：原子整体换行时逗号随之，不会出现孤零零一行的逗号。
+ *  ⚠ 原子之间必须留真实空格文本：inline-block 相邻若无空白就没有换行机会；
+ *    真实空格也让复制出来的列表仍是「A <a@x>, B <b@y>」而不是粘成一团。 */
+function AddressRow({
+  label,
+  list,
+  ownEmails,
+  badge,
+}: {
+  label: string;
+  list: MailAddress[];
+  /** 我的地址集合（小写）；与 `badge` 一起用时箭头只贴到我的那个地址后面 */
+  ownEmails?: ReadonlySet<string>;
+  /** 方向箭头（收件邮件的「收件人 / 抄送」行传 ↙；发件邮件的 ↗ 贴在发件人行） */
+  badge?: ReactNode;
+}) {
   const t = useTranslations("mail");
   const [expanded, setExpanded] = useState(false);
   const collapsed = list.length > 2 && !expanded;
+  const shown = collapsed ? list.slice(0, 2) : list;
   return (
     <div className="flex gap-2">
       <dt className="w-16 shrink-0 text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 break-all">
-        {fmtAddress(collapsed ? list.slice(0, 2) : list)}
+      <dd className="min-w-0">
+        {shown.map((a, i) => {
+          // 「我的地址」→ 把方向箭头贴在这个地址（含逗号）后面
+          const mine = !!badge && !!a.address && !!ownEmails?.has(a.address.toLowerCase());
+          return (
+            <Fragment key={`${a.address ?? ""}#${i}`}>
+              {a.name && (
+                <>
+                  <span className="inline-block max-w-full break-words">{a.name}</span>
+                  {" "}
+                </>
+              )}
+              <span className="inline-block max-w-full break-words">
+                {a.name ? `<${a.address}>` : a.address}
+                {i < shown.length - 1 ? ", " : ""}
+              </span>
+              {mine && badge}{" "}
+            </Fragment>
+          );
+        })}
         {list.length > 2 && (
           <button
             type="button"
@@ -186,6 +268,8 @@ function AddressRow({ label, list }: { label: string; list: MailAddress[] }) {
 export function MessageView({ messageId }: { messageId: string }) {
   const t = useTranslations("mail");
   const router = useRouter();
+  /** 「全屏查看」开关（状态在 MailShell，见 pane-fullscreen.tsx）：隐藏左栏列表、详情占满 */
+  const { full, setFull } = useMailFullscreen();
 
   const [detail, setDetail] = useState<MailDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -197,6 +281,12 @@ export function MessageView({ messageId }: { messageId: string }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [acting, setActing] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  /**
+   * 我的全部收发地址（webmail 账号 + agent 信箱）：「方向箭头贴到我的地址旁」的
+   * 判定源（2026-10-15 头部重排第三轮）。⚠ 必须无条件调用（在 `if (!detail)` 早退
+   * 之前）——hook 顺序不能随 detail 有没有而变。
+   */
+  const { ready: ownReady, emails: ownEmails } = useOwnAddresses();
   // 手动操作过 seen 的护栏（2026-10-06）：打开邮件时那次后台「标已读」的写回
   // 要连阿里云 IMAP（秒级），用户若在它落地前点了「标为未读」，这条晚到的响应
   // 会把刚设成未读的本地/列表状态覆写回已读——手动操作一旦发生，它就不再是
@@ -806,6 +896,90 @@ export function MessageView({ messageId }: { messageId: string }) {
   }, []);
 
   /**
+   * 「显示图片并加入白名单」（2026-10-14 用户要求）：同样当场显示，另外把本封被拦截
+   * 图片的**域名**并入白名单（4.4 的全站设置，改动即时生效）——以后同域名（含子域名）
+   * 的邮件直接显示，不用再点一次。
+   *
+   * - 并入的是图片 URL 的**主机名**（精确到子域），与白名单弹窗里手动添加的粒度一致；
+   *   取不出合法域名（如 IP 字面量）的跳过——服务端对整单做校验，一个怪条目会让整次
+   *   保存失败，不能因为一张图把其余的也带崩。
+   * - 显示与保存解耦：白名单写失败也照常显示（一次阅读不该被设置项挡住），失败给 toast。
+   * - 先 GET 现值再 PUT 全量（服务端语义是整体替换）——用户可能在别处刚改过白名单。
+   */
+  const showRemoteImagesAlways = useCallback(async () => {
+    const hosts = new Set<string>();
+    bodyRef.current?.querySelectorAll("img[data-remote-src]").forEach((img) => {
+      const src = (img as HTMLImageElement).dataset.remoteSrc;
+      if (!src) return;
+      try {
+        const host = new URL(src).hostname.toLowerCase();
+        if (DOMAIN_RE.test(host)) hosts.add(host);
+      } catch {
+        // data-remote-src 只由服务端写入 http(s) 原址；非 URL 理论上到不了这里
+      }
+    });
+    showRemoteImages();
+    if (hosts.size === 0) return;
+    try {
+      const res = await fetchWithTimeout("/api/mail/remote-image-domains");
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
+      const current = ((await res.json()) as { domains: string[] }).domains;
+      const merged = [...current];
+      for (const host of hosts) {
+        // 已被现有条目覆盖（精确命中或它的子域名）就不重复加
+        if (!merged.some((d) => host === d || host.endsWith(`.${d}`))) merged.push(host);
+      }
+      const put = await fetch("/api/mail/remote-image-domains", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ domains: merged }),
+      });
+      if (!put.ok) throw new Error((await put.json().catch(() => null))?.error ?? `${put.status}`);
+      toast.add({
+        title: t("remoteAllowAdded"),
+        description: new Intl.ListFormat(t("localeTag"), {
+          style: "narrow",
+          type: "conjunction",
+        }).format([...hosts]),
+        type: "success",
+      });
+    } catch (err) {
+      toast.add({
+        title: t("remoteImages.failed"),
+        description: err instanceof Error ? err.message : String(err),
+        type: "error",
+      });
+    }
+  }, [showRemoteImages, t]);
+
+  /**
+   * 全屏查看下按 Esc 还原（2026-10-14）。
+   * ⚠ 弹窗 / 菜单开着时 Esc 归它们（Base UI 自己处理），此时不抢——否则在删除确认框上
+   *   按 Esc 会顺手把全屏也退掉。其余不拦：快速回复输入框里按 Esc 退出全屏不丢任何东西
+   *   （文字在组件 state 里）。
+   * ⚠ **不要判 `e.defaultPrevented`**（最初写了，实测在浏览器里按 Esc 完全没反应）：
+   *   真按键走到 window 监听器时这个标记已经是 true，而全页**没有任何 JS** 调用过
+   *   preventDefault（打桩 `Event.prototype.preventDefault` 记录不到调用）——是宿主
+   *   浏览器自己把 Escape 当默认动作处理了。弹窗 / 菜单那两种真实冲突用下面的选择器挡住。
+   */
+  useEffect(() => {
+    if (!full) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (
+        document.querySelector(
+          '[data-slot="dialog-content"][data-open], [data-slot="dropdown-menu-content"][data-open]',
+        )
+      ) {
+        return;
+      }
+      setFull(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [full, setFull]);
+
+  /**
    * 打印前的「深底浅字」就地修正（2026-10-08）。
    *
    * 问题：发件人常把整块内容做成深色底 + 白字（页脚、按钮条、活动横幅），屏幕上没问题；
@@ -994,6 +1168,12 @@ export function MessageView({ messageId }: { messageId: string }) {
   // 收件 / 发件区分（2026-10-04 用户反馈）：副本全在「已发送」类文件夹 = 我发出的邮件。
   // 发件邮件隐藏「回复 / 回复全部 / 快速回复 / 存入通讯录」（这是功能侧的区分），见下方各处。
   const sent = isSentItem(detail.copies);
+  /** 发件人地址是不是我的账号（2026-10-15 第三轮）：决定发件人行贴不贴 ↗ */
+  const fromIsMine = ownReady && !!detail.fromAddr && ownEmails.has(detail.fromAddr.toLowerCase());
+  /** 收件邮件给「收件人 / 抄送」行的 ↙：只有匹配上我的地址才会真正渲染（见 AddressRow） */
+  const receivedBadge = !sent ? (
+    <DirectionBadge dir="received" label={t("filterReceived")} />
+  ) : undefined;
 
   // 两个状态化动作的文案：可见标签与 aria-label / title 共用同一个字符串
   // （窄容器下可见标签被隐藏，名字只剩 aria-label——见 ActionLabel）
@@ -1005,16 +1185,32 @@ export function MessageView({ messageId }: { messageId: string }) {
       {/* 操作栏
           ⚠ 「返回列表」仅窄屏需要：宽屏下左栏就是列表（MAIL-AGENT.md 4.12）。
           ⚠ 按钮层级（2026-10 用户指定，勿改回）：「回复」是本页最重要的动作——
-          唯一带边框、且放在**最右边**（主操作位）；「删除」去边框退为安静动作
+          唯一带边框、且放在**动作组最右**（主操作位）；「删除」去边框退为安静动作
           （有确认弹窗兜底，不需要边框强调）；其余全部 ghost。
-          ⚠ **这一行只放「对信的动作」、且必须一行放下（2026-10-07 用户验收反馈）**：
-          低频的「原始邮件 / 打印」收进最左端的「更多」菜单（见下）、「回复全部」并进
-          「回复」的下拉（见行末）。再往这里加按钮前先量宽度——右组可用宽只有 ~620px
-          （容器 max-w-6xl 下的详情栏），加一个四字按钮就把「转发 / 回复」顶到第二行。 */}
+          ⚠ **这一行必须一行放下（2026-10-07 用户验收反馈）**：低频的「原始邮件 / 打印」
+          收进最左端的「更多」菜单（见下）、「回复全部」并进「回复」的下拉（见行末）。
+          ⚠ **宽度余额只剩 24px（英文 15px）**（2026-10-14 实测：关闭在左端后合计中文
+          613 / 英文 622 ≤ 可用 637）——英文的 Read/Unread 就是为这块支出缩的；再来
+          任何一枚（≥34px）都会把「转发 / 回复」顶到第二行，先量再加。 */}
       <div className="@container flex flex-wrap items-center gap-2" data-slot="message-actions" data-print="hide">
-        {/* 更多（原始邮件 / 打印）：**第一行最左**（2026-10-07 用户指定——放主题行那种
-            「别的行」不合格）。放最左有个额外好处：宽屏下这一端本来是空的，不吃右组的
-            宽度预算 */}
+        {/* 关闭（2026-10-14 用户要求；几轮调位后定在**操作栏第一枚**、「更多」的左边）。
+            它与窄屏的「返回列表」（`lg:hidden`）互为对应物：窄屏整页 ↔ 宽屏关栏。
+            ⚠ 宽度账：操作栏合计中文 613 / 英文 622 ≤ 可用 637（余 24 / 15px）；
+              英文的 markRead/markUnread 已缩成 Read/Unread（en.json），别再放长。
+            ⚠ 窄屏（<lg）不渲染：那里工具栏里已有「返回列表」，同一动作不重复摆两遍。 */}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="hidden lg:inline-flex"
+          aria-label={t("close")}
+          title={t("close")}
+          onClick={() => router.push("/mail", mailNavOptions())}
+        >
+          <XIcon />
+        </Button>
+        {/* 更多（原始邮件 / 打印）：操作栏左端（2026-10-07 用户指定——放主题行那种
+            「别的行」不合格）。2026-10-14 起「关闭」在它左边，它不再是最左那枚；
+            放这一端有个额外好处：不吃右组的宽度预算 */}
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -1234,92 +1430,159 @@ export function MessageView({ messageId }: { messageId: string }) {
         </div>
       </div>
 
-      {/* 头部（4.9：发件人 Avatar + 相对时间，绝对时间放 title）
-          ⚠ 主题用 h2：页面 h1 是外壳的「邮件」，一封邮件是它下面的一块内容 */}
+      {/* 头部（2026-10-15 重排轮最终形态，用户四轮定稿）：删头像（首字母圈与紧邻的
+          名字完全重复，只剩装饰；列表页的头像保留做扫描锚点）、方向箭头贴到**「我的
+          账号」地址旁**（行首会把内容推右、与其它行的左缘对不齐，被用户当场否掉）、
+          日期**上移到标题正下方、左对齐**（第四轮用户定稿：先读「什么时候」，再读
+          「谁发的、发给谁」；前几轮试过「收件人行尾」与「dl 末行独立一行」，都嫌别扭）
+          ——头部从三段式「头像列｜标签列｜日期列」收敛成「标题块（主题 + 时间）+
+          标签列」。
+          ⚠ 主题用 h2：页面 h1 是外壳的「邮件」，一封邮件是它下面的一块内容。
+          ⚠ 主题行**不再放任何按钮**（2026-10-14 第五轮）：原先挂在这里的「关闭」
+            按用户要求进了操作栏（见右组末尾），全屏开关在中缝把手上（mail-shell.tsx）。
+            历史包袱：那两枚曾用绝对定位 + `lg:pr-8/16` 让位（主题行盒只有 26.4px，
+            流内 28px 按钮会把行顶高 4px、吃掉高度预算），现在都拆了。 */}
       <header className="flex flex-col gap-3">
-        <h2 className="text-2xl font-bold tracking-tight">
-          {detail.subject || t("noSubject")}
-        </h2>
-        <div className="flex items-start gap-3">
-          {/* data-slot="mail-avatar"：打印规则按它把头像连同方向角标一起去掉——
-              纸上没有交互也没有色彩语境，一个首字母圆圈只是噪音 */}
-          <span data-slot="mail-avatar" className="relative mt-0.5 shrink-0">
-            <Avatar size="lg">
-              <AvatarFallback>
-                {(detail.fromName || detail.fromAddr || "?").trim().charAt(0).toUpperCase()}
-              </AvatarFallback>
-            </Avatar>
-            {/* 方向角标（与列表行同一套视觉语言）：↙ 收件 / ↗ 发件，
-                箭头按方向着色（收件 emerald / 发件 amber） */}
-            <span
-              data-slot="mail-direction-badge"
-              data-direction={sent ? "sent" : "received"}
-              role="img"
-              aria-label={sent ? t("filterSent") : t("filterReceived")}
-              className="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full border border-border bg-background text-muted-foreground"
-            >
-              {sent ? (
-                <ArrowUpRightIcon className="size-3 text-amber-600 dark:text-amber-400" aria-hidden />
-              ) : (
-                <ArrowDownLeftIcon className="size-3 text-emerald-600 dark:text-emerald-400" aria-hidden />
-              )}
-            </span>
-          </span>
-          <dl className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
-            <div className="flex gap-2">
-              <dt className="w-16 shrink-0 text-muted-foreground">{t("fieldFrom")}</dt>
-              <dd className="min-w-0 break-all font-medium">
-                {detail.fromName ? `${detail.fromName} <${detail.fromAddr}>` : detail.fromAddr}
-                {/* 通讯录联动：未保存的收件人给「存入」入口，已保存的给勾标。
-                    发件邮件不显示——发件人是自己，本就在「我的账号」里，点了也会被拦下 */}
-                {detail.fromAddr && !sent && (
-                  detail.fromContactId ? (
-                    <UserCheckIcon
-                      data-print="hide"
-                      className="ml-1.5 inline-block size-3.5 align-[-2px] text-muted-foreground"
-                      aria-label={t("contacts.senderSaved")}
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      data-print="hide"
-                      className="ml-1.5 inline-flex align-[-2px] text-muted-foreground transition-colors hover:text-foreground"
-                      aria-label={t("contacts.addSender")}
-                      title={t("contacts.addSender")}
-                      onClick={saveSender}
-                    >
-                      <UserPlusIcon className="size-3.5" aria-hidden />
-                    </button>
-                  )
-                )}
-              </dd>
-            </div>
-            <AddressRow label={t("fieldTo")} list={detail.to} />
-            {detail.cc.length > 0 && <AddressRow label={t("fieldCc")} list={detail.cc} />}
-          </dl>
-          <span data-slot="mail-message-date" className="shrink-0 text-xs text-muted-foreground tabular-nums">
+        {/* 标题块 = 主题 + 时间（2026-10-15 第四轮用户要求）：时间与标题同一条左缘，
+            间距 4px 紧贴——它是整封信的元信息，不属于下面「发件人/收件人」那组键值对。 */}
+        <div className="flex flex-col gap-1">
+          {/* 主题（2026-10-15 排版轮）：原 24px（text-2xl）在长标题下动辄 5~8 行，
+              且 h2 全局 `leading-[1.1]` 对中文多行太挤（字形占满全身框，行贴行糊成
+              一坨）。降为桌面 20px / 窄屏 18px + `leading-[1.3]`——整块高度不增反
+              略降，行间能喘气；`text-balance` 让多行长度均匀、消掉孤字尾行。 */}
+          <h2 className="text-balance text-lg leading-[1.3] font-bold tracking-tight lg:text-xl">
+            {detail.subject || t("noSubject")}
+          </h2>
+          {/* 时间（2026-10-15 第四轮用户定稿）：小字、次要色、tabular-nums。
+              ⚠ 它已不在下面的 dl 里——那不是一节键值对，是整封信的元信息
+                （`data-slot` 保留：E2E 靠它断言「绝对时间、非相对措辞」） */}
+          <p
+            data-slot="mail-message-date"
+            className="text-xs text-muted-foreground tabular-nums"
+          >
             {absDateTime(detail.date, t("localeTag"))}
-          </span>
+          </p>
         </div>
+        {/* 头部重排（2026-10-15 用户拍板）：三段式「头像列｜标签列｜日期列」收敛成
+            「标签列 + 内容」两段——头像删除（它携带的信息与紧邻的名字完全重复，
+            详情页里只剩装饰；列表页的头像保留，多行扫描时要它做视觉锚点）、
+            方向角标缩成小图标并贴「我的账号」地址旁。日期不在这一组里（在标题下方）。 */}
+        <dl className="flex min-w-0 flex-col gap-1 text-sm">
+          <div className="flex gap-2">
+            <dt className="w-16 shrink-0 text-muted-foreground">{t("fieldFrom")}</dt>
+            {/* break-words（2026-10-15 排版轮）：断点优先落在空格处，邮箱放不下
+                才在内部硬断——break-all 会从 `@`、`.` 中间剖开地址。
+                ⚠ 名字 / `<地址>` 各是一个 inline-block 原子（同 AddressRow）：
+                放不下时整块换行，不会被从词中间劈开；原子之间留真实空格 */}
+            <dd className="min-w-0 break-words">
+              {detail.fromName ? (
+                <>
+                  <span className="inline-block max-w-full font-semibold break-words">
+                    {detail.fromName}
+                  </span>{" "}
+                  <span className="inline-block max-w-full break-words text-muted-foreground">
+                    &lt;{detail.fromAddr}&gt;
+                  </span>
+                </>
+              ) : (
+                <span className="font-semibold break-words">{detail.fromAddr}</span>
+              )}
+              {/* 发件邮件：↗ 贴在「我」的发件地址后面（收件邮件里发件人是对方，
+                  `fromIsMine` 为假、自然不贴） */}
+              {sent && fromIsMine && <DirectionBadge dir="sent" label={t("filterSent")} />}
+              {/* 通讯录联动：未保存的收件人给「存入」入口，已保存的给勾标。
+                  发件邮件不显示——发件人是自己，本就在「我的账号」里，点了也会被拦下 */}
+              {detail.fromAddr && !sent && (
+                detail.fromContactId ? (
+                  <UserCheckIcon
+                    data-print="hide"
+                    className="ml-1.5 inline-block size-3.5 align-[-2px] text-muted-foreground"
+                    aria-label={t("contacts.senderSaved")}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    data-print="hide"
+                    className="ml-1.5 inline-flex align-[-2px] text-muted-foreground transition-colors hover:text-foreground"
+                    aria-label={t("contacts.addSender")}
+                    title={t("contacts.addSender")}
+                    onClick={saveSender}
+                  >
+                    <UserPlusIcon className="size-3.5" aria-hidden />
+                  </button>
+                )
+              )}
+            </dd>
+          </div>
+          <AddressRow
+            label={t("fieldTo")}
+            list={detail.to}
+            ownEmails={ownEmails}
+            badge={receivedBadge}
+          />
+          {detail.cc.length > 0 && (
+            <AddressRow
+              label={t("fieldCc")}
+              list={detail.cc}
+              ownEmails={ownEmails}
+              badge={receivedBadge}
+            />
+          )}
+        </dl>
       </header>
 
       {/* 远程内容提示（4.4：默认剥除，显式点击逐封加载一次）
           ⚠ 2026-10-08：这一条**要印到纸上**——打印规则会隐藏被拦截的图片本身
           （纸上留虚线空框只是一个个"原本有图"的空洞），读者的知情权靠这行文字。
-          屏幕上那句（含"防止被追踪已读"的原因）与纸面上那句（说明图片不在打印件里）
-          是两条文案：入口「显示图片」在纸上没有意义，用 `data-print="hide"` 去掉。 */}
+          屏幕上那句与纸面上那句（说明图片不在打印件里）是两条文案：入口「显示图片」在纸上
+          没有意义，用 `data-print="hide"` 去掉。
+          ⚠ 2026-10-15：屏幕文案删掉了「（防止被追踪已读）」后注（用户点名没必要）——
+            「已拦截」已经说明这是有意为之，紧接着就是「显示图片」按钮，动作说明一切。 */}
       {detail.remoteBlocked > 0 && !remoteShown && (
         <div
           data-slot="mail-remote-notice"
-          className="flex items-center justify-between gap-3 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted-foreground"
+          className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted-foreground"
         >
           <span className="print:hidden">{t("remoteBlocked", { count: detail.remoteBlocked })}</span>
           <span className="hidden print:inline">
             {t("remoteBlockedPrint", { count: detail.remoteBlocked })}
           </span>
-          <Button data-print="hide" variant="outline" size="sm" onClick={showRemoteImages}>
-            {t("showRemote")}
-          </Button>
+          {/* 组合按钮（2026-10-15 第四轮用户要求：「显示图片」与「显示图片并加入白名单」
+              合并成一颗分裂按钮，默认/主按钮 = 「显示图片」）。
+              主按钮 = 只这一次（一次点击直达）；caret 菜单里 = 「显示图片并加入白名单」
+              （当场显示 + 把本封被拦截图片的主机名并入白名单，域名随 toast 列出）。
+              形态与工具栏「回复 / 回复全部」同一套：官方 `ButtonGroup` 管圆角与共边，
+              **不要再手写圆角/边框补丁**（见回复按钮那段的教训）。两者都是 outline，
+              边线是实色（不是 primary 那组的透明边），不存在 2px 亮缝问题。
+              ⚠ 提示条本身在纸上要留（见上），`data-print="hide"` 只挂在按钮组上。
+              ⚠ caret 的 aria-label（`showRemoteOptions`）**不能包含“更多”**——页面级
+                `getByRole("button", { name: "更多" })` 是子串匹配，会与工具栏那颗
+                「更多」双命中（2026-10-15 实测：打印用例当场红了） */}
+          <ButtonGroup data-print="hide">
+            <Button variant="outline" size="sm" onClick={showRemoteImages}>
+              {t("showRemote")}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    aria-label={t("showRemoteOptions")}
+                    title={t("showRemoteOptions")}
+                  >
+                    <ChevronDownIcon />
+                  </Button>
+                }
+              />
+              <DropdownMenuContent align="end" className="w-auto min-w-36">
+                <DropdownMenuItem onClick={() => void showRemoteImagesAlways()}>
+                  <ShieldCheckIcon />
+                  {t("showRemoteAlways")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </ButtonGroup>
         </div>
       )}
 
@@ -1332,16 +1595,11 @@ export function MessageView({ messageId }: { messageId: string }) {
           还不够（附件很多 + 会话很长 + 快速回复展开）时，才退回外层滚动。
           ⚠ 下限不能取大：实测一封普通邮件（正文 236px、面板 550px）展开快速回复需要正文缩到
           112px，取 160px 时外层就还会多出 16px 滚动——正是用户报的那个毛病。 */}
-      {/* 精简原文（附件门控，2026-10-08）：正文与内嵌图都在，只是附件没下载——
-          一句话说明 + 取回入口（点单个附件也会各取各的） */}
-      {detail.partial && (
-        <p
-          data-slot="mail-partial-notice"
-          className="rounded-xl border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
-        >
-          {t("partialHint")}
-        </p>
-      )}
+      {/* 精简原文（附件门控，2026-10-08）：正文与内嵌图都在，只是附件没下载。
+          ⚠ **内部状态一律不进 UI**（2026-10-14 用户三轮反馈的结论）：正文上方不渲染任何
+            提示条，附件行也不标任何「未下载 / 点击取回」标记——「本地有没有副本」「从
+            服务器拉回」都是系统内部概念，用户视角里附件就是点它拿到它。点单个附件各取
+            各的，等待感知由预览框的「正在读取…」承担。 */}
       {/* 只入库了索引（超大邮件 / 结构解析失败的兜底）：正文与附件都没有。给出说明与
           唯一的补救入口，否则这一页看起来就是「一封空邮件」（2026-10-07） */}
       {detail.truncated && !detail.partial && (
@@ -1381,7 +1639,7 @@ export function MessageView({ messageId }: { messageId: string }) {
       {/* 附件（2026-10-10：图片与纯文本可就地预览，其余类型仍是下载。
           ⚠ 推迟的附件（`deferred`）**不给缩略图**：缩略图会让这一屏对每个附件各发一次
             请求，而推迟的附件每取一次都要连邮箱（几秒），几张大图就能把页面卡住。
-            这些行照旧标着「未下载，点击取回」。 */}
+            延迟本身不给任何视觉标记（2026-10-14 第三轮）：附件就是一个可点开的东西。 */}
       {visibleAttachments.length > 0 && (
         <section className="flex flex-col gap-2">
           <h2 className="text-sm font-medium text-muted-foreground">
@@ -1434,11 +1692,6 @@ export function MessageView({ messageId }: { messageId: string }) {
                   <span className="text-xs text-muted-foreground tabular-nums">
                     {formatSize(a.size)}
                   </span>
-                  {a.deferred && (
-                    <span data-slot="attachment-deferred" className="text-xs text-muted-foreground">
-                      {t("attachmentDeferred")}
-                    </span>
-                  )}
                 </>
               );
               return (
@@ -1448,7 +1701,7 @@ export function MessageView({ messageId }: { messageId: string }) {
                       type="button"
                       data-slot="button"
                       // 推迟的附件：点下去服务端会先向邮箱取这一个部件（几秒），再回传
-                      title={a.deferred ? t("attachmentDeferred") : t("previewOpen")}
+                      title={t("previewOpen")}
                       onClick={() => setPreview(a)}
                       className={buttonVariants({ variant: "outline", size: "sm" })}
                     >
@@ -1459,7 +1712,6 @@ export function MessageView({ messageId }: { messageId: string }) {
                       href={url}
                       download={a.filename}
                       data-slot="button"
-                      title={a.deferred ? t("attachmentDeferred") : undefined}
                       className={buttonVariants({ variant: "outline", size: "sm" })}
                     >
                       {inner}
@@ -1683,7 +1935,11 @@ export function MessageView({ messageId }: { messageId: string }) {
             >
               {(detail.headers ?? []).map((h) => h.line).join("\n")}
             </pre>
-            {detail.truncated ? (
+            {/* 两条「不完整」文案（2026-10-14 用户反馈重写）：partial（正文在、附件没下）
+                与 truncated（连正文都没有）能做的事不一样，分清说 */}
+            {detail.partial ? (
+              <p className="text-sm text-muted-foreground">{t("rawMessagePartial")}</p>
+            ) : detail.truncated ? (
               <p className="text-sm text-muted-foreground">{t("rawMessageTruncated")}</p>
             ) : (
               <a

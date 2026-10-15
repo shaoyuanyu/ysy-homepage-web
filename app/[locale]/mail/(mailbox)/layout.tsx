@@ -1,5 +1,5 @@
 import { getTranslations, setRequestLocale } from "next-intl/server";
-import { BookUserIcon, BotIcon } from "lucide-react";
+import { BookUserIcon, BotIcon, SettingsIcon } from "lucide-react";
 
 import { requireOwner } from "@/lib/auth/owner";
 import { AccountsDialog } from "@/components/mail/accounts-dialog";
@@ -55,7 +55,7 @@ export default async function MailboxLayout({ children, params }: Props) {
           </h1>
           <p className="text-muted-foreground">{t("description")}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* 通讯录（联系人 CRUD + 自动收录） */}
           <Link
             href="/mail/contacts"
@@ -67,6 +67,15 @@ export default async function MailboxLayout({ children, params }: Props) {
           </Link>
           {/* 账号管理（增删邮箱账号，保存前做 IMAP/SMTP 连接测试） */}
           <AccountsDialog />
+          {/* 设置（全站范围的邮件设置，独立页面，见 4.4）：与通讯录同款 Link 入口 */}
+          <Link
+            href="/mail/settings"
+            data-slot="button"
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            <SettingsIcon data-icon="default" aria-hidden />
+            {t("settings.entry")}
+          </Link>
           {/* agent@ 只读入口（4.3：专门入口，不进合并视图与账号筛选） */}
           <Link
             href="/mail/agent"

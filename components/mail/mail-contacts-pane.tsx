@@ -229,7 +229,7 @@ export function MailContactsPane() {
             （搜索框才是主角），动效同源（gap + 文字轨道 + 透明度）。
             图标 = Mails（多封信，表示收件箱 + 发件箱的全景；2026-10-05 用户从候选中选定，
             替换了邮筒与返回箭头两版）。
-            窄屏下左栏整体隐藏，出口在撰写表单顶部（lg:hidden 的「返回邮件」）。 */}
+            窄屏下左栏整体隐藏，出口在撰写表单顶部（lg:hidden 的「返回邮箱」）。 */}
         <Link
           href="/mail"
           data-slot="button"

@@ -197,6 +197,22 @@ export function MailClient({
   // 控件 = 工具栏行 1 首个下拉（完整显示名称/地址）；底栏只保留只读指示。
   const [accountFilter, setAccountFilter] = useState<string>("all");
   /**
+   * 切账号筛选（2026-10-14 用户要求）：「切换邮箱账号时，右半区的邮件查看页面应该重置」——
+   * 右栏正看着的那封属于旧账号的列表，换了账号它多半已不在列表里（连左栏的高亮都没了），
+   * 留在右栏就是一封"无主"的信。切账号即回列表页，右栏回到「选择一封邮件」占位。
+   *
+   * ⚠ 只在**值真的变了**时重置：重新选当前账号等于什么都没做，不该把正读着的信踢掉。
+   * ⚠ 只管详情路由（`activeId` 非空）；撰写页不重置——写信与列表筛选无关
+   *   （写邮件页有自己的发件账号选择器）。
+   */
+  const changeAccountFilter = useCallback(
+    (next: string) => {
+      if (next !== accountFilter && activeId) router.push("/mail", mailNavOptions());
+      setAccountFilter(next);
+    },
+    [accountFilter, activeId, router],
+  );
+  /**
    * 当前视图 tab。**默认「全部」**（2026-10-10 第七轮用户指定，此前是「收件」），
    * 并把 tab **落进 URL**（`?view=…`）——用户同一轮提的「刷新页面后不应该把 tab 重置为
    * 默认 tab」：刷新/书签/分享都回到同一个 tab。
@@ -1770,7 +1786,7 @@ export function MailClient({
             <AccountMenu
               accounts={accounts}
               value={accountFilter}
-              onChange={setAccountFilter}
+              onChange={changeAccountFilter}
               collapsed={searchOpen}
               maxW={accountMaxW}
               onNeedWidth={setAccountWantW}

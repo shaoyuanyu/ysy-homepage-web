@@ -673,7 +673,7 @@ export function ComposeForm() {
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      {/* 「返回邮件」仅窄屏需要（2026-10-05 用户定稿：桌面端的出口是左栏工具栏里
+      {/* 本按钮（「返回邮箱」）仅窄屏需要（2026-10-05 用户定稿：桌面端的出口是左栏工具栏里
           的「返回邮箱」按钮，占原「写邮件」位置，两态对称——见 MailContactsPane）；
           窄屏左栏整体隐藏，这里是唯一退路。草稿自动保存，退出不丢内容。
           ⚠ `self-start` 必需：表单根是 flex-col（align-items: stretch 默认值），
