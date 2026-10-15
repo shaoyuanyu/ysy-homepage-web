@@ -3191,6 +3191,32 @@
       ]
     },
     {
+      "a": "ER",
+      "n": "International Conference on Conceptual Modeling",
+      "l": "C",
+      "f": "数据库/数据挖掘/内容检索",
+      "d": "https://dblp.org/db/conf/er/",
+      "years": [
+        {
+          "y": 2026,
+          "link": "https://www.er2026.org/",
+          "tz": "Etc/GMT+12",
+          "date": "October 6-8, 2026",
+          "place": "St. John's, NL, Canada",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2026-05-12 23:59:59"
+            },
+            {
+              "t": "2026-05-19 23:59:59",
+              "c": "Main conference full and short papers; extended deadlines; abstract"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "a": "ESA",
       "n": "European Symposium on Algorithms",
       "l": "B",
@@ -5371,6 +5397,19 @@
           "timeline": [
             {
               "t": "2026-04-04 12:00:00"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "http://ic-icc.cn/2027/index.php",
+          "tz": "Etc/GMT+12",
+          "date": "July 22-26, 2027",
+          "place": "Jinan, China",
+          "timeline": [
+            {
+              "t": "2027-03-15 23:59:59",
+              "c": "Regular papers; rebuttal notification April 15, 2027"
             }
           ]
         }
