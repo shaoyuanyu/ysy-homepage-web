@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
 import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
 import { OWNER_AUTH_CHANGED_EVENT, OWNER_CACHE_KEY } from "@/lib/auth/events";
+import { UNREAD_BADGE_CLASS } from "@/components/mail/unread-color";
 import { toast } from "@/components/ui/toast";
 
 /**
@@ -226,7 +227,8 @@ export function MailUnreadBadge() {
       data-slot="mail-unread-count"
       aria-label={t("unreadBadge", { count: total })}
       className={cn(
-        "ml-2 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-blue-600 px-1.5 align-super text-xs font-medium text-white tabular-nums dark:bg-blue-400 dark:text-blue-950",
+        "ml-2 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 align-super text-xs font-medium tabular-nums",
+        UNREAD_BADGE_CLASS,
         popKey > 0 && "mail-unread-pop",
       )}
     >

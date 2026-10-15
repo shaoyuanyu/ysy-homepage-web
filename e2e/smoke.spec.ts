@@ -4267,6 +4267,36 @@ test.describe("站内邮件（/mail）", () => {
       await unseenChip.click();
       await flaggedChip.click();
 
+      // 「未读」的蓝全站只有一档（2026-10-16 用户报「几处未读的颜色不统一」后统一，
+      // 低饱和靛蓝，见 components/mail/unread-color.ts）：「未读」开关未激活 = 线框环
+      // （无蓝）、激活 = 实心蓝点——与相邻「星标」（线框 → 实心）同构。色值本身不锁，
+      // 契约是「四处一致」（列表点 / 顶栏入口点 / 大标题角标 / 本开关激活点，互相比对）。
+      // ⚠ 开关点判据取**计算样式**而不是类名：Tailwind 变体类（group-aria-pressed/toggle:*）
+      //   的字面量恒在 class 里，toHaveClass 的子串匹配会恒真。
+      const dotStyle = () =>
+        unseenChip.locator('[data-slot="unseen-dot"]').evaluate((el) => {
+          const cs = getComputedStyle(el);
+          return { bg: cs.backgroundColor, border: cs.borderTopColor };
+        });
+      // 未激活 = 线框环（无底色）。⚠ 必须 poll：点上有 `transition-colors`，裸读会撞上
+      // 「实心蓝正在褪色」的中间帧（2026-10-16 全量实测：读到蓝 10% alpha 的中间值直接红）
+      await expect
+        .poll(async () => (await dotStyle()).bg, { message: "未激活的开关点最终应褪到无底色（线框环）" })
+        .toBe("rgba(0, 0, 0, 0)");
+      await unseenChip.click();
+      await expect(rows).toHaveCount(3);
+      const rowDotColor = await rows
+        .nth(0)
+        .locator('[data-slot="mail-unread-badge"]')
+        .evaluate((el) => getComputedStyle(el).backgroundColor);
+      // 激活 = 实心蓝点：与列表点同色，且 bg 与 border 同值（实心）；色值本身不锁
+      //（全站一档的契约是「四处一致」，值可随设计调整，见 components/mail/unread-color.ts）
+      await expect
+        .poll(dotStyle, { message: "激活后应与列表点同色（bg 与 border 同值 = 实心蓝点）" })
+        .toEqual({ bg: rowDotColor, border: rowDotColor });
+      await unseenChip.click();
+      await expect(unseenChip).toHaveAttribute("aria-pressed", "false");
+
       // 方向视图（2026-10-04 改版为 Tabs）：「发件」= 副本全在「已发送」的（1 封 s01）；
       // 「收件」= 有 INBOX 副本的（4 封，s01 被排除）
       await page.getByRole("tab", { name: "发件", exact: true }).click();
@@ -4289,6 +4319,15 @@ test.describe("站内邮件（/mail）", () => {
       await expect(rows.nth(0).locator('[data-slot="mail-unread-badge"]')).toHaveCount(1);
       await expect(rows.nth(1).locator('[data-slot="mail-unread-badge"]')).toHaveCount(0);
       await expect(rows.nth(2).locator('[data-slot="mail-unread-badge"]')).toHaveCount(1);
+      // 未读点的颜色：全站唯一一档（2026-10-16 起为低饱和靛蓝，见 components/mail/unread-color.ts）。
+      // 判据取「与顶栏「邮箱」入口点计算样式相等」而不是具体色值/类名——值可以调，四处一致才是契约
+      const navDot = page.locator('a[href="/mail"] [data-slot="mail-unread-badge"]');
+      await expect(navDot).toBeVisible();
+      const listDotColor = await rows
+        .nth(0)
+        .locator('[data-slot="mail-unread-badge"]')
+        .evaluate((el) => getComputedStyle(el).backgroundColor);
+      expect(await navDot.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(listDotColor);
       // 方向角标（2026-10-04 双向标记，用户指定）：每行都有；收件 ↙ / 发件 ↗
       await expect(rows.locator('[data-slot="mail-direction-badge"]')).toHaveCount(5);
       await expect(rows.nth(0).locator('[data-slot="mail-direction-badge"]')).toHaveAttribute("data-direction", "received");
@@ -4298,19 +4337,28 @@ test.describe("站内邮件（/mail）", () => {
       await expect(rows.nth(4).locator('[data-slot="mail-direction-badge"] svg')).toHaveClass(/text-amber-600/);
 
       // 已读/未读视觉区分（勿改回 bg-primary 灰点、勿改回独立圆点列）：未读 = 头像蓝角标 + 发件人/主题加粗 + 前景色；
-      // 已读 = 无角标 + 发件人/主题次要色（整行退到背景）
-      await expect(rows.nth(0).locator('[data-slot="mail-unread-badge"]')).toHaveClass(/bg-blue-600/);
+      // 已读 = 无角标 + 发件人次要色 + 主题 text-foreground/80（2026-10-16 起主题不再退到次要色——
+      // 它与摘要合并到同一行后，两者同色会糊成一片，分不出来）
+      // 大标题角标与列表点同色（「四处一致」的第三处；第四处 = 开关激活点，已在开关段落与列表点比过）
+      const titleBadge = page.locator('[data-slot="mail-unread-count"]');
+      await expect(titleBadge).toBeVisible();
+      expect(await titleBadge.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(listDotColor);
       // 每行都有头像（已读行不留空白槽）
       await expect(rows.locator('[data-slot="avatar"]')).toHaveCount(5);
       const rowStyle = (row: Locator) =>
         row.locator("[data-mail-row]").evaluate((el) => {
-          const [sender, subject] = Array.from(el.querySelectorAll<HTMLElement>("span.truncate"));
+          const [sender, subjectBlock] = Array.from(el.querySelectorAll<HTMLElement>("span.truncate"));
+          // 主题与摘要在合并块内：第一个内层 span = 主题，最后一个 = 摘要（无摘要时两侧同一）
+          const inner = subjectBlock.querySelectorAll<HTMLElement>("span");
+          const subject = inner[0];
+          const snippet = inner[inner.length - 1];
           const cs = (n: HTMLElement) => getComputedStyle(n);
           return {
             senderWeight: cs(sender).fontWeight,
             senderColor: cs(sender).color,
             subjectWeight: cs(subject).fontWeight,
             subjectColor: cs(subject).color,
+            snippetColor: cs(snippet).color,
           };
         });
       const unreadStyle = await rowStyle(rows.nth(0));
@@ -4319,10 +4367,12 @@ test.describe("站内邮件（/mail）", () => {
       expect(Number(unreadStyle.subjectWeight)).toBeGreaterThanOrEqual(600);
       expect(Number(readStyle.senderWeight)).toBeLessThan(600);
       expect(Number(readStyle.subjectWeight)).toBeLessThan(600);
-      // 已读行发件人与主题同为次要色；未读行同为前景色（颜色本身随主题变，只比行内一致性）
-      expect(readStyle.senderColor).toBe(readStyle.subjectColor);
-      expect(unreadStyle.senderColor).toBe(unreadStyle.subjectColor);
+      // 未读行发件人与已读行发件人颜色不同（前景色 vs 次要色）
       expect(readStyle.senderColor).not.toBe(unreadStyle.senderColor);
+      // 主题 + 摘要合并一行后，层次靠主题/摘要的色差：未读行、已读行的主题都必须比摘要深，
+      // 否则（已读行主题、摘要同为灰）两者在同一行里分不出来
+      expect(unreadStyle.subjectColor).not.toBe(unreadStyle.snippetColor);
+      expect(readStyle.subjectColor).not.toBe(readStyle.snippetColor);
 
       // 行内快捷操作（4.9）：hover 显现；点星标 → POST flags 乐观更新
       // ⚠ 两处都 `exact: true`（2026-10-11）：整行按钮的可访问名里含「已加星标」，

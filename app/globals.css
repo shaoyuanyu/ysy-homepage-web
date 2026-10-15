@@ -269,6 +269,88 @@
   }
 }
 
+/* ---- /mail 右栏占位插画（未选择邮件时，2026-10-16）----
+   中心是一封打开的信封（信纸升起、三行字写出），四周散着四封合上的信。
+   四封信各自缓慢浮动，7 秒一轮、错开相位；信纸一轮 12 秒（升起 1.6 秒、
+   字写完 2.7 秒，其余时间静止）。仅装饰：prefers-reduced-motion 下四封信
+   静止。 */
+
+@keyframes mail-placeholder-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+.mail-placeholder-float {
+  animation: mail-placeholder-float 7s ease-in-out infinite;
+}
+
+@keyframes mail-placeholder-rise {
+  0% {
+    transform: translateY(0);
+    animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  13.333% {
+    transform: translateY(-56px);
+    animation-timing-function: linear;
+  }
+  66.667% {
+    transform: translateY(-56px);
+    animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1);
+  }
+  80%,
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes mail-placeholder-write {
+  0% {
+    stroke-dashoffset: 1;
+  }
+  9% {
+    stroke-dashoffset: 0;
+  }
+  80% {
+    stroke-dashoffset: 0;
+  }
+  84%,
+  100% {
+    stroke-dashoffset: 1;
+  }
+}
+
+.mail-placeholder-letter {
+  animation: mail-placeholder-rise 12s infinite;
+}
+
+/* 行元素带 pathLength="1"，dasharray 与 dashoffset 都以「整条线 = 1」计 */
+.mail-placeholder-line {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: mail-placeholder-write 12s 1.6s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mail-placeholder-letter {
+    animation: none;
+    transform: translateY(-56px);
+  }
+
+  .mail-placeholder-line {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+
+  .mail-placeholder-float {
+    animation: none;
+  }
+}
+
 /* ---- 长正文（全站唯一使用衬线的场景）----
    要求：字号 ≥16px、行高 ≥1.6。衬线的 x-height 比无衬线小，同字号下视觉更小、
    笔画更细，必须靠更大字号 + 更松行距才达到同等可读性（Anthropic 文章正文

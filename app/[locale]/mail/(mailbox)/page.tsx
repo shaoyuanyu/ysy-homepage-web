@@ -1,6 +1,6 @@
 import { getTranslations, setRequestLocale } from "next-intl/server";
-import { MailIcon } from "lucide-react";
 
+import { MailPlaceholder } from "@/components/mail/mail-placeholder";
 import {
   Empty,
   EmptyDescription,
@@ -33,12 +33,14 @@ export default async function MailboxPage({ params }: Props) {
 
   // 宽屏下面板外壳（MailShell）已提供外框，这里只放居中内容，不再描虚线边
   return (
-    <Empty className="min-h-[24rem]">
-      <EmptyMedia variant="icon">
-        <MailIcon aria-hidden />
+    <Empty className="relative min-h-[24rem] overflow-hidden">
+      <EmptyMedia>
+        <MailPlaceholder />
       </EmptyMedia>
-      <EmptyHeader>
-        <EmptyTitle>{t("selectMessage")}</EmptyTitle>
+      {/* 文字压在自己的底色上，不让扩散中的轮廓穿过字面 */}
+      <EmptyHeader className="relative gap-3 bg-background px-8">
+        <EmptyTitle className="text-lg">{t("selectMessage")}</EmptyTitle>
+        <span className="h-px w-10 bg-border" />
         <EmptyDescription>{t("selectMessageHint")}</EmptyDescription>
       </EmptyHeader>
     </Empty>

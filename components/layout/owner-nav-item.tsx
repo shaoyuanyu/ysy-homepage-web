@@ -13,6 +13,8 @@ import {
 
 import { Link, usePathname, useRouter } from "@/lib/i18n/navigation";
 import { OWNER_AUTH_CHANGED_EVENT, OWNER_CACHE_KEY } from "@/lib/auth/events";
+import { cn } from "@/lib/utils";
+import { UNREAD_DOT_CLASS } from "@/components/mail/unread-color";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -57,8 +59,12 @@ function syncOwnerClass(next: boolean) {
 
 /** 「邮箱」入口（含未读提示，MAIL-AGENT.md 4.8）：
  *  各启用账号 INBOX 未读之和；圆点绝对定位不占布局宽度（顶部栏零余量约束）；
- *  样式为 6px 主色小圆点 + 背景色描边环——实心数字胶囊是一块突兀色块、
+ *  样式为 6px 蓝点 + 背景色描边环——实心数字胶囊是一块突兀色块、
  *  裸数字浮在图标外像屏幕脏点（两版均被否），圆点与 GitHub 通知点同惯例；
+ *  ⚠ 颜色 2026-10-16 由 `bg-primary`（中性黑白）改蓝：全站「未读」的蓝只有一档
+ *    （`UNREAD_DOT_CLASS`，见 components/mail/unread-color.ts——当天又按用户要求把
+ *    饱和度降下来，不再用 blue-600）——这枚黑点曾是全站唯一例外，用户报
+ *    「几处未读颜色不统一」时一并归入。**别再改回。**
  *  具体数字在 tooltip 与 /mail 页内呈现——title 挂在整个 Link 上（⚠ 勿挂
  *  在圆点或图标容器上：命中区域太小，悬停「邮箱」文字时触发不到）；
  *  挂载 + 窗口聚焦 + 登录态变化 + 5 分钟轮询；webmaild 不可达静默无提示；
@@ -106,7 +112,7 @@ function MailEntry({ className }: { className?: string }) {
           <span
             aria-hidden="true"
             data-slot="mail-unread-badge"
-            className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
+            className={cn("absolute -top-0.5 -right-0.5 size-1.5 rounded-full ring-2 ring-background", UNREAD_DOT_CLASS)}
           />
         )}
       </span>

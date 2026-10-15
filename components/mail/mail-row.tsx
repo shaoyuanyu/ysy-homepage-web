@@ -22,6 +22,7 @@ import { accountDotProps } from "@/components/mail/account-dot";
 import { accountName } from "@/components/mail/account-label";
 import { JunkIcon, NotJunkIcon } from "@/components/mail/junk-icons";
 import { MailRowCheckbox } from "@/components/mail/mail-batch-bar";
+import { UNREAD_DOT_CLASS } from "@/components/mail/unread-color";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import type { MailAccount, MailListItem } from "@/lib/mail/types";
@@ -235,7 +236,10 @@ function MailRowImpl({
             <span
               data-slot="mail-unread-badge"
               aria-label={t("filterUnseen")}
-              className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-blue-600 ring-2 ring-background dark:bg-blue-400"
+              className={cn(
+                "absolute -top-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-background",
+                UNREAD_DOT_CLASS,
+              )}
             />
           )}
           <span
@@ -276,13 +280,14 @@ function MailRowImpl({
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline gap-2">
             {/* 已读/未读三通道区分（勿只靠颜色）：未读 = 蓝角标 + 加粗 + 前景色时间；已读整行次要色退到背景。
-                ⚠ 首行名字位永远是「对方」：收件 = 发件人、发件 = 收件人（方向看头像角标，见 peerLabel） */}
-            <span className={cn("truncate text-sm", m.seen ? "text-muted-foreground" : "font-semibold")}>
-              {peerLabel()}
-            </span>
+                ⚠ 首行名字位永远是「对方」：收件 = 发件人、发件 = 收件人（方向看头像角标，见 peerLabel）
+                ⚠ 名字行分区（2026-10-16 归列，用户报「邮件列表 UI 有点乱」）：名字**前**只放账号色点
+                   （固定列，多行的色点竖直对齐），名字**后**只放右簇（附件 / 星标 / 日期，右对齐成一串）。
+                   别把色点 / 星标 / 回形针放回名字后面——它们会跟着名字长度浮动，每行停在不同位置，
+                   名字长的行里还会被顶到日期旁边（这正是「乱」的来源）。 */}
             {showAccountDots && (
               <span
-                className="flex shrink-0 items-center gap-0.5"
+                className="flex shrink-0 items-center gap-0.5 self-center"
                 title={m.accounts.map((id) => accountName(accountsById.get(id), id)).join("、")}
               >
                 {m.accounts.map((id) => (
@@ -294,24 +299,46 @@ function MailRowImpl({
                 ))}
               </span>
             )}
-            {m.flagged && <StarIcon className="size-3.5 shrink-0 fill-foreground" aria-label={t("flagged")} />}
-            {m.hasAttach && <PaperclipIcon className="size-3.5 shrink-0 text-muted-foreground" aria-label={t("hasAttachment")} />}
+            <span className={cn("truncate text-sm", m.seen ? "text-muted-foreground" : "font-semibold")}>
+              {peerLabel()}
+            </span>
+            {/* 右簇：附件 / 星标 / 日期（2026-10-16 归列）。三件同进同隐——hover 时整簇让位给
+                行内操作条；只让日期的话，★/📎 会被操作条直接盖住（它们现在就在操作条的下方区域）。 */}
             <span
               className={cn(
-                "ml-auto shrink-0 text-xs tabular-nums group-hover/row:invisible group-has-[:focus-visible]/row:invisible",
-                m.seen ? "text-muted-foreground" : "font-medium text-foreground",
-                // 会话行：计数按钮常驻在行尾，日期再往左让 40px（行本身已 pr-10 让了 40）
+                "ml-auto flex shrink-0 items-baseline gap-2 group-hover/row:invisible group-has-[:focus-visible]/row:invisible",
+                // 会话行：计数按钮常驻在行尾，整簇再往左让 40px（行本身已 pr-10 让了 40）
                 // —— 合计 80px ≥ 按钮的 ≈67px（三位数 ≈77px），两者不再叠印
                 hasThreadToggle && "mr-10",
               )}
             >
-              {dateText}
+              {m.hasAttach && (
+                <PaperclipIcon className="size-3.5 shrink-0 text-muted-foreground" aria-label={t("hasAttachment")} />
+              )}
+              {m.flagged && <StarIcon className="size-3.5 shrink-0 fill-foreground" aria-label={t("flagged")} />}
+              <span className={cn("text-xs tabular-nums", m.seen ? "text-muted-foreground" : "font-medium text-foreground")}>
+                {dateText}
+              </span>
             </span>
           </span>
-          <span className={cn("block truncate text-sm", m.seen ? "text-muted-foreground" : "font-semibold")}>
-            {subjectText}
+          {/* 主题 + 摘要合并成一行（2026-10-16 用户报「列表有点乱」）：主题在前、摘要随其后，
+              同一行截断。三行文本里主题与摘要常是同一句话的两版（列表里重复感强），合并后
+              每行只剩两行文本，扫视快一档（Gmail / Superhuman 同款语言）。
+              ⚠ 主题与摘要在同一行里靠**颜色**分层：未读 = 主题加粗前景色；已读 = 主题
+                `text-foreground/80`（**别再退回「已读主题次要色」——那样主题与摘要同为灰、
+                同一行里糊成一片，两边都读不出来**）；摘要恒为次要色。
+              ⚠ 这是**一个** `span.truncate`（主题与摘要文本流连续、在行尾统一截断）——
+                E2E 的 rowStyle 用 `span.truncate` 前两个取「名字 / 主题块」，新增独立
+                truncate 的 span 会把它错位。 */}
+          <span className="block truncate text-sm">
+            <span className={cn(m.seen ? "text-foreground/80" : "font-semibold")}>{subjectText}</span>
+            {m.snippet && (
+              <>
+                {" "}
+                <span className="text-muted-foreground">{m.snippet}</span>
+              </>
+            )}
           </span>
-          <span className="block truncate text-xs text-muted-foreground">{m.snippet}</span>
         </span>
       </button>
       {/* 行内快捷操作（4.9）：hover / 键盘聚焦时显现（日期同时让位）；
@@ -488,12 +515,8 @@ function ThreadChildRowImpl({ item: m, localeTag, showAccountDots, accountsById,
         onClick={() => onOpen(m)}
         className="flex w-full items-center gap-3 py-2 pr-4 pl-16 text-left text-sm transition-colors hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none"
       >
-        <span className={cn("shrink-0 truncate", m.seen ? "text-muted-foreground" : "font-semibold")}>
-          {peer}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-muted-foreground">
-          {subjectText}
-        </span>
+        {/* 账号色点与代表行同一套分区（2026-10-16 归列）：放在名字**前**的固定列，
+            不与右侧日期挤在一起 */}
         {showAccountDots && (
           <span className="flex shrink-0 items-center gap-0.5">
             {m.accounts.map((id) => (
@@ -508,6 +531,12 @@ function ThreadChildRowImpl({ item: m, localeTag, showAccountDots, accountsById,
             ))}
           </span>
         )}
+        <span className={cn("shrink-0 truncate", m.seen ? "text-muted-foreground" : "font-semibold")}>
+          {peer}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground">
+          {subjectText}
+        </span>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           {dateText}
         </span>

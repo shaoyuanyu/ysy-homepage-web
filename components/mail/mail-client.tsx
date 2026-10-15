@@ -39,6 +39,7 @@ import { MAIL_ACCOUNTS_CHANGED_EVENT } from "@/components/mail/accounts-dialog";
 import { MAIL_DRAFTS_CHANGED_EVENT } from "@/components/mail/compose-form";
 import { broadcastItemChange, MAIL_ITEM_CHANGED_EVENT, type MailItemChange } from "@/components/mail/message-view";
 import { MAIL_UNREAD_EVENT } from "@/components/mail/new-mail-notifier";
+import { UNREAD_TOGGLE_CLASS, UNREAD_TOGGLE_DOT_CLASS } from "@/components/mail/unread-color";
 import { AccountMenu } from "@/components/mail/account-menu";
 import { MailBatchBar } from "@/components/mail/mail-batch-bar";
 import { MailRow, ThreadChildRow } from "@/components/mail/mail-row";
@@ -1706,15 +1707,16 @@ export function MailClient({
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline gap-2">
-            <span className="truncate text-sm font-semibold">{d.to || t("draftNoRecipient")}</span>
             {/* 账号归属（多账号时）：与邮件列表行**同一套**——只给色点，账号名放 `title`
                 （悬浮可见），不写可见文本。第三轮曾在点后面明写备注名（当时为了让
                 「草稿不区分所属账户」一眼可见），结果只有这个 tab 多一截文字，用户
                 2026-10-10 报「为什么包含账号的备注名？其他 tab 都不这样」——统一回色点。
-                ⚠ 两处渲染必须同形：改这里请一并看邮件列表行的同名 marker（`m.accounts`）。 */}
+                ⚠ 两处渲染必须同形：改这里请一并看邮件列表行的同名 marker（`m.accounts`）。
+                ⚠ 2026-10-16 归列（与邮件列表行同步）：色点在收件人**前**（固定列），
+                   附件计数收进右簇（与日期同进同隐，hover 让位给删除按钮）。 */}
             {accounts.length > 1 && (
               <span
-                className="flex shrink-0 items-center gap-0.5"
+                className="flex shrink-0 items-center gap-0.5 self-center"
                 title={accountName(accountById(d.accountId), d.accountId)}
                 data-slot="draft-account"
               >
@@ -1727,18 +1729,21 @@ export function MailClient({
                 />
               </span>
             )}
-            {(d.attachments?.length ?? 0) > 0 && (
-              <span
-                className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground"
-                title={d.attachments?.map((a) => a.filename).join("、")}
-                data-slot="draft-attachments"
-              >
-                <PaperclipIcon className="size-3.5" aria-hidden />
-                {d.attachments?.length}
+            <span className="truncate text-sm font-semibold">{d.to || t("draftNoRecipient")}</span>
+            <span className="ml-auto flex shrink-0 items-baseline gap-2 group-hover/row:invisible group-has-[:focus-visible]/row:invisible">
+              {(d.attachments?.length ?? 0) > 0 && (
+                <span
+                  className="flex items-center gap-0.5 text-xs text-muted-foreground"
+                  title={d.attachments?.map((a) => a.filename).join("、")}
+                  data-slot="draft-attachments"
+                >
+                  <PaperclipIcon className="size-3.5" aria-hidden />
+                  {d.attachments?.length}
+                </span>
+              )}
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {formatDate(d.updatedAt, t("localeTag"))}
               </span>
-            )}
-            <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground group-hover/row:invisible group-has-[:focus-visible]/row:invisible">
-              {formatDate(d.updatedAt, t("localeTag"))}
             </span>
           </span>
           <span className="block truncate text-sm">{d.subject || t("noSubject")}</span>
@@ -2025,7 +2030,12 @@ export function MailClient({
           </div>
           {/* 开关的「状态由图标本身承担」（2026-10-05 用户定稿，勿改回纯文字 chip——
               「未读」纯文字读不出开/关；也不用勾选框/开关组件，理由见 MAIL-AGENT.md 4.9）：
-              未读 = 蓝点（亮起即开启，与头像未读点同色）；星标 = 星形线框 → 实心。
+              未读 = 线框环 → 实心蓝点；星标 = 星形线框 → 实心。两者同构（描边 → 填充）。
+              ⚠ 2026-10-16 改：原先是「25% 透明的蓝点 → 实心蓝点」，那在半透明状态下是
+                另一种浅蓝，与列表点 / 大标题角标的蓝对不上（用户报「几处未读的蓝不统一」）。
+                关态改**线框环**后，「未读」的蓝全站只剩一档——色值与整串类名都收在
+                `components/mail/unread-color.ts`（同日又按用户「深蓝不好看、降饱和度」
+                换成低饱和靛蓝），四处引用同一份，别再各写各的。
               ⚠ `multiple` 必须显式传：Base UI ToggleGroup 默认单选，不传则两开关互斥。
               ⚠ 值用「生效值」（2026-10-06 用户定稿，「垃圾」于 2026-10-10 第六轮加入）：
               「未读」在「发件」「草稿」「垃圾」禁用且显示为关——「发件」不可能有未读、
@@ -2052,11 +2062,20 @@ export function MailClient({
               value="unseen"
               size="sm"
               disabled={view === "drafts" || view === "sent"}
-              className="aria-pressed:bg-blue-600/10 aria-pressed:text-blue-700 dark:aria-pressed:bg-blue-400/15 dark:aria-pressed:text-blue-400"
+              className={UNREAD_TOGGLE_CLASS}
             >
+              {/* 开关点（2026-10-16 改线框环）：未激活 = 前景色描边圆环（无蓝）；
+                  激活 = 实心蓝点（border 与 bg 同色 = 一个实心圆）。与相邻「星标」开关的
+                  「线框星 → 实心星」完全同构。data-slot 供 E2E 取计算样式（⚠ 不能断类名：
+                  Tailwind 变体类（group-aria-pressed/toggle:*）字面量恒在 class 里，会恒真；
+                  ⚠ 且读数必须 expect.poll——点上 transition-colors，裸读会撞过渡中间帧）。 */}
               <span
                 aria-hidden="true"
-                className="size-2 rounded-full bg-blue-600 opacity-25 transition-opacity group-aria-pressed/toggle:opacity-100 dark:bg-blue-400"
+                data-slot="unseen-dot"
+                className={cn(
+                  "size-2 rounded-full border-[1.5px] border-foreground transition-colors",
+                  UNREAD_TOGGLE_DOT_CLASS,
+                )}
               />
               {/* 未读计数（2026-10-05 用户定稿二稿「无胶囊角标」）：数量 = 当前账号
                   筛选范围内 INBOX 未读之和（与底栏统计同口径 unreadTotal）；0 不渲染。
