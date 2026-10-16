@@ -867,6 +867,33 @@ section[id^="ccf-field"] {
   }
 }
 
+/* 邮件「专注模式」（`html[data-mail-focus]`，2026-10-16 用户要求）：
+   「在 mac 上邮件内容区（尤其高度）太小」的正面解法——把**站点外壳**整块让开：
+   顶栏 / 页脚 / 右下角浮动导航钮 / `/mail` 页头（标题 + 通讯录·账号·设置·agent 四颗入口）
+   全部隐藏，页面上下留白从 `py-12` 收到 0.5rem，邮件面板直接吃满视口。
+   高度公式里那两截（顶栏 3.5rem + 1px、页脚 4.0625rem）随之作废，改由这里直接给 `100dvh`
+   ——否则容器会比视口矮 122px，白留一条边。
+
+   ⚠ 状态由 `components/mail/mail-shell.tsx` 挂在 `<html>` 上（`data-mail-focus`）：
+     页面容器与页头都长在**服务端 layout** 里（根 layout 的顶栏/页脚更够不着），
+     只有 documentElement 是它们共同的祖先。
+   ⚠ 断点 `64rem` 与开关本身的 `lg` 门槛一致：窄屏详情本来就是整页，没有这回事。
+   ⚠ 页面容器要覆盖的是 Tailwind 的 `py-12` / `lg:h-[calc(100dvh_-_…)]`（同为单类选择器），
+     这里靠 `html[属性] [data-slot]` 的更高权重取胜，不靠顺序。 */
+@media (min-width: 64rem) {
+  html[data-mail-focus] .site-header,
+  html[data-mail-focus] [data-slot="site-footer"],
+  html[data-mail-focus] [data-slot="nav-fab"],
+  html[data-mail-focus] [data-slot="mail-page-header"] {
+    display: none;
+  }
+  html[data-mail-focus] [data-slot="mail-page"] {
+    height: 100dvh;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+}
+
 /* 打印邮件（2026-10-07）：只留邮件本体——顶栏 / 页脚 / 左栏列表 / 详情工具栏 / 底栏 /
    页内快速回复 / **邮件页的页头（标题 + 通讯录/账号/agent 入口）** / **右下角浮动导航钮**
    全部隐藏，右栏内容占满整页宽。挂 `data-print="hide"` 的元素 = 详情页工具栏、主题行
@@ -931,6 +958,12 @@ section[id^="ccf-field"] {
   .mail-body img,
   .mail-body table {
     max-width: 100% !important;
+  }
+  /* 附件区即使被收起来，纸上也要展开（2026-10-16 随折叠功能加）：屏幕上的「收起」
+     只是把高度让给正文，纸上没有这个矛盾，少印一段附着信息就是丢信息。
+     ⚠ 与「会话」的整块隐藏不矛盾：会话在纸上只是导航（跨邮件的跳转），附件是内容。 */
+  [data-slot="mail-attachments-panel"] {
+    grid-template-rows: 1fr !important;
   }
   /* 附件是「内容」不是「按钮」：去掉描边/内边距/固定高度，印成一行行文件名 + 大小；
      下载图标在纸上没有任何意义（点不了），一并去掉 */

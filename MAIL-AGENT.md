@@ -390,6 +390,10 @@ API 形状（均 JSON，下划线端点为站内代理的转发对象）：
   - ⚠ **E2E 断言用边框**颜色**而不是宽度**：`ghost` 的 `border-width` 也是 1px，只是颜色透明（实测：`ghost` = `rgba(0,0,0,0)`、`outline` = `oklch(0.922 0 0)`）。E2E 锁定「回复 x 坐标大于工具栏其它动作」（最右边）与「删除透明边框」；「回复」自 2026-10-07 起是实心 primary，与「写邮件」比 background/color/height 相等（不再是描边款）。
   - **回复全部**（`?replyTo=<id>&all=1`）：To = 原发件人 + 原收件人、Cc = 原抄送，两边都**剔掉自己各账号并去重**（依据 4.10 的「我的账号」）。⚠ 必须等 `ownReady` 再算（`useOwnAddresses` 就绪）——抢在账号列表到达前算就把自己算进收件人了。
   - **转发**（`?forward=<id>`）：主题 `Fwd:`、正文带引用头块（发件人/日期/主题/收件人/抄送，复用 `field*` 文案）、**原附件随转发装回附件列表**（内嵌图不算），⚠ **不**写 `In-Reply-To` / `References`（转发是新会话，写了会挂回原会话）。草稿键 `mail:draft:forward:<id>`。
+- **写信页的发件人两条规则（2026-10-16 用户要求，往返改过这两个点）**：
+  - **默认发件账号跟随入口**（用户原话：「点击写邮件时，应该优先以当前选择的账号作为发件人」）：入口链接带上账号 id —— 工具栏「写邮件」= 左栏当前的**账号筛选**（选「全部账号」时不带参数）、详情页的「回复 / 回复全部 / 转发」= **这封信副本所属账号**（`detail.copies[0].accountId`，与页内快速回复同一口径）、通讯录的「写信」不带。写信页只把它当**默认值**（`compose-form.tsx` 的 `prev || preferred?.id || enabled[0].id`）：草稿里存过账号时以草稿为准、用户手动换过也不覆盖、`from` 不在已启用账号里就回落第一个账号。
+  - **临时发件人姓名（「显示名」chip）**：用户原话「在给不同的人发件时，我的身份自述可能有变化」。入口 = 发件人行 chips 里第一枚「显示名」，点开在发件人行下方展开一行输入框（与「抄送 / 密送」同构、收起时不占高度）。**只作用于这一封**，绝不写回账号（账号级的 `senderName` 是长期身份）。发件人下拉的触发器就地显示**本封实际会发出的名字**（`临时名<邮箱>`）——所见即收件人所见；留空 = 回落账号的 `senderName`，回落与形态判定在 `send.ts::formatFrom()` 单点（草稿镜像走同一个函数）。⚠ 名字里的 `"` 与换行会被剔掉（否则撑破 From 头的引号包裹，也是自造头的注入面）。⚠ 请求体 `fromName` 与草稿字段 `drafts.from_name` 是**两个面**：前者给 webmaild 的 `/send`，后者让「写一半离开再回来」署名还在（镜像到服务商草稿文件夹的 From 也用它）。
+  - E2E：「写邮件默认发件人：跟随左栏当前账号；回复 / 转发跟随原信账号」「写邮件：显示名只作用于本封（请求体带 fromName，账号设置不动）」。
   - ⚠ 附件入列收敛到单个 `appendAttachments()`（用户拖拽/选择 与 转发预填共用），单个与总量上限同值；转发预填的 effect **不能**把 `attachments` 写进 deps（每加一个附件就会重拉原信），故用 `attachmentsRef` 镜像最新总量。
 - **已读/未读三通道区分（勿只靠颜色）**：未读 = 发件人头像**右上**蓝色角标（`bg-blue-600 dark:bg-blue-400`；右下是方向角标，各占一角互不重叠）+ 发件人/主题加粗 + 时间用前景色；已读 = 无角标 + 发件人次要色 + 主题 `text-foreground/80`（⚠ 2026-10-16 起主题**不再**退到次要色——它与摘要合并到同一行后，两者同色会糊成一片、两边都读不出来）。列表行左列是**每行都有**的发件人头像（首字母），⚠ **勿改回「未读点 + 已读空槽」的独立圆点列**——已读行白留一段空隙，观感奇怪（2026-10 用户反馈后改为头像列）；⚠ **未读标识勿用 `bg-primary`**：主站主色是中性近黑/近白，圆点会显得是「灰点」，语义不明。
 - **「未读」的蓝全站只有一个档（2026-10-16，勿各自调色）**：色值与类名一律走 `components/mail/unread-color.ts`（四个整串静态类名常量，四处 import）——列表行未读点（`UNREAD_DOT_CLASS`）/ `/mail` 大标题角标（`UNREAD_BADGE_CLASS`）/ 顶栏「邮箱」入口点（同 `UNREAD_DOT_CLASS`）/ 「未读」开关（`UNREAD_TOGGLE_CLASS` + `UNREAD_TOGGLE_DOT_CLASS`），四处同值。当前值 = 低饱和靛蓝 `#4E74C8`（dark `#8FADE8`，白底对比 ≈4.5:1）：当天第一版统一到 blue-600 后，用户「深蓝色不好看、换饱和度没这么高的」遂降饱和。
@@ -548,7 +552,7 @@ API 形状（均 JSON，下划线端点为站内代理的转发对象）：
   - ⚠ **勿把列表挪回 `page.tsx`**：那样每次打开邮件都会重新挂载列表，翻到第 30 封点开就被打回第一条、筛选也重置。
   - `requireOwner` 由 layout 统一守卫（这几个页面是客户端组件自己取数，没有服务端数据泄露面）；`/mail/compose`、`/mail/contacts`、`/mail/agent` **不在这个组里**，仍是各自独立的整页。
 - **容器宽度 = 站点标准列 `max-w-6xl`**：与顶栏 / 页脚 / 其它页面完全同一列（宽屏下容器 1152、内容 1104）。左列表固定 26rem（416），右栏 686。
-- **页面锁高（`app/[locale]/mail/(mailbox)/layout.tsx`，2026-10-03 用户反馈后落地）**：宽屏下页面容器 `lg:h-[calc(100dvh_-_3.5rem_-_1px_-_4.0625rem)]` + `lg:overflow-hidden`，即「视口 − 站点头部（`h-14` = 3.5rem + 1px 底边框）− 页脚（border-t 1px + py-6 ×2 + 一行 text-xs = 4.0625rem）」。
+- **页面锁高（`app/[locale]/mail/(mailbox)/layout.tsx`，2026-10-03 用户反馈后落地）**：宽屏下页面容器 `lg:h-[calc(100dvh_-_3.5rem_-_1px_-_4.0625rem)]` + `lg:overflow-hidden`，即「视口 − 站点头部（`h-14` = 3.5rem + 1px 底边框）− 页脚（border-t 1px + py-6 ×2 + 一行 text-xs = 4.0625rem）」。⚠ 容器带 `data-slot="mail-page"`、页头带 `data-slot="mail-page-header"`：**专注模式**（见下）按这两个钩子隐藏 / 改高（`html[data-mail-focus]`，规则在 `app/globals.css`）。
   - **为什么必须锁**：面板高度若由内容决定，「全部」有几十封就把页面撑长、切到「未读 / 星标」（只剩几封）又缩成一小条，像页面在抽动（用户反馈）。锁高后面板高度只由视口决定，三种筛选下**像素级相同**，长列表在面板内部滚动、页面本身不滚（页脚正好收在折线处）。
   - ⚠ **4.0625rem 是与页脚的耦合常量**：页脚改了内边距/字号而不改这个数，后果只是页面多出一条几十像素的滚动条（软失败，不会错位）——改页脚时顺手核对一次。
   - 窄屏不加锁（`lg:` 前缀），保持整页滚动，与手机邮件客户端一致。
@@ -593,7 +597,7 @@ API 形状（均 JSON，下划线端点为站内代理的转发对象）：
   - ⚠ **位置演变（别再退回）**：两枚并排主题行右上角（被点名「飘在标题上、不顺手」）→ 第四轮全屏进中缝把手 + 关闭留标题行 → 第五轮「关闭放到工具栏」（右端）→ 第六轮挪左端（「更多」之后）→ 第七轮按用户要求移到「更多」左边、成为第一枚。「更多」不再是最左那枚（2026-10-07 的指定只管「放操作栏左端、别放主题行」）。标题行从此不放按钮（`lg:pr-8` 让位已删，主题行盒 26.4px、高度预算 ~1px 的旧包袱一并拆掉）。
   - ⚠ **宽度账（顺序不影响）**：操作栏合计中文 613 / 英文 622 ≤ 可用 637（余 24 / 15px）；**英文的 `markRead`/`markUnread` 为此缩成 `Read`/`Unread`**（en.json），别再放长。E2E 锁：操作栏仍只有一行（既有用例）、操作栏里没有全屏开关、关闭是操作栏第一枚（「更多」之前）、把手竖直居中、全屏/关闭效果（一条用例）。
   - **全屏查看 = 中缝把手**（`mail-shell.tsx` 的 `data-slot="mail-pane-fullscreen"`）：贴在两栏分界线上、**竖直居中**（`pane-detail` 内 `absolute top-1/2 left-0 h-11 w-5 -translate-y-1/2`，`border-l-0` 借中缝 / 面板边框当左边界——两种状态都不缺边；宽 20px 是量出来的：右栏内容从 `lg:px-6` 起）、图标 `PanelLeftClose / PanelLeftOpen`、`lg` 起渲染、只在详情路由出现。点击隐藏左栏列表、详情占满整个面板（686 → 1102）。状态 `fullscreen` + `MailFullscreenProvider`（`components/mail/pane-fullscreen.tsx`；⚠ 单独一个文件——Shell → MailClient → MessageView 已是一条导入链，MessageView 再反过来导入 Shell 就成环）。全屏时 grid 列模板从 `26rem + minmax(0,1fr)` 改成单列、左栏 `display:none`（**保持挂载**：滚动位置 / 已加载分页 / 筛选都留着）、右栏摘掉中缝 `border-l`。**只在详情路由生效**（`isMessage && fullscreen`），离开详情路由自动复位（否则「打开 → 回复 → 回来」会莫名其妙又全屏）；**不持久化**（刷新回普通形态）。
-  - **Esc 还原**（`message-view.tsx` 里的 window keydown）：弹窗 / 菜单开着时不抢（判据 `[data-slot="dialog-content"][data-open], [data-slot="dropdown-menu-content"][data-open]`）。⚠ **不要判 `e.defaultPrevented`**：真按键走到 window 监听器时它已经是 true，而全页**没有任何 JS** 调用过 `preventDefault`（打桩 `Event.prototype.preventDefault` 记不到调用）——是宿主浏览器自己把 Escape 当默认动作处理了；加了这一条 Esc 就完全失效（实测踩过）。
+  - **Esc 还原**（`message-view.tsx` 里的 window keydown）：弹窗 / 菜单开着时不抢（判据 `[data-slot="dialog-content"][data-open], [data-slot="dropdown-menu-content"][data-open]`）。⚠ **不要判 `e.defaultPrevented`**：真按键走到 window 监听器时它已经是 true，而全页**没有任何 JS** 调用过 `preventDefault`（打桩 `Event.prototype.preventDefault` 记不到调用）——是宿主浏览器自己把 Escape 当默认动作处理了；加了这一条 Esc 就完全失效（实测踩过）。⚠ 专注模式共用这个监听器：两个开关都开着时**一次 Esc 全还原**（`if (!full && !focus) return;` 那行判据要同时看两者）。
   - **关闭**：`router.push("/mail", mailNavOptions())` → 右栏回到「选择一封邮件」占位，左栏列表不动（宽屏没有「返回列表」，这是它的宽屏对应物）。
 - **切账号重置右栏（2026-10-14 用户要求）**：在账号选择器里换账号（`mail-client.tsx` 的 `changeAccountFilter`）时，若右栏正看着一封详情，则 `router.push("/mail", mailNavOptions())` 把它收起来——否则右栏留着一封「属于旧账号列表」的无主邮件（左栏连高亮都没了）。⚠ 只在值**真的变了**时重置（重选当前账号等于什么都没做，不该把正读着的信踢掉）；撰写页不受影响（写信与列表筛选无关）。
 - **语义**：页面 `h1` 是外壳的「邮件」，所以邮件主题改成 **`h2`**（一封邮件是它下面的一块内容，一个文档一个 h1）。详情页的「返回列表」加 **`lg:hidden`**——宽屏左栏就是列表，那个按钮纯属噪音。
@@ -831,6 +835,10 @@ API 形状（均 JSON，下划线端点为站内代理的转发对象）：
 - ⚠ 缩略图**只给已随同步下载的附件**（`deferred !== true`）：缩略图会让这一屏对每个附件各发一次请求，而推迟的附件每取一次都要连邮箱（几秒），几张大图就能把页面卡住。
 - ⚠ 文本一律走 `<pre>{text}</pre>`（React 转义），**绝不** `dangerouslySetInnerHTML`——附件内容来自不受信任的发信人。
 - 文本读取上限 200k 字符，取件超时 60 秒（与「取回原文」同一档）。
+- **附件区可折叠（2026-10-16 用户要求）**：标题行就是开关（`data-slot="mail-attachments-toggle"`，左侧「附件（N）」+ 右侧 chevron，`aria-expanded` + `aria-controls`），折叠用 grid 轨道 `1fr↔0fr`（与「会话」「快速回复」同一套做法与曲线），收起时内容保持挂载但整块 `inert`。E2E 钩子：`data-slot="mail-attachments"` + `data-open`（与「会话」同构）。
+  - **默认展开、且不做自动折叠**：附件是内容，一眼看不见就是丢信息；它也没有「压到一行还能看」的替身形态（「会话」有，所以那个才允许被自动收起）。换一封信回到展开位、不持久化。
+  - ⚠ **纸面上强制展开**（`globals.css` 的 `[data-slot="mail-attachments-panel"] { grid-template-rows: 1fr !important }`）：屏幕上的收起只是把高度让给正文，纸上没有这个矛盾，少印一段附着信息就是丢信息；chevron 挂 `data-print="hide"`。与「会话」整块隐藏不矛盾——会话在纸上只是导航，附件是内容。
+  - ⚠ E2E 别用 `expect(li).toBeHidden()` 判收起：被祖先 `overflow-hidden` 裁掉**不算** Playwright 的「隐藏」（它只看元素自己的盒），永远为真；判据是面板高度归零 + `inert`（外加段落高度收缩）。
 
 **② 日历邀请一键加入**
 

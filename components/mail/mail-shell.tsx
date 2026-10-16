@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
-import { PanelLeftCloseIcon, PanelLeftOpenIcon } from "lucide-react";
+import { Maximize2Icon, Minimize2Icon, PanelLeftCloseIcon, PanelLeftOpenIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { usePathname } from "@/lib/i18n/navigation";
@@ -67,10 +67,44 @@ export function MailShell({ children }: { children: ReactNode }) {
    */
   const [fullscreen, setFullscreen] = useState(false);
   const full = isMessage && fullscreen;
+  /**
+   * 「专注模式」（2026-10-16 用户要求）：把**站点外壳**让开，好让邮件内容区更高。
+   *
+   * 起因：「在 mac 上邮件内容区（尤其高度）太小」——900 高的视口里，顶栏 57 + 页脚 65 +
+   * 页面上下留白 96 + 页头（标题 + 描述 + 四颗入口）~100 之后，右栏只剩 ~420px。
+   * 打开它：顶栏 / 页脚 / 浮动导航钮 / 页头全部隐藏、留白从 48px 收到 8px，面板直接
+   * 吃满视口（~740px）。
+   *
+   * - 与「全屏查看」（收左栏）是**两个独立开关**：两个都开时只剩邮件本体，Esc 一次全还原。
+   * - 只在**详情路由**生效（同 fullscreen：`/mail` 与撰写页没有「整页读一封信」这回事）。
+   * - 不持久化（与「全屏查看」「快速回复折叠」同一个口径：临时阅读形态，不是设置）。
+   */
+  const [focus, setFocus] = useState(false);
+  const focused = isMessage && focus;
   useEffect(() => {
-    if (!isMessage) setFullscreen(false);
+    if (!isMessage) {
+      setFullscreen(false);
+      setFocus(false);
+    }
   }, [isMessage]);
-  const fullscreenContext = useMemo(() => ({ full, setFull: setFullscreen }), [full]);
+  /**
+   * 专注模式靠**挂在 `<html>` 上的属性**生效（规则在 `app/globals.css`）：
+   * 要隐藏的顶栏 / 页脚在根 layout、页头在 `(mailbox)/layout.tsx`——都是服务端组件，
+   * 够不着这个客户端 state；`documentElement` 是它们共同的祖先，一条属性全局通吃。
+   * ⚠ 只能在 effect 里挂（SSR 时没有 document）：首帧仍是普通形态，水合后立刻切过去。
+   */
+  useEffect(() => {
+    const root = document.documentElement;
+    if (focused) root.dataset.mailFocus = "";
+    else delete root.dataset.mailFocus;
+    return () => {
+      delete root.dataset.mailFocus;
+    };
+  }, [focused]);
+  const fullscreenContext = useMemo(
+    () => ({ full, setFull: setFullscreen, focus: focused, setFocus }),
+    [full, focused],
+  );
 
   return (
     <MailFullscreenProvider value={fullscreenContext}>
@@ -120,6 +154,34 @@ export function MailShell({ children }: { children: ReactNode }) {
               （28px 宽）——扩进左栏的 4px 是它的 padding 区（内容距右缘 16px），安全。
             ⚠ 只在详情路由渲染（非详情没有「列表可收」）、`lg` 起才显示（窄屏详情本来
               就是整页，工具栏里有「返回列表」，不放第二份）。 */}
+        {/* 「专注模式」（2026-10-16 用户要求）：与下面的「全屏查看」**同一列、同一形态**
+            （中缝把手，竖直居中处往上 52px——`-mt-12` + 自己的 `-translate-y-1/2` 平移，
+            正好与它下面那枚留 4px 间隙），鼠标沿中缝扫过两个开关都在手里。
+            ⚠ **不动下面那枚的位置**：中缝把手「竖直居中」是 2026-10-14 用户定的，
+               E2E 也按「中心与 pane-detail 中心对齐（±2px）」钉着（所以这里是上枚偏移、
+               而不是把两枚当成一组居中）。
+            ⚠ **为什么放中缝而不是操作栏 / 页头**：① 操作栏宽度账已满（中文 613 / 英文 622
+               ≤ 可用 637，再挤一枚就一定折行）；② 页头正是本模式要隐藏的东西，
+               把开关放进去就等于它一点下去自己也消失（没有退出路径）。
+            ⚠ 渲染条件与中缝把手逐字一致：仅详情路由、`lg` 起——窄屏详情本来就整页，
+               没有「顶栏占高度」这回事（顶栏只是往上卷走了）。 */}
+        {isMessage && (
+          <button
+            type="button"
+            data-slot="mail-focus-mode"
+            data-print="hide"
+            aria-label={focused ? t("exitFocusMode") : t("focusMode")}
+            title={focused ? t("exitFocusMode") : t("focusMode")}
+            onClick={() => setFocus((v) => !v)}
+            className="absolute top-1/2 left-0 z-10 -mt-12 hidden h-11 w-5 -translate-y-1/2 items-center justify-center rounded-r-md border border-l-0 border-border bg-background text-muted-foreground transition-colors before:absolute before:inset-y-0 before:-inset-x-1 before:content-[''] hover:bg-accent hover:text-foreground lg:flex"
+          >
+            {focused ? (
+              <Minimize2Icon className="size-3.5" aria-hidden />
+            ) : (
+              <Maximize2Icon className="size-3.5" aria-hidden />
+            )}
+          </button>
+        )}
         {isMessage && (
           <button
             type="button"

@@ -39,6 +39,8 @@ interface DraftPayload {
   kind: MailDraft["kind"];
   kindRef: string;
   accountId: string;
+  /** 临时发件人姓名（2026-10-16）：随草稿一起存，写一半离开再回来看得到自己署的名 */
+  fromName: string;
   to: string;
   cc: string;
   bcc: string;
@@ -119,6 +121,14 @@ export function ComposeForm() {
   const forwardId = searchParams.get("forward");
   // 通讯录「写信」入口预填收件人
   const toParam = searchParams.get("to");
+  /**
+   * 默认发件账号（2026-10-16 用户要求）：
+   * - `?from=<账号 id>`：写邮件入口（左栏账号筛选跟着进来）与详情页的回信 / 转发都带它
+   *   ——「我现在是谁」由入口决定，而不是永远取账号列表第一个；
+   * - 只当**默认值**：草稿里存的 accountId 优先（见下方恢复 effect 与 accounts effect 的
+   *   `prev ||` 写法），用户手动改过也不覆盖。
+   */
+  const fromParam = searchParams.get("from");
   /** 从草稿箱进入（?draft=<id>）：显式编辑该草稿（只加载它的内容，不做回复/转发预填） */
   const urlDraftId = searchParams.get("draft");
   // 自己的地址（4.10）：补全第一位用，回复全部时还要据此把自己的地址从收件人里剔掉
@@ -126,6 +136,14 @@ export function ComposeForm() {
 
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [fromId, setFromId] = useState("");
+  /**
+   * 临时发件人姓名（2026-10-16 用户要求）：「在给不同的人发件时，我的身份自述可能有变化」。
+   * 只作用于**这一封**，不写回账号设置（账号级的 senderName 是长期身份，这里是本封邮件的署名）。
+   * 空串 = 用账号自己的发件人姓名（回落逻辑在 webmail 的 send.ts / draft-mirror.ts）。
+   */
+  const [fromName, setFromName] = useState("");
+  /** 「显示名」行是否展开（与「抄送 / 密送」同构：chip 展开对应输入行，收起时不占高度） */
+  const [fromNameShown, setFromNameShown] = useState(false);
   const [to, setTo] = useState("");
   const [cc, setCc] = useState("");
   const [bcc, setBcc] = useState("");
@@ -183,6 +201,7 @@ export function ComposeForm() {
     kind: "new",
     kindRef: "",
     accountId: "",
+    fromName: "",
     to: "",
     cc: "",
     bcc: "",
@@ -210,6 +229,7 @@ export function ComposeForm() {
     kind: draftKind,
     kindRef: draftKindRef,
     accountId: fromId,
+    fromName,
     to,
     cc,
     bcc,
@@ -230,11 +250,16 @@ export function ComposeForm() {
       .then((data: MailAccount[]) => {
         const enabled = data.filter((a) => a.enabled);
         setAccounts(enabled);
-        // 草稿恢复可能已选了发件账号：只在未选时给默认（勿覆盖）
-        if (enabled.length > 0) setFromId((prev) => prev || enabled[0].id);
+        // 草稿恢复可能已选了发件账号：只在未选时给默认（勿覆盖）。
+        // 默认值优先取 `?from=`（入口带来的账号），它不在已启用列表里时退回第一个账号
+        if (enabled.length > 0) {
+          const preferred = enabled.find((a) => a.id === fromParam);
+          setFromId((prev) => prev || preferred?.id || enabled[0].id);
+        }
       })
       .catch(() => {});
-  }, []);
+    // ⚠ `fromParam` 只读一次（本 effect 只在挂载时拉账号列表）：入口参数不会在写信期间变
+  }, [fromParam]);
 
   /** 草稿内容应用（「非空才覆盖」：空字段留给回复 / 转发预填，不清掉已有值；
    *  带内容的抄送 / 密送行自动展开，否则内容会藏在收起行里） */
@@ -247,6 +272,7 @@ export function ComposeForm() {
       body?: string;
       receipt?: boolean;
       accountId?: string;
+      fromName?: string;
       inReplyTo?: string;
       references?: string[];
     }) => {
@@ -263,6 +289,11 @@ export function ComposeForm() {
       if (d.body) setBody(d.body);
       if (d.receipt) setReadReceipt(true);
       if (d.accountId) setFromId(d.accountId);
+      // 草稿带着临时姓名时连行一起展开（否则内容藏在收起行里，与抄送 / 密送同一条规矩）
+      if (d.fromName) {
+        setFromName(d.fromName);
+        setFromNameShown(true);
+      }
       if (d.inReplyTo) setReplyRef({ inReplyTo: d.inReplyTo, references: d.references ?? [] });
     },
     [],
@@ -315,6 +346,7 @@ export function ComposeForm() {
               body: hit.body,
               receipt: hit.readReceipt,
               accountId: hit.accountId,
+              fromName: hit.fromName,
               inReplyTo: hit.inReplyTo,
               references: hit.references,
             });
@@ -423,7 +455,7 @@ export function ComposeForm() {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => flushDraft(), 500);
     return () => clearTimeout(saveTimer.current);
-  }, [draftKey, to, cc, bcc, subject, body, readReceipt, fromId, replyRef, flushDraft]);
+  }, [draftKey, to, cc, bcc, subject, body, readReceipt, fromId, fromName, replyRef, flushDraft]);
 
   // 卸载：补一次未落盘的修改（防抖窗口内离开不丢最后 500ms 的输入）；已发送的不补
   useEffect(
@@ -636,6 +668,8 @@ export function ComposeForm() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           accountId: fromId,
+          // 临时发件人姓名（空 = 由服务端回落到账号的 senderName）
+          fromName: fromName.trim() || undefined,
           to: to.split(/[,;，；]/).map((s) => s.trim()).filter(Boolean),
           cc: cc.split(/[,;，；]/).map((s) => s.trim()).filter(Boolean),
           bcc: bcc.split(/[,;，；]/).map((s) => s.trim()).filter(Boolean),
@@ -669,7 +703,7 @@ export function ComposeForm() {
       toast.add({ title: t("sendFailed"), description: err instanceof Error ? err.message : String(err), type: "error" });
       setSending(false);
     }
-  }, [fromId, to, cc, bcc, readReceipt, subject, body, replyRef, attachments, draftKey, router, t]);
+  }, [fromId, fromName, to, cc, bcc, readReceipt, subject, body, replyRef, attachments, draftKey, router, t]);
 
   // 选项 chip 的上标计数（0 不渲染）
   const ccCount = countAddrs(cc);
@@ -728,11 +762,15 @@ export function ComposeForm() {
                 className={cn("max-w-full dark:hover:bg-transparent", BARE_CONTROL)}
               >
                 {/* ⚠ 必须用 children 函数渲染标签：不传 items 的裸 <SelectValue /> 显示的是
-                    原始 value（账号 id「me」），不是账号名 */}
+                    原始 value（账号 id「me」），不是账号名。
+                    临时署名（2026-10-16）非空时，这里显示的就是**本封实际会发出的 From 名字**
+                    ——下拉里看到什么，收件人就收到什么 */}
                 <SelectValue>
                   {(v) => {
                     const a = accounts.find((x) => x.id === v);
-                    return a ? senderLabel(a) : "";
+                    if (!a) return "";
+                    const temp = fromName.trim();
+                    return temp ? `${temp}<${a.email}>` : senderLabel(a);
                   }}
                 </SelectValue>
               </SelectTrigger>
@@ -745,10 +783,19 @@ export function ComposeForm() {
               </SelectContent>
             </Select>
           </div>
-          {/* 选项 chips（更多功能的落点）：抄送 / 密送 = 展开对应行，
-              邮件回执 = 请求 MDN（写入端写 Disposition-Notification-To 头）。
+          {/* 选项 chips（更多功能的落点）：显示名 = 展开临时署名行（本封邮件的发件人自称），
+              抄送 / 密送 = 展开对应行，邮件回执 = 请求 MDN（写入端写 Disposition-Notification-To 头）。
               计数是上标角标且 aria-hidden——chip 的可访问名保持「抄送 / 密送」 */}
           <div className="flex flex-wrap items-center gap-1.5">
+            <Toggle
+              variant="outline"
+              size="sm"
+              pressed={fromNameShown}
+              onPressedChange={setFromNameShown}
+              className={OPTION_CHIP}
+            >
+              <span className="whitespace-nowrap">{t("fieldFromName")}</span>
+            </Toggle>
             <Toggle variant="outline" size="sm" pressed={ccShown} onPressedChange={setCcShown} className={OPTION_CHIP}>
               <span className="whitespace-nowrap">
                 {t("fieldCc")}
@@ -782,6 +829,25 @@ export function ComposeForm() {
             </Toggle>
           </div>
         </div>
+
+        {/* 发件人显示名（临时署名，2026-10-16 用户要求）：默认收起，由发件人行的 chip 展开
+            ——与「抄送 / 密送」同一套语言（chip 展开对应行，行不藏内容）。
+            ⚠ placeholder = 当前账号的发件人姓名：那正是「留空会怎样」的答案，不必再写一句说明
+              （账号没有发件人姓名时为留白 = 只发地址，也正是它的默认行为）。 */}
+        {fromNameShown && (
+          <div className={HEADER_ROW} data-slot="compose-from-name-row">
+            <FieldLabel htmlFor="mail-from-name" className="text-muted-foreground">
+              {t("fieldFromName")}
+            </FieldLabel>
+            <Input
+              id="mail-from-name"
+              value={fromName}
+              onChange={(e) => setFromName(e.target.value)}
+              placeholder={accounts.find((a) => a.id === fromId)?.senderName ?? ""}
+              className={BARE_CONTROL}
+            />
+          </div>
+        )}
 
         {/* 收件人 */}
         <div className={HEADER_ROW}>

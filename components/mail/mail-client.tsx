@@ -1974,6 +1974,9 @@ export function MailClient({
           {/* 「写邮件」：**搜索展开时**或者**账号格真的装不下时**缩为纯图标
               （2026-10-05 定稿 + 2026-10-12 恢复；判据见上方「行 1 的宽度分配」）；
               两种情况都消失后自动恢复完整文字。
+              ⚠ `?from=<账号 id>`（2026-10-16 用户要求「点击写邮件时优先以当前账号作为发件人」）：
+              左栏正筛着某个账号时，写信页的发件人默认就选它（筛选值就是「我现在是谁」）；
+              选「全部账号」时不带参数（写信页照旧默认第一个账号）。
               ⚠ 2026-10-05 二稿（用户定稿「动画统一联动」）：收起/展开**不再瞬切**——
               同一结构 + 过渡：文字段用 grid 轨道 1fr↔0fr 折叠（纯 CSS 自动宽，无需测量）、
               按钮 gap 同步收到 0、文字 opacity 同步淡出；三者与账号的 max-width 共用
@@ -1988,7 +1991,11 @@ export function MailClient({
               改前先重算行 1 */}
           <Link
             ref={composeRef}
-            href="/mail/compose"
+            href={
+              accountFilter === "all"
+                ? "/mail/compose"
+                : `/mail/compose?from=${encodeURIComponent(accountFilter)}`
+            }
             data-slot="button"
             title={composeCompact ? t("compose") : undefined}
             className={cn(

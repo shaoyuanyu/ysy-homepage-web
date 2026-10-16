@@ -3303,6 +3303,8 @@ function stubMailApi(
         kind: (body.kind as string) ?? "new",
         kindRef: (body.kindRef as string) ?? "",
         accountId: (body.accountId as string) ?? "",
+        // 临时发件人姓名（2026-10-16）：随草稿存——写一半离开再回来，署名还在
+        fromName: (body.fromName as string) ?? "",
         to: (body.to as string) ?? "",
         cc: (body.cc as string) ?? "",
         bcc: (body.bcc as string) ?? "",
@@ -3758,8 +3760,29 @@ function stubMailApi(
           ],
         });
       }
-      // 按请求的消息 id 分发：w01 是多副本（删除用例）、s01 是发件样本
-      //（「收件 / 发件区分」用例打开它，副本只在「已发送」），其余返回 w03 详情
+      // 按请求的消息 id 分发：w02 只在 acc2 有一份（默认发件人跟着走）、w01 是多副本
+      //（删除用例）、s01 是发件样本（「收件 / 发件区分」用例打开它，副本只在「已发送」），
+      // 其余返回 w03 详情
+      if (path.includes("w02")) {
+        return detailJson(
+          mailItem({
+            messageId: "mid:w02@test.local",
+            subject: "Weekly Digest",
+            fromAddr: "newsletter@example.com",
+            fromName: "",
+            snippet: "This week in research",
+            flagged: true,
+            copies: [{ accountId: "acc2", folder: "INBOX", uid: 2 }],
+            accounts: ["acc2"],
+            to: [{ name: "", address: "ysy@edu.example.cn" }],
+            cc: [],
+            text: "This week in research",
+            html: "",
+            remoteBlocked: 0,
+            attachments: [],
+          }),
+        );
+      }
       if (path.includes("s01")) {
         return detailJson(
           mailItem({
@@ -4685,6 +4708,68 @@ test.describe("站内邮件（/mail）", () => {
     });
 
     /**
+     * 附件区可折叠（2026-10-16 用户要求）。
+     *
+     * 形态与「会话」一致：标题行就是开关（右侧 chevron、`aria-expanded` + `aria-controls`），
+     * 折叠用 grid 轨道 1fr↔0fr 过渡。**默认展开**且**不做自动折叠**——附件是内容，
+     * 它没有「压到一行还能看」的替身形态，收起来就是彻底看不见（与会话的差别就在这里）。
+     *
+     * ⚠ 判据是**几何**（面板高度归零、段落高度收缩），不是「data-open 变了」：
+     *   CSS 写错时属性照样会翻，只有量高度才骗不过去。
+     * ⚠ 纸面上强制展开（globals.css）：屏幕上的收起只是把高度让给正文，纸上没有这个矛盾。
+     */
+    test("详情页：附件区可折叠（默认展开 → 收起腾出高度 → 再展开），纸面仍展开", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      await page.locator('[data-slot="mail-list"] > li').nth(0).locator("[data-mail-row]").click();
+      await expect(page).toHaveURL(/\/mail\/message\//);
+
+      const section = page.locator('[data-slot="mail-attachments"]');
+      const panel = page.locator('[data-slot="mail-attachments-panel"]');
+      const toggle = page.locator('[data-slot="mail-attachments-toggle"]');
+      const item = panel.locator("li").first();
+      const heightOf = (loc: typeof section) =>
+        loc.evaluate((el) => Math.round(el.getBoundingClientRect().height));
+
+      // 默认展开：条目可见，段落 = 标题行 + 附件条目
+      await expect(section).toHaveAttribute("data-open", "true");
+      await expect(toggle).toHaveAttribute("aria-expanded", "true");
+      await expect(item).toBeVisible();
+      const openH = await heightOf(section);
+      expect(await heightOf(panel), "展开时面板有高度").toBeGreaterThan(20);
+
+      // 收起：面板高度归零 + 整块 inert（不可点、不可聚焦、不进读屏），段落只剩标题行。
+      // ⚠ 不用 `expect(item).toBeHidden()`：被祖先 `overflow-hidden` 裁掉不算 Playwright
+      //   的「隐藏」（它只看元素自己的盒），那条件永真
+      await toggle.click();
+      await expect(section).toHaveAttribute("data-open", "false");
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect.poll(() => heightOf(panel)).toBeLessThanOrEqual(1);
+      await expect(panel).toHaveAttribute("inert", "");
+      expect(await heightOf(section), "收起后只剩一行标题").toBeLessThan(openH - 20);
+
+      // 再点开：回到展开态（开关是双向的，不是一次性收起）
+      await toggle.click();
+      await expect(section).toHaveAttribute("data-open", "true");
+      await expect.poll(() => heightOf(panel)).toBeGreaterThan(20);
+      await expect(panel).not.toHaveAttribute("inert", "");
+      await expect(item).toBeVisible();
+
+      // 折叠着打印：纸上照样展开（否则「收起过附件」= 纸上少一段附着信息）
+      await toggle.click();
+      await expect.poll(() => heightOf(panel)).toBeLessThanOrEqual(1);
+      await page.emulateMedia({ media: "print" });
+      await expect.poll(() => heightOf(panel), { message: "纸面上强制展开" }).toBeGreaterThan(20);
+      // chevron 是屏幕上的展开指示，纸上没有意义（data-print="hide"）
+      await expect(toggle.locator("svg")).toBeHidden();
+      await page.emulateMedia({ media: "screen" });
+    });
+
+    /**
      * 日历邀请一键加入（2026-10-10）：把邮件里的 .ics 接到已有的 CalDAV 写入上。
      *
      * ⚠ 锁「原样上传」：`RRULE` / `VALARM` 必须出现在请求体里——解析重建会静默丢掉它们，
@@ -5412,7 +5497,7 @@ test.describe("站内邮件（/mail）", () => {
       const replyMenu = page.locator('[data-slot="dropdown-menu-content"]');
       await expect(replyMenu.getByRole("menuitem", { name: "回复全部" })).toBeVisible();
       await replyMenu.getByRole("menuitem", { name: "回复全部" }).click();
-      await expect(page).toHaveURL(/\/mail\/compose\?replyTo=.+&all=1$/);
+      await expect(page).toHaveURL(/\/mail\/compose\?replyTo=.+&all=1(&from=[^&]*)?$/);
       await expect(page.locator("#mail-to")).toHaveValue("newsletter@example.com");
       // ⚠ 抄送行默认收起（2026-10-06 表单头重设计）：cc 为空时该行不渲染（不是隐藏）。
       //   展开后应仍为空（自己不进 Cc）——语义与旧断言一致，只是要先把行打开
@@ -6571,6 +6656,86 @@ test.describe("站内邮件（/mail）", () => {
       await expect(list).toBeVisible();
     });
 
+    /**
+     * 专注模式（2026-10-16 用户要求）：「在 mac 上邮件内容区（尤其高度）太小」的正面解法
+     * ——顶栏 / 页脚 / 浮动导航钮 / `/mail` 页头（标题 + 四颗入口）全部隐藏、页面上下留白
+     * 从 48px 收到 8px，邮件面板直接吃满视口。
+     *
+     * ⚠ 与「全屏查看」（收左栏）是**两个独立开关**：这条用例同时钉住「左栏还在」——
+     *   若哪天把它实现成「专注模式顺带走左栏」，用户就丢了一个开关的自由。
+     * ⚠ 判据用**几何**（容器 / 详情栏的高度），不是「属性挂上了」：规则在 globals.css 里，
+     *   只断言 `html[data-mail-focus]` 存在的话，CSS 写错了也会绿。
+     */
+    test("详情页：专注模式隐藏站点外壳与页头、面板吃满视口；Esc 还原", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await gotoReady(page, "/mail");
+      await page.locator('[data-slot="mail-list"] > li').nth(0).locator("[data-mail-row]").click();
+      await expect(page).toHaveURL(/\/mail\/message\//);
+
+      const header = page.locator(".site-header");
+      const pageHeader = page.locator('[data-slot="mail-page-header"]');
+      const footer = page.locator('[data-slot="site-footer"]');
+      const detail = page.locator('[data-slot="mail-pane-detail"]');
+      const list = page.locator('[data-slot="mail-pane-list"]');
+      const pageBox = page.locator('[data-slot="mail-page"]');
+      const heightOf = (loc: typeof detail) =>
+        loc.evaluate((el) => Math.round(el.getBoundingClientRect().height));
+
+      // 普通形态：站点外壳都在，容器把「顶栏 57 + 页脚 65」那一截让出去
+      await expect(header).toBeVisible();
+      await expect(pageHeader).toBeVisible();
+      await expect(footer).toBeVisible();
+      await expect(page.locator("html")).not.toHaveAttribute("data-mail-focus", ".*");
+      const normalPageH = await heightOf(pageBox);
+      const normalDetail = await heightOf(detail);
+      expect(normalPageH, "普通形态容器 = 视口 − 顶栏 − 页脚").toBeLessThan(900);
+
+      // 开关在中缝上（「全屏查看」那枚再往上一格），不在操作栏里
+      await expect(page.locator('[data-slot="mail-focus-mode"]')).toHaveAttribute(
+        "aria-label",
+        "专注模式",
+      );
+      await expect(
+        page.locator('[data-slot="message-actions"]').getByRole("button", { name: "专注模式" }),
+      ).toHaveCount(0);
+
+      await page.getByRole("button", { name: "专注模式" }).click();
+
+      // 站点外壳整块让开（顶栏 / 页脚 / 页头 / 浮动导航钮）
+      await expect(page.locator("html")).toHaveAttribute("data-mail-focus", "");
+      await expect(header).toBeHidden();
+      await expect(footer).toBeHidden();
+      await expect(pageHeader).toBeHidden();
+      await expect(page.locator('[data-slot="nav-fab"]')).toBeHidden();
+
+      // 容器吃满视口（3.5rem + 4.0625rem 那两截作废）、详情栏跟着长高一大截
+      await expect.poll(() => heightOf(pageBox)).toBeGreaterThan(normalPageH + 100);
+      const focusPageH = await heightOf(pageBox);
+      expect(Math.abs(focusPageH - 900), `专注模式下容器 = 100dvh（实测 ${focusPageH}）`).toBeLessThanOrEqual(2);
+      expect(await heightOf(detail), "详情栏应高出一大截").toBeGreaterThan(normalDetail + 150);
+      // 左栏**还在**：收左栏是「全屏查看」的事，两个开关各管各的
+      await expect(list).toBeVisible();
+
+      // 两个开关可以同时开：全屏查看（收左栏）叠在专注模式上
+      await page.getByRole("button", { name: "全屏查看" }).click();
+      await expect(list).toBeHidden();
+      await page.keyboard.press("Escape");
+
+      // Esc 一次全还原
+      await expect(list).toBeVisible();
+      await expect(page.locator("html")).not.toHaveAttribute("data-mail-focus", ".*");
+      await expect(header).toBeVisible();
+      await expect(pageHeader).toBeVisible();
+      await expect(footer).toBeVisible();
+      expect(await heightOf(pageBox), "退出专注模式后容器高度复位").toBe(normalPageH);
+      await expect(page.getByRole("button", { name: "专注模式" })).toBeVisible();
+    });
+
     test("写邮件：表单提交发出正确请求体", async ({ page }) => {
       const calls = { flags: [], send: [] as unknown[], delete: [] };
       await stubMailApi(page, calls);
@@ -6607,6 +6772,104 @@ test.describe("站内邮件（/mail）", () => {
       expect(sent.subject).toBe("测试主题");
       expect(sent.text).toBe("正文内容");
       await expect(page).toHaveURL(/\/mail(\?[^/]*)?$/); // ⚠ tab 落进 URL 后可能带 ?view=…
+    });
+
+    /**
+     * 默认发件人（2026-10-16 用户要求：「点击写邮件时，应该优先以当前选择的账号作为发件人」）：
+     * ① 左栏筛着某个账号 → 入口链接带 `?from=<id>`，写信页发件人默认选它；
+     * ② 「全部账号」→ 不带参数（写信页照旧默认第一个账号）；
+     * ③ 详情页的回复 / 转发带**这封信副本所属账号**（与页内快速回复同一口径）。
+     *
+     * ⚠ 只在**默认值**这个层面上断言：草稿里存过账号时以草稿为准（写信页 `prev ||` 的写法），
+     *   手动换过账号也不该被覆盖。
+     */
+    test("写邮件默认发件人：跟随左栏当前账号；回复 / 转发跟随原信账号", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await gotoReady(page, "/mail");
+      // 只取左栏工具栏里那枚（详情页的「回复」也指向 /mail/compose）
+      const composeLink = page.locator('[data-slot="mail-list-column"] a[href*="/mail/compose"]');
+
+      // ① 「全部账号」：入口不带参数
+      await expect(composeLink).toHaveAttribute("href", /^\/mail\/compose$/);
+
+      // 切到「学校」（acc2）→ 入口带上它，写信页发件人默认就是它
+      await page.getByRole("button", { name: "按账号筛选" }).click();
+      await page.getByRole("menuitem", { name: /学校/ }).click();
+      await expect(composeLink).toHaveAttribute("href", /\/mail\/compose\?from=acc2$/);
+      await composeLink.click();
+      await expect(page).toHaveURL(/\/mail\/compose\?from=acc2$/);
+      await expect(page.locator("#mail-from")).toContainText("ysy@edu.example.cn");
+
+      // ② 整页重载回「全部账号」→ 不带参数，写信默认第一个账号
+      await gotoReady(page, "/mail");
+      await expect(composeLink).toHaveAttribute("href", /^\/mail\/compose$/);
+      await composeLink.click();
+      await expect(page.locator("#mail-from")).toContainText("me@mail.example.cn");
+
+      // ③ 回复 / 转发：带上这封信副本所属账号（w02 只在 acc2 有一份）
+      await gotoReady(page, "/mail");
+      await page.locator('[data-slot="mail-list"] > li').nth(2).locator("[data-mail-row]").click();
+      await expect(page).toHaveURL(/\/mail\/message\//);
+      const actions = page.locator('[data-slot="message-actions"]');
+      await expect(actions.locator('a[href*="replyTo="]')).toHaveAttribute("href", /from=acc2/);
+      await expect(actions.locator('a[href*="forward="]')).toHaveAttribute("href", /from=acc2/);
+      // 点进去真的落在 acc2 上
+      await actions.locator('a[href*="forward="]').click();
+      await expect(page.locator("#mail-from")).toContainText("ysy@edu.example.cn");
+    });
+
+    /**
+     * 临时发件人姓名（2026-10-16 用户要求）：「在给不同的人发件时，我的身份自述可能有变化」。
+     * 入口 = 发件人行的「显示名」chip（与「抄送 / 密送」同一套语言：chip 展开对应行），
+     * 只作用于**本封**——请求体带 `fromName`，账号级设置（`PUT /accounts`）一次也不发。
+     */
+    test("写邮件：显示名只作用于本封（请求体带 fromName，账号设置不动）", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [], accounts: [] as unknown[], drafts: [] as unknown[] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail/compose");
+      // 默认收起（与「抄送 / 密送」同构：行不渲染，不是隐藏）
+      await expect(page.locator('[data-slot="compose-from-name-row"]')).toHaveCount(0);
+      await expect(page.locator("#mail-from")).toContainText("me@mail.example.cn");
+
+      await page.getByRole("button", { name: "显示名", exact: true }).click();
+      const nameRow = page.locator('[data-slot="compose-from-name-row"]');
+      await expect(nameRow).toBeVisible();
+      await page.locator("#mail-from-name").fill("Yu Shaoyuan");
+      // 发件人下拉就地显示「本封实际会发出的名字」——所见即收件人所见
+      await expect(page.locator("#mail-from")).toContainText("Yu Shaoyuan<me@mail.example.cn>");
+
+      await page.locator("#mail-to").fill("someone@example.org");
+      await page.locator("#mail-subject").fill("临时署名");
+      await page.locator("#mail-body").fill("正文");
+      // 草稿也带临时署名（写一半离开再回来，署名还在）——顺便等它落盘，
+      // 否则下一封信的找回逻辑没东西可找
+      await expect
+        .poll(() => (calls.drafts.at(-1) as { body?: { fromName?: string } })?.body?.fromName)
+        .toBe("Yu Shaoyuan");
+      await page.getByRole("button", { name: "发送" }).click();
+
+      await expect.poll(() => calls.send.length).toBe(1);
+      expect((calls.send[0] as { fromName?: string }).fromName).toBe("Yu Shaoyuan");
+      // 账号级设置没被碰过（一封信的署名不该顺手改账号）
+      expect(calls.accounts).toHaveLength(0);
+
+      // 清空 = 回落账号自己的发件人姓名（不是「无名字」）：请求体里就不带 fromName。
+      // 先确认草稿把临时署名带回来了（写信页找回逻辑）——顺带钉住「带署名时行自动展开」
+      await gotoReady(page, "/mail/compose");
+      await expect(page.locator("#mail-from-name")).toHaveValue("Yu Shaoyuan");
+      await page.locator("#mail-from-name").fill("   ");
+      await page.getByRole("button", { name: "发送" }).click();
+      await expect.poll(() => calls.send.length).toBe(2);
+      expect((calls.send[1] as { fromName?: string }).fromName).toBeUndefined();
+      expect(calls.accounts).toHaveLength(0);
     });
 
     test("删除：确认弹窗后对该消息的全部副本发出删除", async ({ page }) => {

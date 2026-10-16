@@ -268,8 +268,8 @@ function AddressRow({
 export function MessageView({ messageId }: { messageId: string }) {
   const t = useTranslations("mail");
   const router = useRouter();
-  /** 「全屏查看」开关（状态在 MailShell，见 pane-fullscreen.tsx）：隐藏左栏列表、详情占满 */
-  const { full, setFull } = useMailFullscreen();
+  /** 「全屏查看」（收起左栏）与「专注模式」（隐藏站点外壳）两个开关，状态在 MailShell */
+  const { full, setFull, focus, setFocus } = useMailFullscreen();
 
   const [detail, setDetail] = useState<MailDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -351,6 +351,17 @@ export function MessageView({ messageId }: { messageId: string }) {
     () => (detail?.attachments ?? []).filter((a) => !a.inline || isCalendarAttachment(a)),
     [detail?.attachments],
   );
+  /**
+   * 附件区折叠（2026-10-16 用户要求）。
+   *
+   * **默认展开**：附件是内容，一眼看不见就是丢信息（Gmail / Apple Mail 也都不折）
+   * ——折叠是「它占了我的正文高度」时的手段，不是默认形态。
+   * ⚠ 与另外两个开关的口径对照：「会话」默认展开但**会被自动收起**（正文装不下时，
+   *   见 threadOpen）；「快速回复」默认收起（不写回信就不会想它）；附件**不自动折**
+   *   ——它没有「压到一行还能看」的替身形态，自动收起来就是彻底看不见了。
+   * ⚠ 不持久化，换一封信回到展开位（与另外两个开关同一个口径）。
+   */
+  const [attachmentsOpen, setAttachmentsOpen] = useState(true);
 
   /** 正在预览的附件（null = 预览弹窗关着） */
   const [preview, setPreview] = useState<MailAttachmentMeta | null>(null);
@@ -623,9 +634,10 @@ export function MessageView({ messageId }: { messageId: string }) {
   useEffect(() => {
     let cancelled = false;
     // 换一封信：会话回到「默认展开」，由下面的自动折叠按这封信的空间重新判断
-    // （用户上一次拨动开关的意志不跨邮件延续）
+    // （用户上一次拨动开关的意志不跨邮件延续）；附件区的折叠同理回到展开位
     setThreadOpen(true);
     setThreadTouched(false);
+    setAttachmentsOpen(true);
     fetchWithTimeout(`/api/mail/message/${encodeURIComponent(messageId)}/thread`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { items: MailListItem[] } | null) => {
@@ -953,17 +965,18 @@ export function MessageView({ messageId }: { messageId: string }) {
   }, [showRemoteImages, t]);
 
   /**
-   * 全屏查看下按 Esc 还原（2026-10-14）。
+   * 全屏查看 / 专注模式下按 Esc 还原（2026-10-14；专注模式 2026-10-16 并入）。
    * ⚠ 弹窗 / 菜单开着时 Esc 归它们（Base UI 自己处理），此时不抢——否则在删除确认框上
    *   按 Esc 会顺手把全屏也退掉。其余不拦：快速回复输入框里按 Esc 退出全屏不丢任何东西
    *   （文字在组件 state 里）。
+   * ⚠ 两个开关都开着时**一次 Esc 全还原**（都是「退出临时阅读形态」的同一个动作）。
    * ⚠ **不要判 `e.defaultPrevented`**（最初写了，实测在浏览器里按 Esc 完全没反应）：
    *   真按键走到 window 监听器时这个标记已经是 true，而全页**没有任何 JS** 调用过
    *   preventDefault（打桩 `Event.prototype.preventDefault` 记录不到调用）——是宿主
    *   浏览器自己把 Escape 当默认动作处理了。弹窗 / 菜单那两种真实冲突用下面的选择器挡住。
    */
   useEffect(() => {
-    if (!full) return;
+    if (!full && !focus) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (
@@ -974,10 +987,11 @@ export function MessageView({ messageId }: { messageId: string }) {
         return;
       }
       setFull(false);
+      setFocus(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [full, setFull]);
+  }, [full, focus, setFull, setFocus]);
 
   /**
    * 打印前的「深底浅字」就地修正（2026-10-08）。
@@ -1168,7 +1182,15 @@ export function MessageView({ messageId }: { messageId: string }) {
   // 收件 / 发件区分（2026-10-04 用户反馈）：副本全在「已发送」类文件夹 = 我发出的邮件。
   // 发件邮件隐藏「回复 / 回复全部 / 快速回复 / 存入通讯录」（这是功能侧的区分），见下方各处。
   const sent = isSentItem(detail.copies);
-  /** 发件人地址是不是我的账号（2026-10-15 第三轮）：决定发件人行贴不贴 ↗ */
+  /**
+   * 回信 / 转发的默认发件账号 = **这封信的副本所属账号**（2026-10-16 用户要求：
+   * 「点击写邮件时优先以当前账号作为发件人」）。口径与页内快速回复（`quickSend` 的
+   * `accountId: detail.copies[0]?.accountId`）一致——同一封信走哪条路发出去，
+   * 发件人都该是同一个。写邮件页把它当**默认值**（`?from=`），草稿里存过账号时以草稿为准。
+   */
+  const replyFromQuery = detail.copies[0]?.accountId
+    ? `&from=${encodeURIComponent(detail.copies[0].accountId)}`
+    : "";
   const fromIsMine = ownReady && !!detail.fromAddr && ownEmails.has(detail.fromAddr.toLowerCase());
   /** 收件邮件给「收件人 / 抄送」行的 ↙：只有匹配上我的地址才会真正渲染（见 AddressRow） */
   const receivedBadge = !sent ? (
@@ -1362,7 +1384,7 @@ export function MessageView({ messageId }: { messageId: string }) {
             <ActionLabel>{t("delete")}</ActionLabel>
           </Button>
           <Link
-            href={`/mail/compose?forward=${encodeURIComponent(messageId)}`}
+            href={`/mail/compose?forward=${encodeURIComponent(messageId)}${replyFromQuery}`}
             data-slot="button"
             aria-label={t("forward")}
             title={t("forward")}
@@ -1394,7 +1416,7 @@ export function MessageView({ messageId }: { messageId: string }) {
             // `[&>*:first-child]:border-r-0` 见上条注释：官方 CSS 只清后续项的 border-l
             <ButtonGroup className="[&>*:first-child]:border-r-0">
               <Link
-                href={`/mail/compose?replyTo=${encodeURIComponent(messageId)}`}
+                href={`/mail/compose?replyTo=${encodeURIComponent(messageId)}${replyFromQuery}`}
                 data-slot="button"
                 aria-label={t("reply")}
                 title={t("reply")}
@@ -1417,7 +1439,7 @@ export function MessageView({ messageId }: { messageId: string }) {
                 <DropdownMenuContent align="end" className="w-auto min-w-36">
                   <DropdownMenuItem
                     onClick={() =>
-                      router.push(`/mail/compose?replyTo=${encodeURIComponent(messageId)}&all=1`)
+                      router.push(`/mail/compose?replyTo=${encodeURIComponent(messageId)}&all=1${replyFromQuery}`)
                     }
                   >
                     <ReplyAllIcon />
@@ -1637,92 +1659,133 @@ export function MessageView({ messageId }: { messageId: string }) {
       )}
 
       {/* 附件（2026-10-10：图片与纯文本可就地预览，其余类型仍是下载。
+          2026-10-16 用户要求改为**可折叠**：标题行就是开关（与「会话」同一个形态：
+          左侧文字 + 右侧 chevron，`aria-expanded` / `aria-controls` 成对给）。
+          折叠用 grid 轨道 1fr↔0fr（与「会话」「快速回复」同一套做法与曲线），
+          收起时内容保持挂载但 `inert`（不可聚焦、不进读屏，也不会有看不见的点击区）。
           ⚠ 推迟的附件（`deferred`）**不给缩略图**：缩略图会让这一屏对每个附件各发一次
             请求，而推迟的附件每取一次都要连邮箱（几秒），几张大图就能把页面卡住。
             延迟本身不给任何视觉标记（2026-10-14 第三轮）：附件就是一个可点开的东西。 */}
       {visibleAttachments.length > 0 && (
-        <section className="flex flex-col gap-2">
+        <section
+          data-slot="mail-attachments"
+          data-open={attachmentsOpen ? "true" : "false"}
+          className="flex flex-col gap-2"
+        >
           <h2 className="text-sm font-medium text-muted-foreground">
-            {t("attachments", { count: visibleAttachments.length })}
-          </h2>
-          <ul className="flex flex-wrap gap-2">
-            {visibleAttachments.map((a) => {
-              const url = attachmentUrl(messageId, a.index);
-              const image = isPreviewImage(a);
-              // 图片（已下载的那批）给缩略图，点开看大图
-              if (image && !a.deferred) {
-                return (
-                  <li key={a.index}>
-                    <button
-                      type="button"
-                      data-slot="mail-attachment-thumb"
-                      title={a.filename}
-                      onClick={() => setPreview(a)}
-                      className="flex w-28 flex-col gap-1 rounded-lg text-left focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-                    >
-                      <span className="block overflow-hidden rounded-lg border border-border">
-                        {/* eslint-disable-next-line @next/next/no-img-element -- 附件字节来自认证过的
-                            代理端点（/api/mail/...），不是站内静态资源；next/image 的优化器在这里帮不上
-                            忙，反而会把请求再绕一层 */}
-                        <img
-                          src={url}
-                          alt={a.filename}
-                          loading="lazy"
-                          className="h-20 w-full object-cover transition-transform duration-300 ease-out hover:scale-[1.03]"
-                        />
-                      </span>
-                      <span className="truncate text-xs">{a.filename}</span>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {formatSize(a.size)}
-                      </span>
-                    </button>
-                  </li>
-                );
-              }
-              // 其余：可预览的开弹窗，不可预览的仍是下载链接
-              const previewable = image || isPreviewText(a);
-              const inner = (
-                <>
-                  {previewable ? (
-                    <FileTextIcon data-icon="default" />
-                  ) : (
-                    <DownloadIcon data-icon="default" />
+            <button
+              type="button"
+              onClick={() => setAttachmentsOpen((v) => !v)}
+              aria-expanded={attachmentsOpen}
+              aria-controls="mail-attachments-panel"
+              data-slot="mail-attachments-toggle"
+              className="group/attachments flex w-full items-center justify-between gap-2 rounded-md text-left focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+            >
+              <span className="truncate">{t("attachments", { count: visibleAttachments.length })}</span>
+                <ChevronDownIcon
+                  data-print="hide"
+                  className={cn(
+                    "size-4 shrink-0 transition-[color,transform] group-hover/attachments:text-foreground",
+                    MOTION_SIZE,
+                    attachmentsOpen && "rotate-180",
                   )}
-                  {a.filename}
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    {formatSize(a.size)}
-                  </span>
-                </>
-              );
-              return (
-                <li key={a.index}>
-                  {previewable ? (
-                    <button
-                      type="button"
-                      data-slot="button"
-                      // 推迟的附件：点下去服务端会先向邮箱取这一个部件（几秒），再回传
-                      title={t("previewOpen")}
-                      onClick={() => setPreview(a)}
-                      className={buttonVariants({ variant: "outline", size: "sm" })}
-                    >
-                      {inner}
-                    </button>
-                  ) : (
-                    <a
-                      href={url}
-                      download={a.filename}
-                      data-slot="button"
-                      className={buttonVariants({ variant: "outline", size: "sm" })}
-                    >
-                      {inner}
-                    </a>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
+                  aria-hidden
+                />
+              </button>
+            </h2>
+            <div
+              id="mail-attachments-panel"
+              data-slot="mail-attachments-panel"
+              className={cn(
+                "grid min-h-0 transition-[grid-template-rows]",
+                MOTION_SIZE,
+                attachmentsOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+              )}
+              inert={attachmentsOpen ? undefined : true}
+            >
+              {/* `-mx-1 px-1`：裁剪区在列表边框上，条目的聚焦光圈会往左右各扩 3px 而被剪掉
+                  （与「会话」列表同一个坑）——负外边距把裁剪框向外扩 4px、内边距再放回原位 */}
+              <div className="-mx-1 min-h-0 overflow-hidden px-1">
+                <ul className="flex flex-wrap gap-2">
+                  {visibleAttachments.map((a) => {
+                    const url = attachmentUrl(messageId, a.index);
+                    const image = isPreviewImage(a);
+                    // 图片（已下载的那批）给缩略图，点开看大图
+                    if (image && !a.deferred) {
+                      return (
+                        <li key={a.index}>
+                          <button
+                            type="button"
+                            data-slot="mail-attachment-thumb"
+                            title={a.filename}
+                            onClick={() => setPreview(a)}
+                            className="flex w-28 flex-col gap-1 rounded-lg text-left focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                          >
+                            <span className="block overflow-hidden rounded-lg border border-border">
+                              {/* eslint-disable-next-line @next/next/no-img-element -- 附件字节来自认证过的
+                                  代理端点（/api/mail/...），不是站内静态资源；next/image 的优化器在这里帮不上
+                                  忙，反而会把请求再绕一层 */}
+                              <img
+                                src={url}
+                                alt={a.filename}
+                                loading="lazy"
+                                className="h-20 w-full object-cover transition-transform duration-300 ease-out hover:scale-[1.03]"
+                              />
+                            </span>
+                            <span className="truncate text-xs">{a.filename}</span>
+                            <span className="text-xs text-muted-foreground tabular-nums">
+                              {formatSize(a.size)}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    }
+                    // 其余：可预览的开弹窗，不可预览的仍是下载链接
+                    const previewable = image || isPreviewText(a);
+                    const inner = (
+                      <>
+                        {previewable ? (
+                          <FileTextIcon data-icon="default" />
+                        ) : (
+                          <DownloadIcon data-icon="default" />
+                        )}
+                        {a.filename}
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          {formatSize(a.size)}
+                        </span>
+                      </>
+                    );
+                    return (
+                      <li key={a.index}>
+                        {previewable ? (
+                          <button
+                            type="button"
+                            data-slot="button"
+                            // 推迟的附件：点下去服务端会先向邮箱取这一个部件（几秒），再回传
+                            title={t("previewOpen")}
+                            onClick={() => setPreview(a)}
+                            className={buttonVariants({ variant: "outline", size: "sm" })}
+                          >
+                            {inner}
+                          </button>
+                        ) : (
+                          <a
+                            href={url}
+                            download={a.filename}
+                            data-slot="button"
+                            className={buttonVariants({ variant: "outline", size: "sm" })}
+                          >
+                            {inner}
+                          </a>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            </div>
+          </section>
+        )}
 
       {/* 日历邀请 → 「加入日历」（2026-10-10）：把邮件里的 .ics 接到已有的 CalDAV 写入上 */}
       <CalendarInviteSection messageId={messageId} attachments={detail.attachments} />
@@ -1894,7 +1957,7 @@ export function MessageView({ messageId }: { messageId: string }) {
                     次要链接字号比按钮小一档（12px） */}
                 <div className="flex items-center justify-end gap-2">
                   <Link
-                    href={`/mail/compose?replyTo=${encodeURIComponent(messageId)}`}
+                    href={`/mail/compose?replyTo=${encodeURIComponent(messageId)}${replyFromQuery}`}
                     data-slot="button"
                     className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "text-xs")}
                   >

@@ -198,6 +198,8 @@ export interface MailDraft {
   kind: "new" | "reply" | "forward";
   kindRef: string;
   accountId: string;
+  /** 临时发件人姓名（2026-10-16）：本封邮件专用的署名，空串 = 用账号自己的 senderName */
+  fromName: string;
   to: string;
   cc: string;
   bcc: string;
