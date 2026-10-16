@@ -6657,6 +6657,64 @@ test.describe("站内邮件（/mail）", () => {
     });
 
     /**
+     * 列表行「再点一次 = 退出查看」（2026-10-16 用户要求）：「在邮件列表中再次点击当前
+     * 正在查看的邮件，应该退出邮件查看」。
+     *
+     * 宽屏两栏下左栏常驻，点当前高亮行 = 关掉右栏（回 `/mail` 占位）——与操作栏那枚
+     * 「关闭」同一个落点，只是手不用挪过去。判据三项一起看（路由 + 右栏内容 + 高亮）：
+     * ⚠ 只看 URL 的话，「右栏没跟着回占位」也会绿；只看占位文案的话，路由还停在详情页
+     *   也会绿（占位与详情同在 `pane-detail` 里）。
+     * ⚠ 最后两段是反向验证：**点别的行必须照常切换详情**（别把 toggle 写成「点任意一行
+     *   都关」），以及关掉之后还能再打开（不是「点一次就锁死」）。
+     * ⚠ 会话就地展开的**子行**走的是同一个回调（`mail-row.tsx` 里也是 `onOpen(m)`），
+     *   这里不另建会话桩：父组件只有一个 `openItem`，子行没有独立分支。
+     */
+    test("列表：再点一次正在查看的那封退出详情（回占位），点别的行照常打开", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await gotoReady(page, "/mail");
+
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      const detail = page.locator('[data-slot="mail-pane-detail"]');
+      const list = page.locator('[data-slot="mail-pane-list"]');
+      const row = (i: number) => rows.nth(i).locator("[data-mail-row]");
+
+      // ① 打开第一封 → 右栏进详情、该行高亮
+      await row(0).click();
+      await expect(page).toHaveURL(/\/mail\/message\//);
+      await expect(row(0)).toHaveAttribute("aria-current", "true");
+      await expect(detail).not.toContainText("选择一封邮件");
+
+      // ② 再点同一行 → 退出查看：路由回 /mail、右栏回占位、高亮撤销，左栏列表仍在
+      await row(0).click();
+      await expect(page).toHaveURL(/\/mail(\?|$)/);
+      await expect(detail).toContainText("选择一封邮件");
+      await expect(row(0)).not.toHaveAttribute("aria-current", "true");
+      await expect(list).toBeVisible();
+
+      // ③ 退出之后还能再打开（不是「点过一次就锁死」）
+      await row(0).click();
+      await expect(page).toHaveURL(/\/mail\/message\//);
+
+      // ④ 点**别的**行 = 切换详情，不是退出
+      await row(1).click();
+      await expect(page).toHaveURL(/\/mail\/message\//);
+      await expect(row(1)).toHaveAttribute("aria-current", "true");
+      await expect(row(0)).not.toHaveAttribute("aria-current", "true");
+      await expect(detail).not.toContainText("选择一封邮件");
+
+      // ⑤ 再点它自己 → 退出
+      await row(1).click();
+      await expect(page).toHaveURL(/\/mail(\?|$)/);
+      await expect(detail).toContainText("选择一封邮件");
+      await expect(list).toBeVisible();
+    });
+
+    /**
      * 专注模式（2026-10-16 用户要求）：「在 mac 上邮件内容区（尤其高度）太小」的正面解法
      * ——顶栏 / 页脚 / 浮动导航钮 / `/mail` 页头（标题 + 四颗入口）全部隐藏、页面上下留白
      * 从 48px 收到 8px，邮件面板直接吃满视口。
@@ -6665,8 +6723,15 @@ test.describe("站内邮件（/mail）", () => {
      *   若哪天把它实现成「专注模式顺带走左栏」，用户就丢了一个开关的自由。
      * ⚠ 判据用**几何**（容器 / 详情栏的高度），不是「属性挂上了」：规则在 globals.css 里，
      *   只断言 `html[data-mail-focus]` 存在的话，CSS 写错了也会绿。
+     * ⚠ 2026-10-16 第二轮（用户：「在关闭查看邮件时，也应该有『专注模式』的按钮，且能保持
+     *   该模式」）：它从「详情页的临时形态」升级成**记住的阅读偏好**（localStorage
+     *   `mail:focusMode`，见 lib/mail/focus.ts），开关也**不再只在详情页长着**——列表 /
+     *   详情 / 撰写都挂着同一枚中缝把手。用例末尾接着钉住这两条：按「关闭」回列表后
+     *   开关与模式都还在、刷新仍然在、列表页 Esc 能退且退出会落盘。
      */
-    test("详情页：专注模式隐藏站点外壳与页头、面板吃满视口；Esc 还原", async ({ page }) => {
+    test("详情页：专注模式隐藏站点外壳与页头、面板吃满视口；关闭后仍在、Esc 还原", async ({
+      page,
+    }) => {
       const calls = { flags: [] as unknown[], send: [], delete: [] };
       await stubMailApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
@@ -6734,6 +6799,42 @@ test.describe("站内邮件（/mail）", () => {
       await expect(footer).toBeVisible();
       expect(await heightOf(pageBox), "退出专注模式后容器高度复位").toBe(normalPageH);
       await expect(page.getByRole("button", { name: "专注模式" })).toBeVisible();
+
+      // ④ 按「关闭」回列表：**开关还在（列表页也有）、模式还开着**（2026-10-16 第二轮）
+      await page.getByRole("button", { name: "专注模式" }).click();
+      await expect(page.locator("html")).toHaveAttribute("data-mail-focus", "");
+      await page.getByRole("button", { name: "关闭", exact: true }).click();
+      await expect(page).toHaveURL(/\/mail(\?|$)/);
+      await expect(page.locator('[data-slot="mail-focus-mode"]')).toHaveAttribute(
+        "aria-label",
+        "退出专注模式",
+      );
+      await expect(header).toBeHidden();
+      await expect(pageHeader).toBeHidden();
+      // 全屏查看**相反**：左栏收起只属详情页（列表页没有「列表可收」），也不持久化
+      await expect(page.locator('[data-slot="mail-pane-fullscreen"]')).toHaveCount(0);
+
+      // ⑤ 刷新仍在：写的是 localStorage（首帧内联脚本在 paint 前就挂好属性，不闪外壳）
+      await page.reload();
+      await expect(page.locator('[data-slot="mail-focus-mode"]')).toHaveAttribute(
+        "aria-label",
+        "退出专注模式",
+      );
+      await expect(header).toBeHidden();
+      const reloadPageH = await heightOf(pageBox);
+      expect(
+        Math.abs(reloadPageH - 900),
+        `刷新后仍是专注形态（容器 = 100dvh，实测 ${reloadPageH}）`,
+      ).toBeLessThanOrEqual(2);
+
+      // ⑥ 列表页也能用 Esc 退出（监听器 2026-10-16 从详情页上移到 MailShell），且要落盘
+      await page.keyboard.press("Escape");
+      await expect(page.locator("html")).not.toHaveAttribute("data-mail-focus", ".*");
+      await expect(header).toBeVisible();
+      await expect(pageHeader).toBeVisible();
+      await page.reload();
+      await expect(page.locator("html")).not.toHaveAttribute("data-mail-focus", ".*");
+      await expect(header).toBeVisible();
     });
 
     test("写邮件：表单提交发出正确请求体", async ({ page }) => {

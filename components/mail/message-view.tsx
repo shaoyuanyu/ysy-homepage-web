@@ -46,7 +46,6 @@ import { attachmentUrl, AttachmentPreview } from "@/components/mail/attachment-p
 import { CalendarInviteSection } from "@/components/mail/calendar-invite";
 import { JunkIcon, NotJunkIcon } from "@/components/mail/junk-icons";
 import { MOTION_SIZE, TOOLBAR_MS } from "@/components/mail/motion";
-import { useMailFullscreen } from "@/components/mail/pane-fullscreen";
 import { Badge } from "@/components/ui/badge";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { buttonVariants } from "@/components/ui/button";
@@ -268,8 +267,6 @@ function AddressRow({
 export function MessageView({ messageId }: { messageId: string }) {
   const t = useTranslations("mail");
   const router = useRouter();
-  /** 「全屏查看」（收起左栏）与「专注模式」（隐藏站点外壳）两个开关，状态在 MailShell */
-  const { full, setFull, focus, setFocus } = useMailFullscreen();
 
   const [detail, setDetail] = useState<MailDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -965,33 +962,10 @@ export function MessageView({ messageId }: { messageId: string }) {
   }, [showRemoteImages, t]);
 
   /**
-   * 全屏查看 / 专注模式下按 Esc 还原（2026-10-14；专注模式 2026-10-16 并入）。
-   * ⚠ 弹窗 / 菜单开着时 Esc 归它们（Base UI 自己处理），此时不抢——否则在删除确认框上
-   *   按 Esc 会顺手把全屏也退掉。其余不拦：快速回复输入框里按 Esc 退出全屏不丢任何东西
-   *   （文字在组件 state 里）。
-   * ⚠ 两个开关都开着时**一次 Esc 全还原**（都是「退出临时阅读形态」的同一个动作）。
-   * ⚠ **不要判 `e.defaultPrevented`**（最初写了，实测在浏览器里按 Esc 完全没反应）：
-   *   真按键走到 window 监听器时这个标记已经是 true，而全页**没有任何 JS** 调用过
-   *   preventDefault（打桩 `Event.prototype.preventDefault` 记录不到调用）——是宿主
-   *   浏览器自己把 Escape 当默认动作处理了。弹窗 / 菜单那两种真实冲突用下面的选择器挡住。
+   * ⚠ Esc 还原（全屏查看 / 专注模式）**不在这里**了：两个开关的状态都在 `MailShell`，
+   * 监听器 2026-10-16 第二轮跟着搬了过去（顺带让列表页也能用 Esc 退出专注模式）。
+   * 这里曾经用 `useMailFullscreen()` 的 context 拿状态，现在不需要了。
    */
-  useEffect(() => {
-    if (!full && !focus) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (
-        document.querySelector(
-          '[data-slot="dialog-content"][data-open], [data-slot="dropdown-menu-content"][data-open]',
-        )
-      ) {
-        return;
-      }
-      setFull(false);
-      setFocus(false);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [full, focus, setFull, setFocus]);
 
   /**
    * 打印前的「深底浅字」就地修正（2026-10-08）。

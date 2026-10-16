@@ -876,7 +876,8 @@ section[id^="ccf-field"] {
 
    ⚠ 状态由 `components/mail/mail-shell.tsx` 挂在 `<html>` 上（`data-mail-focus`）：
      页面容器与页头都长在**服务端 layout** 里（根 layout 的顶栏/页脚更够不着），
-     只有 documentElement 是它们共同的祖先。
+     只有 documentElement 是它们共同的祖先。开关持久化在 localStorage（`lib/mail/focus.ts`），
+     刷新时的**首帧**由 `app/layout.tsx` 的内联脚本先挂上，免得先闪一下外壳。
    ⚠ 断点 `64rem` 与开关本身的 `lg` 门槛一致：窄屏详情本来就是整页，没有这回事。
    ⚠ 页面容器要覆盖的是 Tailwind 的 `py-12` / `lg:h-[calc(100dvh_-_…)]`（同为单类选择器），
      这里靠 `html[属性] [data-slot]` 的更高权重取胜，不靠顺序。 */

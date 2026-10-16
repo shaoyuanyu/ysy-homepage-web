@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { getLocale } from "next-intl/server";
 
 import { UmamiTracker } from "@/components/analytics/umami-tracker";
+import { MAIL_FOCUS_KEY } from "@/lib/mail/focus";
 // 字体全部自托管（@fontsource 包 / 自生成分片打包为站内静态资源）：
 // - 无衬线 Inter（变量字体 100~900 + 斜体）：功能 UI 与全站默认
 // - 衬线 Tinos（Times New Roman 度量兼容替身）+ Noto Serif SC（中文，变量字重）
@@ -81,10 +82,14 @@ export default async function RootLayout({
               可见性规则联动。next-themes 只把「解析后的主题」写成 .dark
               （选「跟随系统」时 DOM 里没有「system」这个值），故「所选设置」
               须自己标记。
-              键名 "theme" 即 next-themes 的默认 storageKey（Providers 未覆盖）。 */}
+              键名 "theme" 即 next-themes 的默认 storageKey（Providers 未覆盖）。
+            - 邮件专注模式 → 给 <html> 挂 data-mail-focus（规则见 globals.css）。
+              属性平时由 MailShell 在客户端维护，这里只管**首帧**：不挂的话，刷新邮箱页
+              会先把顶栏 / 页脚 / 页头画出来，等 hydration 后才收起来——白闪一下。
+              键名与路由判据须与 lib/mail/focus.ts 的 MAIL_FOCUS_KEY / isMailPath 一致。 */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `try{var d=document.documentElement;if(localStorage.getItem("owner:auth")==="1"){d.classList.add("owner-logged-in")}var t=localStorage.getItem("theme");d.classList.add(t==="light"||t==="dark"?"theme-"+t:"theme-system")}catch(e){}`,
+            __html: `try{var d=document.documentElement;if(localStorage.getItem("owner:auth")==="1"){d.classList.add("owner-logged-in")}var t=localStorage.getItem("theme");d.classList.add(t==="light"||t==="dark"?"theme-"+t:"theme-system");if(location.pathname.split("/").indexOf("mail")>=0&&localStorage.getItem("${MAIL_FOCUS_KEY}")==="1"){d.dataset.mailFocus=""}}catch(e){}`,
           }}
         />
         {children}

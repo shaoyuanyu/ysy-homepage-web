@@ -1623,8 +1623,37 @@ export function MailClient({
     });
   }, []);
 
+  /**
+   * `openItem` 里判「点的是不是右栏正看着的那封」用。
+   *
+   * ⚠ 为什么绕一层 ref 而不是让 `openItem` 直接依赖 `activeMessageId`：它是 `MailRow` /
+   *   `ThreadChildRow` 的 prop，而两个行组件都是**默认浅比较**的 `memo`（mail-row.tsx
+   *   开头的 memo 说明就是为这件事写的）——回调引用一变，每次开关邮件都会让
+   *   **已加载的全部行**重渲。ref 让回调引用恒定，判等值在点击那一刻才读。
+   */
+  const activeMessageIdRef = useRef(activeMessageId);
+  useEffect(() => {
+    activeMessageIdRef.current = activeMessageId;
+  }, [activeMessageId]);
+
+  /**
+   * 点列表行 → 右栏打开这一封；**点的是右栏正看着的那一封则退出详情**（2026-10-16
+   * 用户要求：「在邮件列表中再次点击当前正在查看的邮件，应该退出邮件查看」）。
+   *
+   * 宽屏两栏下左栏常驻，再点一次当前高亮行 = 关掉右栏，回到 `/mail`（右栏变回「选择一封
+   * 邮件」占位）——与操作栏那枚「关闭」落到同一个地方，只是手不用挪过去。窄屏是整页跳转，
+   * 点了就退回列表页，语义一致。
+   *
+   * ⚠ 判等用 **messageId**（列表行天然带着它），不是 URL 里那串编码后的 `activeId`。
+   * ⚠ 会话就地展开出来的**子行**走的也是这个回调：子行正好是被查看的那封时，点它同样退出。
+   * ⚠ 选择模式下到不了这里（整行点击变成勾选，见 mail-row.tsx）。
+   */
   const openItem = useCallback(
     (m: MailListItem) => {
+      if (activeMessageIdRef.current === m.messageId) {
+        router.push("/mail", mailNavOptions());
+        return;
+      }
       router.push(`/mail/message/${encodeMessageId(m.messageId)}`, mailNavOptions());
     },
     [router],
