@@ -36,9 +36,9 @@ import { formatDate } from "@/lib/mail/format";
 import { mailNavOptions } from "@/lib/mail/nav";
 import { useOwnAddresses } from "@/lib/mail/use-own-addresses";
 import { MAIL_ACCOUNTS_CHANGED_EVENT } from "@/components/mail/accounts-dialog";
-import { MAIL_DRAFTS_CHANGED_EVENT } from "@/components/mail/compose-form";
+import { MAIL_DRAFTS_CHANGED_EVENT, MAIL_SENT_EVENT } from "@/components/mail/compose-form";
 import { broadcastItemChange, MAIL_ITEM_CHANGED_EVENT, type MailItemChange } from "@/components/mail/message-view";
-import { MAIL_UNREAD_EVENT } from "@/components/mail/new-mail-notifier";
+import { MAIL_NEW_MAIL_EVENT, MAIL_SYNCED_EVENT, MAIL_UNREAD_EVENT } from "@/components/mail/new-mail-notifier";
 import { UNREAD_TOGGLE_CLASS, UNREAD_TOGGLE_DOT_CLASS } from "@/components/mail/unread-color";
 import { AccountMenu } from "@/components/mail/account-menu";
 import { MailBatchBar } from "@/components/mail/mail-batch-bar";
@@ -66,7 +66,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { toast } from "@/components/ui/toast";
 import { mailErrorKind, mailErrorText } from "@/lib/mail/error-text";
 import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
-import { insertByListOrder } from "@/lib/mail/order";
+import { insertByListOrder, reconcileRows } from "@/lib/mail/order";
 import { JUNK_UNDO_WINDOW_MS } from "@/lib/mail/undo";
 import type {
   MailAccount,
@@ -103,6 +103,14 @@ type ViewFilter = "all" | "received" | "sent" | "drafts" | "junk";
 
 /** tab 落进 URL 的查询参数名（见 `view` 状态的注释） */
 const VIEW_PARAM = "view";
+
+/**
+ * 「服务端跑完一轮同步」触发的兜底重取之间的最小间隔（2026-10-16）。
+ * 真实节拍 = 每轮同步结束才前进一次（真机 5s 配置下实测约 24s 一跳），所以 10s 不会挡到它；
+ * 设这个闸门是因为**不能假定上游信号一定很慢** —— 万一 `lastSync` 变成每拍都动
+ * （打桩、后端实现变化），列表也不会退化成 2 秒一次的轮询。
+ */
+const SERVER_SYNC_REFRESH_MIN_MS = 10_000;
 
 /** 查询串里的 view 是否合法（非法值一律回落到默认 tab，避免手改 URL 把列表搞成空白） */
 function isViewFilter(v: string | null): v is ViewFilter {
@@ -470,6 +478,13 @@ export function MailClient({
       q: string;
       before?: string | null;
       append?: boolean;
+      /**
+       * 合并模式（2026-10-16）：**不整体替换**当前列表——首屏范围内的行以服务端为准
+       * （新增的进来、改过的更新、消失的滚蛋），比首屏更老的那些**已加载页**原样保留。
+       * 用于「后台自己动了数据」的场景（抓进新邮件 / 别处发信 / 切回页面），整表替换会把
+       * 正在翻页、滚动的用户弹回第一页。规则与理由见 `lib/mail/order.ts` 的 `reconcileRows`。
+       */
+      reconcile?: boolean;
       /** 垃圾视图：每个（账号, 路径）一项，服务端取并集（见 junkFolders） */
       folders?: { account: string; path: string }[];
     }) => {
@@ -503,7 +518,11 @@ export function MailClient({
       const data = (await res.json()) as MailListResponse;
       if (seq !== loadSeqRef.current) return;
       setItems((prev) => {
-        const merged = opts.append ? [...prev, ...data.items] : data.items;
+        const merged = opts.append
+          ? [...prev, ...data.items]
+          : opts.reconcile
+            ? reconcileRows(prev, data.items, data.next !== null)
+            : data.items;
         // 详情页「上一封 / 下一封」按此顺序导航（4.9）
         try {
           window.sessionStorage.setItem(
@@ -515,6 +534,8 @@ export function MailClient({
         }
         return merged;
       });
+      // 合并模式的分页游标也要跟着换成服务端的（首屏已经换成服务端那一份了）：
+      // 「加载更多」得从新首屏的末尾继续，否则会跳页/重复。
       setNext(data.next);
     },
     [],
@@ -639,11 +660,15 @@ export function MailClient({
    * 否则会退化成"查全部"）。
    */
   const loadCurrent = useCallback(
-    async (opts?: { before?: string | null; append?: boolean }) => {
+    async (opts?: { before?: string | null; append?: boolean; reconcile?: boolean }) => {
       const folders = await junkFolders();
       if (view === "junk" && folders.length === 0) {
-        setItems([]);
-        setNext(null);
+        // 合并模式（后台自己动数据，如新邮件到达）下不能把列表清空：垃圾视图的路径解析失败
+        // 只是「这次拿不到数据」，不代表用户眼前那份好好的列表该消失。
+        if (!opts?.reconcile) {
+          setItems([]);
+          setNext(null);
+        }
         return;
       }
       await load({
@@ -654,11 +679,13 @@ export function MailClient({
         q,
         before: opts?.before,
         append: opts?.append,
+        reconcile: opts?.reconcile,
         folders,
       });
       // 整表重取成功 → 列表已经是服务端的真实状态，乐观操作留下的过期标记（stale）清空。
       // ⚠ 续页（append）不清：那一页是追加在旧数据后面的，已存在的 stale 行还没被换掉。
-      if (!opts?.append) setStaleIds(new Set());
+      // ⚠ 合并（reconcile）也不清：首屏以外的旧行原样留着，它们可能仍是过期 uid（见 staleIds 注释）。
+      if (!opts?.append && !opts?.reconcile) setStaleIds(new Set());
     },
     [accountFilter, view, unseenActive, flaggedActive, q, load, junkFolders],
   );
@@ -739,6 +766,58 @@ export function MailClient({
     }, 2_000);
     return () => window.clearInterval(timer);
   }, [syncing, view, q, loadCurrent]);
+
+  /**
+   * 「后台或别处动了数据」→ 静默刷新左栏列表（2026-10-16 用户报「收到新邮件时列表
+   * 不跟着刷新」后补齐）。
+   *
+   * 四个触发源，覆盖同一件事：**列表内容会变，但本页面什么都没点**。
+   * - `mail:new-mail`：全站轮询的 `MailNewMailWatcher` 抓到「收件箱真的进了新邮件」
+   *   （判据见该文件头注释，已把「自己标为未读 / 搬动邮件」这类假信号滤掉）。此前它只有
+   *   未读角标一个听众——提醒弹了、角标涨了，左栏列表里却没那一封。
+   * - `mail:sent`：本站发信成功（`ComposeForm` 广播）。信在服务商侧留底，「全部」与
+   *   「发件」tab 该多出这一封。⚠ 写邮件页与邮箱**共用同一个 layout**，左栏列表在整个
+   *   写信期间都挂着，`router.push("/mail")` 不会让它重挂载——不广播就永远不刷新。
+   * - 切回页面（`visibilitychange` → visible）：用户在手机上标了已读 / 删了信 / 发了信，
+   *   回到电脑时列表可能已经过时。与 watcher 的 onVisible 同一时机、同一理由。
+   * - `mail:synced`（**兜底**）：服务端刚跑完一轮同步。上面三条都依赖「本页收到了某个
+   *   信号」，而别处改动（手机端、网页版、服务商规则）在没有新邮件时一个信号都没有——
+   *   这一条不挑原因，只要同步在跑就让列表跟上，用户不必等切窗口或手动刷新。
+   *   随同一起用的 2 秒探针是**已有的**（watcher 每 2 秒拉 `/health`），不新增轮询。
+   *
+   * ⚠ 一律用 `reconcile`，不用整表替换：用户可能正滚在第 3 页，整表替换会把他弹回第一页
+   *   （他什么都没点）。规则见 `lib/mail/order.ts` 的 `reconcileRows`。
+   * ⚠ `mail:synced` 要过节流（`SERVER_SYNC_REFRESH_MIN_MS`）：它是心跳而非「内容变了」的
+   *   精确信号，频率不能假定。其余三个是真事件，不节流。
+   * ⚠ 搜索态 / 草稿视图跳过：与上面抓取期间的自动刷新同一口径（搜索时列表自己变让人
+   *   困惑；草稿的数据源是 `/drafts` 而非 messages，切回页面要刷草稿箱得走另一条路）。
+   */
+  const lastServerSyncRefreshRef = useRef(0);
+  useEffect(() => {
+    if (view === "drafts" || q.trim()) return;
+    const refresh = () => {
+      // 记时间戳：兜底重取（`mail:synced`）拿它当节流闸门
+      lastServerSyncRefreshRef.current = Date.now();
+      void loadCurrent({ reconcile: true }).catch(() => {});
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    const onServerSynced = () => {
+      if (Date.now() - lastServerSyncRefreshRef.current < SERVER_SYNC_REFRESH_MIN_MS) return;
+      refresh();
+    };
+    window.addEventListener(MAIL_NEW_MAIL_EVENT, refresh);
+    window.addEventListener(MAIL_SENT_EVENT, refresh);
+    window.addEventListener(MAIL_SYNCED_EVENT, onServerSynced);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener(MAIL_NEW_MAIL_EVENT, refresh);
+      window.removeEventListener(MAIL_SENT_EVENT, refresh);
+      window.removeEventListener(MAIL_SYNCED_EVENT, onServerSynced);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [view, q, loadCurrent]);
 
   /**
    * 「全部标为已读」（2026-10-05 用户定稿）：范围 = 当前账号筛选（「全部账号」= 全部账号）；

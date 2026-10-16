@@ -24,6 +24,15 @@ import type { MailAccount, MailAddress, MailDetail, MailDraft, SendAttachmentInp
 
 /** 服务器端草稿变更广播（写信页保存/删除后；草稿箱列表据此刷新） */
 export const MAIL_DRAFTS_CHANGED_EVENT = "mail:drafts-changed";
+/**
+ * 发信成功（2026-10-16）。听众：左栏列表（`mail-client.tsx`）。
+ *
+ * 为什么需要：信在服务商侧留底进「已发送」，「全部」与「发件」tab 该多出这一封；
+ * 而写邮件页与邮箱**共用同一个 layout**——左栏列表在整个写信期间都挂着，
+ * 发完 `router.push("/mail")` 也不会让它重挂载（`view` 也不跟 URL 同步，
+ * 见 `mail-client.tsx` 的 changeView 注释），没有这个事件就永远不刷新。
+ */
+export const MAIL_SENT_EVENT = "mail:sent";
 
 /** 自动保存提交的载荷（写信页 → webmaild /drafts；地址串保原文） */
 interface DraftPayload {
@@ -651,6 +660,10 @@ export function ComposeForm() {
         // 存储不可用：忽略
       }
       toast.add({ title: t("sent"), type: "success" });
+      // 告诉左栏列表「后台多了一封留底」（见 MAIL_SENT_EVENT 注释）：这里必须显式广播——
+      // 紧接着的 push 只换右栏，挂着的列表不会因此重取。⚠ 先广播再导航：push 之后这个
+      // 组件可能已经开始卸载。
+      window.dispatchEvent(new Event(MAIL_SENT_EVENT));
       router.push("/mail");
     } catch (err) {
       toast.add({ title: t("sendFailed"), description: err instanceof Error ? err.message : String(err), type: "error" });

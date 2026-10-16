@@ -16,3 +16,30 @@ export function insertByListOrder(list: MailListItem[], item: MailListItem): Mai
   if (list.some((x) => x.messageId === item.messageId)) return list;
   return [...list, item].sort(byListOrder);
 }
+
+/**
+ * 「静默刷新」用的列表合并（2026-10-16）：以服务端刚返回的**首屏**为准更新列表，
+ * 但**保留比首屏更老的那些已加载页**（用户点过「加载更多」或哨兵自动续过页的行）。
+ *
+ * 为什么需要它：后台自己动了数据（抓进新邮件、手机端标已读/删信、自己在别处发了一封）
+ * 时列表必须跟上，但用户可能正滚在第 3 页上——直接整表替换会把他弹回第一页，
+ * 他什么都没点。合并的规则就一条：
+ *   - 首屏范围内的行**完全以服务端为准**（新增的进来、改过的更新、消失的滚蛋）；
+ *   - 首屏之外（比首屏最后一封更老）的行原样留着。
+ *
+ * ⚠ `hasMore` 必须传服务端这次返回的「还有更多」游标是否存在：服务端说「没有更多」时
+ *   本次首屏就是全部匹配，旧列表里多出来的行一律作废（否则删掉的邮件会赖在列表上）。
+ * ⚠ 首屏为空时返回空列表——服务端说这个筛选下什么都没有，列表就该是空的。
+ * ⚠ 边界行（首屏最后一封）自己：`byListOrder(m, oldest) > 0` 严格更老才算「首屏之外」，
+ *   等于它自己的那行会被服务端版本替换掉。
+ */
+export function reconcileRows(
+  prev: MailListItem[],
+  next: MailListItem[],
+  hasMore: boolean,
+): MailListItem[] {
+  if (next.length === 0) return [];
+  if (!hasMore) return next;
+  const oldest = next[next.length - 1];
+  return [...next, ...prev.filter((m) => byListOrder(m, oldest) > 0)];
+}

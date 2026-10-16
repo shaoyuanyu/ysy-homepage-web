@@ -3169,9 +3169,11 @@ function stubMailApi(
     listError?: number;
     /** 账号内存桩的实时引用（用例可改写 unread 等字段模拟新邮件 / 新账号） */
     accountStore?: Record<string, unknown>[];
-    /** 「上次收到新邮件」信号（/health 的 lastNewMail）的可控引用：
-     *  新邮件提醒器只认它前进（未读总数上升不弹——「标为未读」也是上升，是假信号） */
-    healthStore?: { lastNewMail: string };
+    /**
+     * 「上次收到新邮件」信号（/health 的 lastNewMail）的可控引用：
+     * 新邮件提醒器只认它前进（未读总数上升不弹——「标为未读」也是上升，是假信号）
+     */
+    healthStore?: { lastNewMail: string; lastSync: string };
     /** 「垃圾」tab 用例：acc1 的「垃圾邮件」是否已在同步白名单里（GET /folders 的 synced） */
     junkSynced?: boolean;
     /** 「垃圾」tab 用例：带 folder 参数的列表请求返回一封落在「垃圾邮件」里的桩邮件 */
@@ -3221,7 +3223,11 @@ function stubMailApi(
   // 「上次收到新邮件」桩（2026-10-06）：/health 的 lastNewMail。**默认固定值**（历次
   // 轮询不前进 → 不误报）；用例要模拟新邮件时改这个对象再触发 visibilitychange。
   // ⚠ 曾用「请求时刻」作值：每个轮询周期都会「前进」，提醒器会每拍弹一条假提醒。
-  const healthStore = { lastNewMail: "2026-01-01T00:00:00.000Z" };
+  // ⚠ **lastSync 同理（2026-10-16）**：它现在是「服务端跑完一轮同步」的信号
+  //   （`mail:synced` → 左栏列表兜底重取，见 new-mail-notifier.tsx）。以前这里也写
+  //   `new Date().toISOString()`（每请求都前进）—— 那样每条用例的列表都会每 10 秒
+  //   被兜底重取一次，乐观 UI 用例会被拉回桩里的旧值。所以同样是**注册时刻的固定值**。
+  const healthStore = { lastNewMail: "2026-01-01T00:00:00.000Z", lastSync: new Date().toISOString() };
   calls.healthStore = healthStore;
   // 草稿内存桩（2026-10-06）：POST/PUT/DELETE 真实改数组，GET 反映最新状态
   let draftSeq = 0;
@@ -3350,18 +3356,18 @@ function stubMailApi(
       domainStore = next;
       return json({ domains: domainStore });
     }
-    // 健康端点（5.5）：状态条每 2 秒轮询这两个；默认全部健康（时间取请求时刻 → 显示「刚刚」）
+    // 健康端点（5.5）：状态条每 2 秒轮询这两个；默认全部健康
     // lastNewMail = 上次抓进新邮件的时刻：acc1 用可控桩（见 healthStore，提醒器只认它前进）、acc2 从未收到（null）
+    // lastSync = 同步轮次心跳：同样走 healthStore（固定值，只有用例主动推进时才前进）
     // ⚠ 账号列表取自 `accountStore`（真后端就是这样）：**刚添加的账号 `lastSync` 为 null**
     //   =「首轮同步还没跑完」——底栏据此显示「正在首次同步邮件…」（2026-10-08 用例用）
     if (path === "/health") {
-      const now = new Date().toISOString();
       const body = health?.webmail?.body ?? {
         ok: true,
         accounts: accountStore.map((a) => ({
           id: a.id as string,
           enabled: true,
-          lastSync: MAIL_ACCOUNTS.some((m) => m.id === a.id) ? now : null,
+          lastSync: MAIL_ACCOUNTS.some((m) => m.id === a.id) ? healthStore.lastSync : null,
           lastError: null,
           lastNewMail: a.id === "acc1" ? healthStore.lastNewMail : null,
         })),
@@ -6019,7 +6025,7 @@ test.describe("站内邮件（/mail）", () => {
         send: [],
         delete: [],
         accountStore: undefined as Record<string, unknown>[] | undefined,
-        healthStore: undefined as { lastNewMail: string } | undefined,
+        healthStore: undefined as { lastNewMail: string; lastSync: string } | undefined,
       };
       await stubMailApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
@@ -6053,6 +6059,187 @@ test.describe("站内邮件（/mail）", () => {
     });
 
     /**
+     * 新邮件到达时**左栏列表也要跟着长出来**（2026-10-16 用户报）：
+     * 「页面开着的时候收到新邮件，右上角弹了提醒、角标也涨了，但左栏列表里没有那一封」。
+     *
+     * 根因：`mail:new-mail` 事件此前只有未读角标一个听众，列表的自动刷新只在**抓取期间**
+     * （回填 / 首次同步）才挂定时器——平时收到新邮件只有「手动点刷新」一条路。
+     * 修法：列表订阅同一个事件，静默 `merge` 一次首屏（不替换已有行、不动分页游标，
+     * 见 `mail-client.tsx` 的 merge 注释）。
+     *
+     * 断言刻意**不点任何按钮、不重载页面**：要锁的就是「什么都没做，它自己来了」。
+     * ⚠ 回归时（把事件的第二个听众删掉）本用例会红——列表会停在 `before` 行。
+     */
+    test("收到新邮件：左栏列表自动长出新行（不用手动刷新）", async ({ page }) => {
+      const calls = {
+        flags: [],
+        send: [],
+        delete: [],
+        accountStore: undefined as Record<string, unknown>[] | undefined,
+        healthStore: undefined as { lastNewMail: string; lastSync: string } | undefined,
+        listStore: undefined as unknown[] | undefined,
+      };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      await expect(rows.first()).toBeVisible();
+      const before = await rows.count();
+      await expect(page.getByText("刚到的这一封")).toHaveCount(0);
+
+      // 后台抓进一封：列表桩头部插一封 + 推进 /health 的 lastNewMail
+      // （提醒器只认这个信号前进——判据见 new-mail-notifier.tsx 文件头注释）
+      calls.listStore = [
+        mailItem({
+          messageId: "mid:incoming@test.local",
+          date: "2026-10-16T02:00:00.000Z",
+          subject: "刚到的这一封",
+          fromAddr: "fresh@example.net",
+          fromName: "新人",
+          snippet: "刚刚收到",
+        }),
+        ...MAIL_LIST,
+      ];
+      calls.accountStore![0].unread = 4;
+      calls.healthStore!.lastNewMail = new Date(Date.now() + 60_000).toISOString();
+      // 触发 watcher 立即重取（真实场景里它也会在 2 秒后的下一拍发现）
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+
+      // 不点刷新、不重载：列表自己长出来，且新行落在最上面（列表按日期倒序）
+      await expect(rows).toHaveCount(before + 1, { timeout: 10_000 });
+      await expect(rows.first()).toContainText("刚到的这一封");
+    });
+
+    /**
+     * 发信成功后列表要自己多出那封留底（2026-10-16 用户追问「『全部』tab 下的列表不也
+     * 该刷新吗」）。
+     *
+     * ⚠ 这条特别容易漏成永真：`ComposeForm` 发完 `router.push("/mail")`，看起来像「回列表
+     *   页了自然会重取」。实际写邮件页与邮箱**共用同一个 layout** —— 左栏列表在整个写信
+     *   期间都挂着，push 只换右栏；`view` 也从 URL 同步回 state（只在挂载时读一次），
+     *   所以不广播 `mail:sent` 的话列表一动不动。
+     */
+    test("发信成功：左栏列表自动多出那封留底（全部 tab）", async ({ page }) => {
+      const calls = { flags: [], send: [] as unknown[], delete: [], listStore: undefined as unknown[] | undefined };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      await expect(rows.first()).toBeVisible();
+      const before = await rows.count();
+      await expect(page.getByText("刚写完的这封")).toHaveCount(0);
+
+      await page.getByRole("link", { name: "写邮件" }).click();
+      await expect(page).toHaveURL(/\/mail\/compose/);
+      await page.locator("#mail-to").fill("someone@example.org");
+      await page.locator("#mail-subject").fill("刚写完的这封");
+      await page.locator("#mail-body").fill("正文");
+      // 服务商侧留底：发出去的这一封会落在「已发送」（桩不自己造，用例显式摆上）
+      calls.listStore = [
+        mailItem({
+          messageId: "mid:sent-now@test.local",
+          date: "2026-10-16T03:00:00.000Z",
+          subject: "刚写完的这封",
+          fromAddr: "ysy@edu.example.cn",
+          snippet: "正文",
+          copies: [{ accountId: "acc1", folder: "已发送", uid: 9 }],
+        }),
+        ...MAIL_LIST,
+      ];
+      await page.getByRole("button", { name: "发送" }).click();
+      await expect.poll(() => calls.send.length).toBe(1);
+      await expect(page).toHaveURL(/\/mail(\?[^/]*)?$/);
+
+      // 不点刷新：列表自己多出这一封
+      await expect(rows).toHaveCount(before + 1, { timeout: 10_000 });
+      await expect(rows.first()).toContainText("刚写完的这封");
+    });
+
+    /**
+     * 切回页面（`visibilitychange` → visible）时列表静默刷新（2026-10-16）。
+     *
+     * 覆盖的是「手机 / 别的客户端动了邮件，回到电脑时列表已经过时」：抓取轮询只认
+     * 「**收件箱**进了新邮件」，手机端标已读 / 删信 / 发信都不会触发任何本页事件；
+     * 而回到页面这个时机是**零轮询成本**的同步点（与 watcher 的 onVisible 同一理由）。
+     * ⚠ 这里锁的是「消失的行真的会消失」——合并刷新必须让**首屏范围内的行以服务端为准**，
+     *   只往列表里加行的写法（光插入不删除）在这条上会红。
+     */
+    test("切回页面：列表跟上别处的改动（手机上删的信不再赖着）", async ({ page }) => {
+      const calls = { flags: [], send: [], delete: [], listStore: undefined as unknown[] | undefined };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      await expect(rows.first()).toBeVisible();
+      const before = await rows.count();
+      await expect(page.getByText("Weekly Digest")).toBeVisible();
+
+      // 手机上删掉了一封：服务端不再返回它
+      calls.listStore = MAIL_LIST.filter((m) => m.subject !== "Weekly Digest");
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+
+      await expect(rows).toHaveCount(before - 1, { timeout: 10_000 });
+      await expect(page.getByText("Weekly Digest")).toHaveCount(0);
+    });
+
+    /**
+     * 兜底刷新：服务端跑完一轮同步，列表自己跟上（2026-10-16 用户要求「只要最好的
+     * 用户体验」）。
+     *
+     * 覆盖的是**没有任何本页事件**的那一类变化：手机端 / 网页版 / 服务商端规则动过邮件，
+     * 而收件箱没进新信（`lastNewMail` 不动）→ 本页一个事件都收不到。信号 = `/health`
+     * 每账号的 `lastSync` 前进（同步轮次心跳），由全站**已有**的 2 秒探针发现，不新增轮询。
+     *
+     * 写法上刻意**不触发 `visibilitychange`**（那会走「切回页面」那条路、失去区分度）：
+     * 只改桩，让 watcher 自己在 2 秒后的下一拍发现。
+     * 前半段还锁一条负向契约：`lastSync` 不动时列表**不许**自己变（兜底 ≠ 定频轮询）。
+     */
+    test("兜底刷新：服务端跑完一轮同步，列表自己跟上（无任何本页事件）", async ({ page }) => {
+      const calls = {
+        flags: [],
+        send: [],
+        delete: [],
+        listStore: undefined as unknown[] | undefined,
+        healthStore: undefined as { lastNewMail: string; lastSync: string } | undefined,
+      };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      await expect(rows.first()).toBeVisible();
+      const before = await rows.count();
+
+      // ① 负向：后台数据变了、但 lastSync 没前进 → 探针跑过一拍，列表不许动
+      //    （这一段同时保证 watcher 的基线已经建立，否则下面那次前进会被当成「首轮」吞掉）
+      calls.listStore = [
+        mailItem({
+          messageId: "mid:elsewhere@test.local",
+          date: "2026-10-16T04:00:00.000Z",
+          subject: "在别处改动过的那封",
+          fromAddr: "someone@example.net",
+          snippet: "别处操作的结果",
+        }),
+        ...MAIL_LIST,
+      ];
+      await page.waitForTimeout(2_600); // 覆盖至少一拍 2 秒探针
+      // 负向契约：lastSync 没动，列表不许自己变（兜底刷新不是定频轮询）
+      await expect(rows).toHaveCount(before);
+
+      // ② 服务端刚跑完一轮同步（lastSync 前进）→ 下一拍探针发现 → 列表静默跟上
+      calls.healthStore!.lastSync = new Date(Date.now() + 60_000).toISOString();
+      await expect(rows).toHaveCount(before + 1, { timeout: 15_000 });
+      await expect(page.getByText("在别处改动过的那封")).toBeVisible();
+    });
+
+    /**
      * 页面不可见时到达的新邮件：**先攒着**，回到页面才弹（2026-10-11）。
      *
      * 为什么：读屏的 polite 播报只有用户听得见才有意义——在别的标签页里把它念完等于
@@ -6069,7 +6256,7 @@ test.describe("站内邮件（/mail）", () => {
         send: [],
         delete: [],
         accountStore: undefined as Record<string, unknown>[] | undefined,
-        healthStore: undefined as { lastNewMail: string } | undefined,
+        healthStore: undefined as { lastNewMail: string; lastSync: string } | undefined,
       };
       await stubMailApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
