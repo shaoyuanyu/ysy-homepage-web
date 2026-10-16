@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { BookUserIcon, CheckIcon, MailsIcon, PlusIcon, SearchIcon } from "lucide-react";
 
@@ -48,16 +49,34 @@ function avatarLetter(name: string, email: string): string {
  * - 「本地联系人」：只显示不归属任何账号的（手动保存的默认归属）；
  * - 「账号 X」：已保存中归属为 X 的 + 往来中与 X 出现过的人（known 的 accounts 含 X）。
  *
+ * ⚠ **初值跟入口账号**（2026-10-17 用户要求「在选择具体账号时点击『写邮件』，也应该默认
+ *   显示具体账号的联系人」）：`?from=<账号>` 进来直接落在那位账号那一档，不是「全部联系人」。
+ *
  * ⚠ 视觉语言与通讯录页一致：已保存 = 实线卡片 + 实心头像；未保存的往来对象 =
  *   虚线边框 + 淡底 + 虚线轮廓头像（「临时 / 尚未收录」）。
  */
 export function MailContactsPane() {
   const t = useTranslations("mail");
+  const searchParams = useSearchParams();
+  /**
+   * 档位初值 = **入口账号**（`?from=<账号 id>`，2026-10-17 用户要求）：「在选着的这个
+   * 账号下发信」时，左栏就应该是**这个账号的联系人**（已保存里归属它的 + 与它往来过的），
+   * 而不是把所有账号的人混在一起的「全部联系人」。入口没带账号（左栏选「全部账号」、
+   * 通讯录「写信」）时仍是「全部联系人」。
+   * ⚠ 只跟**入口**：写信页里手动换发件人不改本档位（这里是"我从哪儿进来的"，不是"当前
+   *   发件人"）；用户自己在本面板改过档位也不会被覆盖（下面的同步 effect 只在 fromParam
+   *   变化时动手）。
+   */
+  const fromParam = searchParams.get("from");
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [contacts, setContacts] = useState<MailContact[] | null>(null);
   const [known, setKnown] = useState<MailKnownSender[] | null>(null);
-  const [filter, setFilter] = useState<string>("all");
+  const [filter, setFilter] = useState<string>(fromParam ?? "all");
   const [q, setQ] = useState("");
+  // 同一路由换入口账号（compose?from=a → compose?from=b）时跟上；fromParam 没变就不动
+  useEffect(() => {
+    if (fromParam) setFilter(fromParam);
+  }, [fromParam]);
   /** 搜索展开态（与邮箱状态同一套交互：常态图标、点击展开、Esc / 失焦且为空收起） */
   const [searchOpen, setSearchOpen] = useState(false);
   /** 最近一次「加入收件人」的邮箱（行内 ✓ 反馈，1.6s 后自动消退） */
@@ -86,6 +105,17 @@ export function MailContactsPane() {
     const timer = setTimeout(() => setAdded(null), 1600);
     return () => clearTimeout(timer);
   }, [added]);
+
+  /**
+   * 账号列表到货后校对档位：`?from=` 指向的账号不在列表里（已删除 / 停用 / 手改 URL）
+   * → 回到「全部联系人」。⚠ 不校对就等于把一个**不存在的档位**挂在选择器上：触发器
+   * 显示「全部联系人」（`current` 找不到），列表却按那个 id 筛成了空的。
+   */
+  useEffect(() => {
+    if (accounts.length === 0) return;
+    if (filter === "all" || filter === LOCAL_FILTER) return;
+    if (!accounts.some((a) => a.id === filter)) setFilter("all");
+  }, [accounts, filter]);
 
   const visibleContacts = useMemo(() => {
     const kw = q.trim().toLowerCase();

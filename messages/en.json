@@ -416,6 +416,7 @@
     "deleted": "Deleted",
     "actionFailed": "Action failed, please retry",
     "fieldFrom": "From",
+    "fieldFromUnset": "Choose a sender",
     "fieldFromName": "Display name",
     "fieldTo": "To",
     "fieldCc": "Cc",

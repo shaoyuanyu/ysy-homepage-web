@@ -122,9 +122,12 @@ export function ComposeForm() {
   // 通讯录「写信」入口预填收件人
   const toParam = searchParams.get("to");
   /**
-   * 默认发件账号（2026-10-16 用户要求）：
+   * 默认发件账号（2026-10-16 用户要求；2026-10-17 收紧为「只认入口」）：
    * - `?from=<账号 id>`：写邮件入口（左栏账号筛选跟着进来）与详情页的回信 / 转发都带它
-   *   ——「我现在是谁」由入口决定，而不是永远取账号列表第一个；
+   *   ——「我现在是谁」由入口决定；
+   * - ⚠ **没带 `?from=` 就留空**（左栏选「全部账号」、通讯录「写信」、直接开本页）：不再
+   *   回落账号列表第一个（用户 2026-10-17：「选择『全部账号』时点击『写邮件』，不应该有
+   *   默认发件人」）——发件人是「以谁的身份发信」，替用户猜一个等于替他决定这件事。
    * - 只当**默认值**：草稿里存的 accountId 优先（见下方恢复 effect 与 accounts effect 的
    *   `prev ||` 写法），用户手动改过也不覆盖。
    */
@@ -135,6 +138,8 @@ export function ComposeForm() {
   const { ready: ownReady, own, emails: ownEmails } = useOwnAddresses();
 
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
+  /** 账号列表是否已到货：发件人为空时的占位文案要等它到齐再显示（见 SelectValue 那段注释） */
+  const accountsReady = accounts.length > 0;
   const [fromId, setFromId] = useState("");
   /**
    * 临时发件人姓名（2026-10-16 用户要求）：「在给不同的人发件时，我的身份自述可能有变化」。
@@ -221,7 +226,12 @@ export function ComposeForm() {
     : forwardId
       ? `mail:draft:forward:${forwardId}`
       : "mail:draft:new";
-  /** 草稿归属（服务器端找回键）：新建 / 回复（同一原信）/ 转发（同一原信）各自找最近更新的草稿 */
+  /**
+   * 草稿归属（随草稿存下来的两个字段，服务器端按它找回复 / 转发的那一封）：
+   * - 回复 / 转发 → 归属键 = 那封原信的 id（找回来 = 接着写这一封；见恢复 effect）；
+   * - 新建 → `kind=new` + **空**归属键：这是一格**全局共用**的位置（没有原信可挂），
+   *   ⚠ 不要拿它当"找回最近的新建草稿"的抓手（2026-10-17 已撤掉，原因见恢复 effect）。
+   */
   const draftKind: MailDraft["kind"] = replyTo ? "reply" : forwardId ? "forward" : "new";
   const draftKindRef = replyTo ?? forwardId ?? "";
   // 保存载荷镜像（每次 render 更新；卸载 flush 也能读到最新值）
@@ -251,10 +261,14 @@ export function ComposeForm() {
         const enabled = data.filter((a) => a.enabled);
         setAccounts(enabled);
         // 草稿恢复可能已选了发件账号：只在未选时给默认（勿覆盖）。
-        // 默认值优先取 `?from=`（入口带来的账号），它不在已启用列表里时退回第一个账号
-        if (enabled.length > 0) {
-          const preferred = enabled.find((a) => a.id === fromParam);
-          setFromId((prev) => prev || preferred?.id || enabled[0].id);
+        // ⚠ 默认值**只认入口带来的 `?from=`**（2026-10-17 用户要求：「邮箱页面在选择『全部账号』
+        //   时点击『写邮件』，不应该有默认发件人」）：入口没带账号（左栏选「全部账号」、通讯录
+        //   「写信」、直接开 `/mail/compose`）时**留空**——发件人是"以谁的身份发信"，多账号下
+        //   "替你选一个"就是替你决定这件事（旧行为静默落到账号列表第一个）。留空的后果是**显式**
+        //   的：下拉显示「选择发件人」、发送按钮灰着，选好才发得出去（见 MAIL-AGENT.md 4.16）。
+        //   `?from=` 给的账号不在已启用列表里（被删 / 停用）时同样留空，**不退回第一个账号**。
+        if (fromParam) {
+          setFromId((prev) => prev || enabled.find((a) => a.id === fromParam)?.id || "");
         }
       })
       .catch(() => {});
@@ -300,10 +314,18 @@ export function ComposeForm() {
   );
 
   /**
-   * 草稿恢复（2026-10-06 服务器端草稿，替换 localStorage 单草稿）：
-   * - `?draft=<id>`：从草稿箱进入——加载该草稿（不做回复 / 转发预填）；
-   * - 否则按「归属键」找最近更新的同源草稿（列表按 updatedAt 倒序取第一条）——
-   *   写一半离开后再从同一邮件点回复 / 转发，能继续写；新建写信恢复最近的新建草稿。
+   * 草稿恢复（2026-10-06 建；**2026-10-17 收窄：只认「明确归属」的草稿**）：
+   * - `?draft=<id>`：从草稿箱点进来——加载该草稿（不做回复 / 转发预填）；
+   * - `?replyTo=` / `?forward=`：按归属键（kind/kindRef = 挂在哪封信上）找回那一封——
+   *   写一半离开后再从同一邮件点回复 / 转发能接着写（归属键的语义，见 MAIL-AGENT.md 4.9）。
+   * - ⚠ **裸「写邮件」（无参数）不再找回任何草稿**：旧写法让归属键退化成
+   *   `kind=new&kindRef=` 去问"最近更新的一封**新建**草稿"，而新建草稿没有原信可挂、
+   *   归属键是**全局共用**的一格——于是点「写邮件」会被塞回一封**几小时前甚至几年前**
+   *   的旧草稿（草稿箱 = 服务商草稿文件夹的镜像，历史草稿上百封）。用户 2026-10-17
+   *   报障：「点击写邮件时似乎会默认跳转到一个已有草稿的写邮件页面」。
+   *   现在新写信一律空白；没写完的新邮件照旧由自动保存落在「草稿」tab 里，点进去接着写。
+   *   ⚠ 旧行为同时是**数据安全**问题：写邮件 → 直接点「发送」，会把那封旧草稿的收件人与
+   *   正文发出去，而用户以为自己写的是一封新邮件。
    *
    * 恢复完成前 `restoreDoneRef` 未置位 → 自动保存被抑制（异步拉取期间，空白初值
    * 不得把服务器草稿冲掉）。找不到服务器草稿时尝试一次性迁移旧版 localStorage 草稿
@@ -323,7 +345,10 @@ export function ComposeForm() {
         if (urlDraftId) {
           const res = await fetchWithTimeout(`/api/mail/drafts/${encodeURIComponent(urlDraftId)}`);
           if (res.ok) hit = (await res.json()) as MailDraft;
-        } else {
+        } else if (draftKindRef) {
+          // ⚠ 只对**回复 / 转发**（归属键非空 = 挂在一封具体的原信上）按归属键找回。
+          //   裸「写邮件」的归属键是 `kind=new&kindRef=`（全局共用的一格），进来会命中
+          //   草稿箱里最近更新的一封新建草稿——那封可能是几小时前甚至几年前的。见上方注释。
           const params = new URLSearchParams({ kind: draftKind, kindRef: draftKindRef });
           const res = await fetchWithTimeout(`/api/mail/drafts?${params}`);
           if (res.ok) {
@@ -762,13 +787,22 @@ export function ComposeForm() {
                 className={cn("max-w-full dark:hover:bg-transparent", BARE_CONTROL)}
               >
                 {/* ⚠ 必须用 children 函数渲染标签：不传 items 的裸 <SelectValue /> 显示的是
-                    原始 value（账号 id「me」），不是账号名。
+                    原始 value（账号 id「me」」，不是账号名。
                     临时署名（2026-10-16）非空时，这里显示的就是**本封实际会发出的 From 名字**
-                    ——下拉里看到什么，收件人就收到什么 */}
+                    ——下拉里看到什么，收件人就收到什么。
+                    ⚠ 空值（2026-10-17：裸「写邮件」不预选发件人）要显示占位文案——旧写法
+                    返回空串，行里就是一个空白控件，看起来像坏了。⚠ 账号列表未到货时不显示
+                    占位（`accountsReady`）：`?from=<账号>` 进来时会先闪一下「选择发件人」
+                    再变账号名。 */}
                 <SelectValue>
                   {(v) => {
                     const a = accounts.find((x) => x.id === v);
-                    if (!a) return "";
+                    if (!a) {
+                      if (v || !accountsReady) return "";
+                      return (
+                        <span className="text-muted-foreground">{t("fieldFromUnset")}</span>
+                      );
+                    }
                     const temp = fromName.trim();
                     return temp ? `${temp}<${a.email}>` : senderLabel(a);
                   }}
@@ -907,7 +941,13 @@ export function ComposeForm() {
               <PaperclipIcon data-icon="default" />
               {t("addAttachment")}
             </Button>
-            <Button onClick={send} disabled={sending || !fromId}>
+            {/* 未选发件人时是灰按钮（2026-10-17 起裸「写邮件」不预选）：给一句悬浮说明，
+                否则用户只看到一个哑巴灰按钮 */}
+            <Button
+              onClick={send}
+              disabled={sending || !fromId}
+              title={!sending && !fromId ? t("fieldFromUnset") : undefined}
+            >
               {sending ? <Spinner /> : <SendIcon data-icon="default" />}
               {sending ? t("sending") : t("send")}
             </Button>

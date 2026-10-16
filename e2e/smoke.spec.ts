@@ -146,6 +146,17 @@ async function gotoReady(page: Page, path: string) {
   await waitForHydration(page);
 }
 
+/**
+ * 写信页「选发件人」（2026-10-17 起裸「写邮件」**不再预选**：入口没带账号就留空，
+ * 多账号下"替你选一个"就是替你决定以谁的身份发信）。用法：`await pickSender(page, "me@mail.example.cn")`。
+ * ⚠ 标签用的是发件人姓名/邮箱（`senderLabel`），不是备注名。
+ */
+async function pickSender(page: Page, label: string) {
+  await page.locator("#mail-from").click();
+  await page.getByRole("option", { name: label }).click();
+  await expect(page.locator("#mail-from")).toContainText(label);
+}
+
 async function expectPageOk(page: Page, path: string, heading?: string) {
   const res = await page.goto(path, { waitUntil: "domcontentloaded" });
   expect(res?.status(), `${path} 应返回 200`).toBe(200);
@@ -5520,6 +5531,9 @@ test.describe("站内邮件（/mail）", () => {
       await expect(page.locator("#mail-body")).toHaveValue(/发件人: newsletter@example.com/);
       await expect(page.getByText("report.pdf")).toBeVisible();
 
+      // ⚠ 这个 URL 是手写的、没带 `&from=`（生产里详情页的转发链接总会带）→ 按 2026-10-17
+      //   的规则「入口没带账号就不预选发件人」，得自己挑一个才发得出去
+      await pickSender(page, "me@mail.example.cn");
       await page.locator("#mail-to").fill("someone@example.org");
       await page.getByRole("button", { name: "发送" }).click();
       await expect.poll(() => calls.send.length).toBe(1);
@@ -5533,7 +5547,9 @@ test.describe("站内邮件（/mail）", () => {
       expect(sent.references).toBeUndefined();
     });
 
-    test("写邮件：草稿自动保存到服务器（刷新恢复），发送后清除", async ({ page }) => {
+    test("写邮件：草稿自动保存到服务器（裸写邮件不找回旧草稿），发送后清除", async ({
+      page,
+    }) => {
       const calls = {
         flags: [],
         send: [] as unknown[],
@@ -5546,14 +5562,6 @@ test.describe("站内邮件（/mail）", () => {
       await loginWithCode(page, code);
 
       await gotoReady(page, "/mail/compose");
-      // 找回草稿只问"归属键这一封"（2026-10-10）：写信页是高频入口，不能每次都把
-      // 整个草稿箱（实测有账号 141 封）拉一遍。契约 = 请求带 kind/kindRef。
-      await expect
-        .poll(() => calls.draftQueries.length, { message: "写信页要按归属键问一次" })
-        .toBeGreaterThan(0);
-      expect(calls.draftQueries[0]).toContain("kind=new");
-      expect(calls.draftQueries.some((q) => q.includes("kindRef="))).toBe(true);
-
       await page.locator("#mail-to").fill("draft@example.org");
       await page.locator("#mail-subject").fill("草稿主题");
       // 500ms 防抖后落盘（服务器端草稿，2026-10-06：首次保存 POST 创建，之后 PUT 整体替换）
@@ -5567,19 +5575,160 @@ test.describe("站内邮件（/mail）", () => {
       await expect(page.locator('[data-slot="mail-draft-status"]')).toHaveText(
         /草稿自动保存于 \d+ 秒前/,
       );
-
-      // 刷新后从服务器恢复草稿（按归属键找最近更新的「新建」草稿）
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await waitForHydration(page);
-      await expect(page.locator("#mail-to")).toHaveValue("draft@example.org");
-      await expect(page.locator("#mail-subject")).toHaveValue("草稿主题");
+      // ⚠ 2026-10-17 定稿（用户报障「点击『写邮件』时似乎会默认跳转到一个已有草稿的写邮件
+      //   页面」）：裸「写邮件」**一次都不许按归属键问草稿**——旧写法 `kind=new&kindRef=`
+      //   问的是"最近更新的一封**新建**草稿"，而新建草稿的归属键是全局共用的一格，于是
+      //   草稿箱里任何一封（几小时前甚至几年前的）都可能被塞进表单。详见下一条用例。
+      //   这里仍然钉住"不再拉整箱"这条老契约（写信页是高频入口）。
+      expect(
+        calls.draftQueries.filter((q) => q.includes("kind=new")),
+        "裸写邮件不该按归属键找回旧草稿",
+      ).toHaveLength(0);
 
       // 发送时带上草稿 id（webmaild 发送成功后删除草稿）
       await page.locator("#mail-body").fill("草稿正文");
+      // 发件人要显式选（裸「写邮件」不预选，见下方「默认发件人」用例）
+      await pickSender(page, "me@mail.example.cn");
       await page.getByRole("button", { name: "发送" }).click();
       await expect(page).toHaveURL(/\/mail(\?[^/]*)?$/); // ⚠ tab 落进 URL 后可能带 ?view=…
       await expect.poll(() => calls.send.length).toBe(1);
       expect((calls.send[0] as { draftId?: string }).draftId).toBe("draft-1");
+
+      // 再回写信页：草稿仍在桩里（发送由服务端删，前端不再动它）——它必须**不**回流到表单。
+      // 这一条同时覆盖"刷新后恢复草稿"的旧契约被撤掉（2026-10-17）：新写信一律空白。
+      await gotoReady(page, "/mail/compose");
+      await expect(page.locator("#mail-to")).toHaveValue("");
+      await expect(page.locator("#mail-subject")).toHaveValue("");
+      await expect(page.locator("#mail-body")).toHaveValue("");
+    });
+
+    /**
+     * 2026-10-17 用户报障：「当前在点击『写邮件』时似乎会默认跳转到一个已有草稿的
+     * 写邮件页面？这样似乎并不合理吧」。
+     *
+     * 旧行为：裸「写邮件」用归属键 `kind=new&kindRef=` 去问"最近更新的一封**新建**草稿"，
+     * 而新建草稿没有原信可挂、归属键是**全局共用**的一格 → 草稿箱里任何一封新建草稿
+     * （实测命中过一封 5 小时前的 test，草稿箱里还有上百封更早的）都可能被塞进表单，
+     * 连底栏都显示「草稿自动保存于 5 小时前」。
+     *
+     * 新契约：**只有"明确归属"的草稿才自动恢复** —— 草稿箱点进来（`?draft=<id>`）、
+     * 回复 / 转发同一原信（归属键非空）；裸「写邮件」= 新邮件 = 空白，没写完的新邮件
+     * 由自动保存留在「草稿」tab 里（点进去接着写）。
+     * ⚠ 旧行为还是数据安全问题：写邮件 → 直接点「发送」，发出去的是那封旧草稿的收件人
+     *   与正文，而用户以为自己写的是一封新邮件。
+     */
+    test("写邮件：裸「写邮件」不找回草稿箱里的新建草稿（2026-10-17 报障）", async ({
+      page,
+    }) => {
+      const calls = {
+        flags: [],
+        send: [] as unknown[],
+        delete: [],
+        drafts: [] as unknown[],
+        draftQueries: [] as string[],
+      };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      // 预置一封新建草稿（就是当初会被塞回表单的那种；页面内 fetch 走桩）
+      const presetId = await page.evaluate(async () => {
+        const r = await fetch("/api/mail/drafts", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            kind: "new",
+            kindRef: "",
+            accountId: "acc1",
+            to: "old@example.org",
+            subject: "旧草稿主题",
+            body: "旧草稿正文",
+          }),
+        });
+        return ((await r.json()) as { id: string }).id;
+      });
+
+      await gotoReady(page, "/mail/compose");
+      await expect(page.locator("#mail-to")).toHaveValue("");
+      await expect(page.locator("#mail-subject")).toHaveValue("");
+      await expect(page.locator("#mail-body")).toHaveValue("");
+
+      // 输入照常自动保存——用这次落盘当"挂载期早已过去"的时间界（500ms 防抖远晚于
+      // 挂载时的找回请求），此后再断言"旧草稿没进来"就不会是抢先跑空的假绿。
+      // ⚠ 判据是 POST **≥ 2 笔**（开头预置那封 + 本次自动保存），不是"有 POST"——
+      //   预置那笔早就把后者变永真，那样后面的断言会在落盘之前就跑。
+      await page.locator("#mail-to").fill("new@example.org");
+      await expect
+        .poll(() => calls.drafts.filter((c) => (c as { method?: string }).method === "POST").length)
+        .toBeGreaterThan(1);
+      expect(
+        calls.drafts.filter((c) => (c as { method?: string }).method === "GET"),
+        "不该按 id 去取那封旧草稿（旧逻辑的第二步）",
+      ).toHaveLength(0);
+      expect(
+        calls.draftQueries.filter((q) => q.includes("kind=new")),
+        "裸写邮件不该问「最近的新建草稿」",
+      ).toHaveLength(0);
+      // 旧逻辑下这两个会被旧草稿填上（主题「旧草稿主题」），我的输入只该有收件人
+      await expect(page.locator("#mail-subject")).toHaveValue("");
+      await expect(page.locator("#mail-body")).toHaveValue("");
+      // 还没选发件人 = 这封信还没有归属（2026-10-17 起入口不带账号就不预选）：草稿照存
+      // （写一半不丢、能在「草稿」tab 里找到），只是 accountId 是空串——服务端镜像跳过它
+      // （`draft-mirror` 的 !row.account_id 守卫），选好发件人后的下一次保存会带上归属。
+      // ⚠ 取**最后一笔** POST：本用例开头预置那封草稿也是 POST（accountId=acc1），别拿错。
+      const autoSaved = calls.drafts
+        .filter((c) => (c as { method?: string }).method === "POST")
+        .at(-1) as { body: { accountId?: string; to?: string } };
+      expect(autoSaved.body).toMatchObject({ accountId: "", to: "new@example.org" });
+      // 发送按钮灰着：发件人是「以谁的身份发信」，不能替你猜
+      await expect(page.getByRole("button", { name: "发送" })).toBeDisabled();
+
+      // 反向验证：显式入口（草稿箱点进来 = `?draft=<id>`）**仍然**恢复内容——
+      // 别把"不找回"做成"恢复整个失效"
+      await gotoReady(page, `/mail/compose?draft=${presetId}`);
+      await expect(page.locator("#mail-subject")).toHaveValue("旧草稿主题");
+      await expect(page.locator("#mail-to")).toHaveValue("old@example.org");
+      await expect(page.locator("#mail-body")).toHaveValue("旧草稿正文");
+    });
+
+    /**
+     * 归属键的正面用法（2026-10-10 建，2026-10-17 收窄后**唯一**保留的自动恢复）：
+     * 回复 / 转发挂在**一封具体的原信**上（kind=reply/forward + kindRef=原信 id），
+     * 「写一半离开，再从同一邮件点回复」应当接着写——MAIL-AGENT.md 4.9 的归属键语义。
+     * ⚠ 与上一条的区别只在"有没有原信可挂"：有 → 找回；没有（新建）→ 空白。
+     */
+    test("写邮件：回复同一封原信能接着写（归属键找回）", async ({ page }) => {
+      const calls = {
+        flags: [],
+        send: [] as unknown[],
+        delete: [],
+        drafts: [] as unknown[],
+        draftQueries: [] as string[],
+      };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail/compose?replyTo=mid%3Aw03%40test.local");
+      await page.locator("#mail-body").fill("半截回复");
+      await expect.poll(() => calls.drafts.length).toBeGreaterThan(0);
+      expect(calls.drafts[0]).toMatchObject({
+        method: "POST",
+        body: expect.objectContaining({
+          kind: "reply",
+          kindRef: "mid:w03@test.local",
+          body: "半截回复",
+        }),
+      });
+
+      // 离开写信页再回来（同一原信）→ 按归属键找回那一封
+      await gotoReady(page, "/mail");
+      await gotoReady(page, "/mail/compose?replyTo=mid%3Aw03%40test.local");
+      await expect(page.locator("#mail-body")).toHaveValue("半截回复");
+      expect(
+        calls.draftQueries.some((q) => q.includes("kind=reply") && q.includes("kindRef=")),
+        "回复要按归属键找回同一原信的那封",
+      ).toBe(true);
     });
 
     test("草稿箱：tab 显示服务器草稿 → 点击进入编辑 → 行内删除", async ({ page }) => {
@@ -6220,6 +6369,7 @@ test.describe("站内邮件（/mail）", () => {
 
       await page.getByRole("link", { name: "写邮件" }).click();
       await expect(page).toHaveURL(/\/mail\/compose/);
+      await pickSender(page, "me@mail.example.cn");
       await page.locator("#mail-to").fill("someone@example.org");
       await page.locator("#mail-subject").fill("刚写完的这封");
       await page.locator("#mail-body").fill("正文");
@@ -6859,6 +7009,8 @@ test.describe("站内邮件（/mail）", () => {
       await page.locator("#mail-to").fill("someone@example.org");
       await page.locator("#mail-subject").fill("测试主题");
       await page.locator("#mail-body").fill("正文内容");
+      // 发件人显式选（裸「写邮件」不预选，见下方「默认发件人」用例）——就是下面断言的 acc1
+      await pickSender(page, "me@mail.example.cn");
       await page.getByRole("button", { name: "发送" }).click();
 
       await expect.poll(() => calls.send.length).toBe(1);
@@ -6876,9 +7028,13 @@ test.describe("站内邮件（/mail）", () => {
     });
 
     /**
-     * 默认发件人（2026-10-16 用户要求：「点击写邮件时，应该优先以当前选择的账号作为发件人」）：
-     * ① 左栏筛着某个账号 → 入口链接带 `?from=<id>`，写信页发件人默认选它；
-     * ② 「全部账号」→ 不带参数（写信页照旧默认第一个账号）；
+     * 默认发件人（2026-10-16 用户要求：「点击写邮件时，应该优先以当前选择的账号作为发件人」；
+     * 2026-10-17 收紧：「邮箱页面在选择『全部账号』时点击『写邮件』，不应该有默认发件人」）：
+     * ① 左栏筛着某个账号 → 入口链接带 `?from=<id>`，写信页发件人默认选它，**左栏联系人面板
+     *   也直接落在这个账号的联系人档**（2026-10-17 用户要求：「在选择具体账号时点击『写邮件』，
+     *   也应该默认显示具体账号的联系人」）；
+     * ② 「全部账号」→ 不带参数 → **没有默认发件人**（下拉显示「选择发件人」、发送灰着），
+     *   联系人面板留在「全部联系人」；
      * ③ 详情页的回复 / 转发带**这封信副本所属账号**（与页内快速回复同一口径）。
      *
      * ⚠ 只在**默认值**这个层面上断言：草稿里存过账号时以草稿为准（写信页 `prev ||` 的写法），
@@ -6905,12 +7061,26 @@ test.describe("站内邮件（/mail）", () => {
       await composeLink.click();
       await expect(page).toHaveURL(/\/mail\/compose\?from=acc2$/);
       await expect(page.locator("#mail-from")).toContainText("ysy@edu.example.cn");
+      // 左栏联系人面板也直接落在「学校的联系人」档（2026-10-17 用户要求）——
+      // 只认可见的 [data-slot="account-label"]：触发器里还有一份不可见的测量探针，
+      // 直接对按钮 toContainText 会被探针"蒙"过
+      await expect(
+        page.getByRole("button", { name: "按账号筛选" }).locator('[data-slot="account-label"]'),
+      ).toContainText("学校的联系人");
 
-      // ② 整页重载回「全部账号」→ 不带参数，写信默认第一个账号
+      // ② 整页重载回「全部账号」→ 不带参数，写信**不预选**发件人（2026-10-17 用户要求）
       await gotoReady(page, "/mail");
       await expect(composeLink).toHaveAttribute("href", /^\/mail\/compose$/);
       await composeLink.click();
-      await expect(page.locator("#mail-from")).toContainText("me@mail.example.cn");
+      await expect(page.locator("#mail-from")).toContainText("选择发件人");
+      await expect(page.getByRole("button", { name: "发送" })).toBeDisabled();
+      // 没有入口账号就别替用户收窄范围：联系人面板留在「全部联系人」
+      await expect(
+        page.getByRole("button", { name: "按账号筛选" }).locator('[data-slot="account-label"]'),
+      ).toContainText("全部联系人");
+      // 显式选一个 → 按钮解禁（发件人是「以谁的身份发信」，选了才算数）
+      await pickSender(page, "me@mail.example.cn");
+      await expect(page.getByRole("button", { name: "发送" })).toBeEnabled();
 
       // ③ 回复 / 转发：带上这封信副本所属账号（w02 只在 acc2 有一份）
       await gotoReady(page, "/mail");
@@ -6936,9 +7106,10 @@ test.describe("站内邮件（/mail）", () => {
       await loginWithCode(page, code);
 
       await gotoReady(page, "/mail/compose");
+      // ⚠ 裸「写邮件」不预选发件人（2026-10-17）：本用例断言的是**本封署名**，先选个发件人
+      await pickSender(page, "me@mail.example.cn");
       // 默认收起（与「抄送 / 密送」同构：行不渲染，不是隐藏）
       await expect(page.locator('[data-slot="compose-from-name-row"]')).toHaveCount(0);
-      await expect(page.locator("#mail-from")).toContainText("me@mail.example.cn");
 
       await page.getByRole("button", { name: "显示名", exact: true }).click();
       const nameRow = page.locator('[data-slot="compose-from-name-row"]');
@@ -6963,8 +7134,11 @@ test.describe("站内邮件（/mail）", () => {
       expect(calls.accounts).toHaveLength(0);
 
       // 清空 = 回落账号自己的发件人姓名（不是「无名字」）：请求体里就不带 fromName。
-      // 先确认草稿把临时署名带回来了（写信页找回逻辑）——顺带钉住「带署名时行自动展开」
-      await gotoReady(page, "/mail/compose");
+      // ⚠ 2026-10-17 起裸「写邮件」不再找回旧草稿（见「写邮件：裸『写邮件』不找回草稿箱里的
+      //   新建草稿」用例），所以这里从**草稿箱那封**显式进入（`?draft=<id>`）——顺带钉住
+      //   「草稿带着临时署名时，显示名行自动展开」（不展开的话内容会藏在收起行里）。
+      //   本用例刚发出去的那封就是它的第一封草稿：draft-1（桩里 /send 不删草稿）。
+      await gotoReady(page, "/mail/compose?draft=draft-1");
       await expect(page.locator("#mail-from-name")).toHaveValue("Yu Shaoyuan");
       await page.locator("#mail-from-name").fill("   ");
       await page.getByRole("button", { name: "发送" }).click();
