@@ -768,8 +768,8 @@ export function MailClient({
   }, [syncing, view, q, loadCurrent]);
 
   /**
-   * 「后台或别处动了数据」→ 静默刷新左栏列表（2026-10-16 用户报「收到新邮件时列表
-   * 不跟着刷新」后补齐）。
+   * 「后台或别处动了数据」→ 静默刷新左栏列表 **+ 未读数字**（2026-10-16 用户报「收到
+   * 新邮件时列表不跟着刷新」后补齐；2026-10-17 补上未读数，见下方 ⚠）。
    *
    * 四个触发源，覆盖同一件事：**列表内容会变，但本页面什么都没点**。
    * - `mail:new-mail`：全站轮询的 `MailNewMailWatcher` 抓到「收件箱真的进了新邮件」
@@ -791,6 +791,12 @@ export function MailClient({
    *   精确信号，频率不能假定。其余三个是真事件，不节流。
    * ⚠ 搜索态 / 草稿视图跳过：与上面抓取期间的自动刷新同一口径（搜索时列表自己变让人
    *   困惑；草稿的数据源是 `/drafts` 而非 messages，切回页面要刷草稿箱得走另一条路）。
+   * ⚠ **列表与未读数必须一起刷新**（2026-10-17 用户报「新邮件来了列表会刷，『一键已读』
+   *   按钮却不刷」）：按钮的 disabled（`markAllNothing`）与「未读」开关上的数字都来自
+   *   `/accounts` 的 `unread`（`unreadTotal`），只重取列表的话，新行已经出现、按钮却还停在
+   *   「没有未读邮件」的禁用态。四个触发源共用 `refresh`，所以 `loadAccounts()` 加在这里
+   *   一处即可——别只给某个源单独补。`loadAccounts` 不稳定引用也没关系（`useCallback([])`），
+   *   它产出新数组不会牵动 `loadCurrent`（见 `accountIdsKey` 的注释）。
    */
   const lastServerSyncRefreshRef = useRef(0);
   useEffect(() => {
@@ -799,6 +805,8 @@ export function MailClient({
       // 记时间戳：兜底重取（`mail:synced`）拿它当节流闸门
       lastServerSyncRefreshRef.current = Date.now();
       void loadCurrent({ reconcile: true }).catch(() => {});
+      // 未读数字 / 「全部标为已读」的可用性（见上方 ⚠「列表与未读数必须一起刷新」）
+      loadAccounts();
     };
     const onVisible = () => {
       if (document.visibilityState === "visible") refresh();
@@ -817,7 +825,7 @@ export function MailClient({
       window.removeEventListener(MAIL_SYNCED_EVENT, onServerSynced);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [view, q, loadCurrent]);
+  }, [view, q, loadCurrent, loadAccounts]);
 
   /**
    * 「全部标为已读」（2026-10-05 用户定稿）：范围 = 当前账号筛选（「全部账号」= 全部账号）；

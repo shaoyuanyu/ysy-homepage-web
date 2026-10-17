@@ -6347,6 +6347,62 @@ test.describe("站内邮件（/mail）", () => {
     });
 
     /**
+     * 新邮件到达时，**未读数字与「全部标为已读」的可用性**也要跟着刷新（2026-10-17 用户报
+     * 「邮件列表现在能够自动刷新，但是『一键已读』按钮却不会自动刷新」）。
+     *
+     * 根因：上面那条刷新听众只重取了列表（`loadCurrent`），没重取 `/accounts`——而这个按钮的
+     * disabled（`markAllNothing`）与「未读」开关上的数字都来自 `accounts[].unread`。于是新行
+     * 已经出现在眼前，按钮却还停在「没有未读邮件」的禁用态（从「全部已读」开始时最明显）。
+     *
+     * 起点刻意设成 **0 未读**（按钮禁用）——默认桩的 acc1 有 3 封未读，从那里出发按钮本来就是
+     * 亮的，用例会变成永真。断言同样**不点任何按钮**：列表、数字、可用性三者都必须自己更新；
+     * 回归（把 `refresh` 里的 `loadAccounts()` 删掉）时后两条会红。
+     */
+    test("收到新邮件：一键已读按钮与未读数字同步刷新", async ({ page }) => {
+      const calls = {
+        flags: [],
+        send: [],
+        delete: [],
+        accountStore: undefined as Record<string, unknown>[] | undefined,
+        healthStore: undefined as { lastNewMail: string; lastSync: string } | undefined,
+        listStore: undefined as unknown[] | undefined,
+      };
+      await stubMailApi(page, calls);
+      // 起点：全部已读 → 「全部标为已读」无事可做（禁用）
+      calls.accountStore![0].unread = 0;
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      const markAll = page.getByRole("button", { name: "全部标为已读" });
+      await expect(markAll).toBeDisabled();
+      await expect(markAll).toHaveAttribute("title", "没有未读邮件");
+      await expect(page.locator('[data-slot="unseen-count"]')).toHaveCount(0);
+
+      // 后台抓进一封：列表桩头部插一封 + 未读 +1 + 推进 /health 的 lastNewMail
+      calls.listStore = [
+        mailItem({
+          messageId: "mid:incoming@test.local",
+          date: "2026-10-17T02:00:00.000Z",
+          subject: "刚到的这一封",
+          fromAddr: "fresh@example.net",
+          fromName: "新人",
+          snippet: "刚刚收到",
+        }),
+        ...MAIL_LIST,
+      ];
+      calls.accountStore![0].unread = 1;
+      calls.healthStore!.lastNewMail = new Date(Date.now() + 60_000).toISOString();
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+
+      // 不点刷新、不重载：新行、未读数字、按钮可用性三样一起自己跟上
+      await expect(page.getByText("刚到的这一封")).toBeVisible({ timeout: 10_000 });
+      await expect(page.locator('[data-slot="unseen-count"]')).toHaveText("1");
+      await expect(markAll).toBeEnabled();
+      await expect(markAll).toHaveAttribute("title", "全部标为已读");
+    });
+
+    /**
      * 发信成功后列表要自己多出那封留底（2026-10-16 用户追问「『全部』tab 下的列表不也
      * 该刷新吗」）。
      *
