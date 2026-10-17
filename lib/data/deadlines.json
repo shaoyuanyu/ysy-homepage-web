@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-10-16",
+  "fetchedAt": "2026-10-17",
   "source": "ccfddl/ccf-deadlines (allconf.yml)",
   "conferences": [
     {
@@ -5030,6 +5030,22 @@
             },
             {
               "t": "2026-03-13 23:59:59"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "http://www.icccn.org/ICCCN27/",
+          "tz": "Etc/GMT+12",
+          "date": "July 12-15, 2027",
+          "place": "Rome, Italy",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-02-12 23:59:59"
+            },
+            {
+              "t": "2027-02-19 23:59:59"
             }
           ]
         }
