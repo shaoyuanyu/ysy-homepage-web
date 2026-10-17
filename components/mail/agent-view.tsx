@@ -595,14 +595,35 @@ function TimelineTab() {
 
 // ---------- 台账页签 ----------
 
-function PendingSection() {
+/** 台账分段统一读失败提示（2026-10-17 审计）：别把读失败显示成「暂无…」 */
+function LoadFailed({ onRetry }: { onRetry: () => void }) {
+  const t = useTranslations("mail.agent");
+  const tm = useTranslations("mail");
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      <span>{t("loadFailedHint")}</span>
+      <Button variant="outline" size="sm" onClick={onRetry}>
+        {tm("retry")}
+      </Button>
+    </div>
+  );
+}
+
+function PendingSection({ onChanged }: { onChanged?: () => void }) {
   const t = useTranslations("mail.agent");
   const [items, setItems] = useState<PendingItem[]>([]);
   const [busy, setBusy] = useState<number | null>(null);
+  const [failed, setFailed] = useState(false);
 
   const load = useCallback(async () => {
-    const res = await fetchWithTimeout("/api/mail/agent/pending-sends");
-    if (res.ok) setItems(((await res.json()) as { items: PendingItem[] }).items);
+    try {
+      const res = await fetchWithTimeout("/api/mail/agent/pending-sends");
+      if (!res.ok) throw new Error(`${res.status}`);
+      setItems(((await res.json()) as { items: PendingItem[] }).items);
+      setFailed(false);
+    } catch {
+      setFailed(true);
+    }
   }, []);
   useEffect(() => {
     void load();
@@ -615,6 +636,9 @@ function PendingSection() {
       if (!res.ok) throw new Error(`${res.status}`);
       toast.add({ title: t(action === "confirm" ? "confirmed" : "discarded"), type: "success" });
       await load();
+      // 确认/丢弃会在服务端落一条工具调用记录：同页的「工具调用」段要跟着刷新
+      // （旧实现只重取本段，台账要等切页重挂载才更新，2026-10-17 审计）
+      onChanged?.();
     } catch {
       toast.add({ title: t("actionFailed"), type: "error" });
     } finally {
@@ -624,8 +648,13 @@ function PendingSection() {
 
   return (
     <section data-slot="agent-pending">
+      {failed && items.length > 0 && <LoadFailed onRetry={() => void load()} />}
       {items.length === 0 ? (
-        <p className="text-xs text-muted-foreground">{t("pendingEmpty")}</p>
+        failed ? (
+          <LoadFailed onRetry={() => void load()} />
+        ) : (
+          <p className="text-xs text-muted-foreground">{t("pendingEmpty")}</p>
+        )
       ) : (
         <ul className="space-y-2">
           {items.map((p) => (
@@ -709,20 +738,35 @@ function JudgmentsSection() {
   const t = useTranslations("mail.agent");
   const locale = useLocale();
   const [items, setItems] = useState<JudgmentItem[]>([]);
+  const [failed, setFailed] = useState(false);
 
-  useEffect(() => {
-    fetchWithTimeout("/api/mail/agent/judgments?limit=100")
-      .then((r) => (r.ok ? r.json() : { items: [] }))
-      .then((d) => setItems((d as { items: JudgmentItem[] }).items));
+  const load = useCallback(async () => {
+    try {
+      const res = await fetchWithTimeout("/api/mail/agent/judgments?limit=100");
+      if (!res.ok) throw new Error(`${res.status}`);
+      setItems(((await res.json()) as { items: JudgmentItem[] }).items);
+      setFailed(false);
+    } catch {
+      setFailed(true);
+    }
   }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   if (items.length === 0) {
-    return <p className="text-xs text-muted-foreground">{t("judgmentsEmpty")}</p>;
+    return failed ? (
+      <LoadFailed onRetry={() => void load()} />
+    ) : (
+      <p className="text-xs text-muted-foreground">{t("judgmentsEmpty")}</p>
+    );
   }
 
   // 推理详情用 Accordion 折叠（4.9），可同时展开多条对照
   return (
-    <Accordion multiple data-slot="agent-judgments">
+    <>
+      {failed && <LoadFailed onRetry={() => void load()} />}
+      <Accordion multiple data-slot="agent-judgments">
       {items.map((j) => (
         <AccordionItem key={j.message_id} value={j.message_id}>
           <AccordionTrigger className="gap-2 hover:no-underline">
@@ -749,25 +793,41 @@ function JudgmentsSection() {
           </AccordionContent>
         </AccordionItem>
       ))}
-    </Accordion>
+      </Accordion>
+    </>
   );
 }
 
-function LedgerSection() {
+function LedgerSection({ refreshKey = 0 }: { refreshKey?: number }) {
   const t = useTranslations("mail.agent");
   const locale = useLocale();
   const [items, setItems] = useState<LedgerItem[]>([]);
+  const [failed, setFailed] = useState(false);
 
-  useEffect(() => {
-    fetchWithTimeout("/api/mail/agent/ledger?limit=100")
-      .then((r) => (r.ok ? r.json() : { items: [] }))
-      .then((d) => setItems((d as { items: LedgerItem[] }).items));
+  const load = useCallback(async () => {
+    try {
+      const res = await fetchWithTimeout("/api/mail/agent/ledger?limit=100");
+      if (!res.ok) throw new Error(`${res.status}`);
+      setItems(((await res.json()) as { items: LedgerItem[] }).items);
+      setFailed(false);
+    } catch {
+      setFailed(true);
+    }
   }, []);
+  useEffect(() => {
+    void load();
+    // refreshKey：待确认的「确认发出 / 丢弃」成功后重取台账（会在服务端多一条调用记录）
+  }, [load, refreshKey]);
 
   return (
     <section data-slot="agent-ledger">
+      {failed && items.length > 0 && <LoadFailed onRetry={() => void load()} />}
       {items.length === 0 ? (
-        <p className="text-xs text-muted-foreground">{t("ledgerEmpty")}</p>
+        failed ? (
+          <LoadFailed onRetry={() => void load()} />
+        ) : (
+          <p className="text-xs text-muted-foreground">{t("ledgerEmpty")}</p>
+        )
       ) : (
         <ul className="divide-y divide-border">
           {items.map((l) => (
@@ -812,6 +872,8 @@ function LedgerSection() {
 
 function LedgerTab() {
   const t = useTranslations("mail.agent");
+  /** 待确认操作成功后自增，驱动同页「工具调用」段重取（2026-10-17 审计） */
+  const [ledgerVersion, setLedgerVersion] = useState(0);
   // 台账三段 Card 分区（4.9）：待确认 / 判定 / 工具调用
   return (
     <div className="space-y-4">
@@ -820,7 +882,7 @@ function LedgerTab() {
           <CardTitle>{t("pendingTitle")}</CardTitle>
         </CardHeader>
         <CardContent>
-          <PendingSection />
+          <PendingSection onChanged={() => setLedgerVersion((v) => v + 1)} />
         </CardContent>
       </Card>
       <Card>
@@ -836,7 +898,7 @@ function LedgerTab() {
           <CardTitle>{t("ledgerTitle")}</CardTitle>
         </CardHeader>
         <CardContent>
-          <LedgerSection />
+          <LedgerSection refreshKey={ledgerVersion} />
         </CardContent>
       </Card>
     </div>

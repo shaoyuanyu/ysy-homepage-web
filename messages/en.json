@@ -703,6 +703,7 @@
     "draftContentNotLoaded": "Not fetched yet (loads from the server when opened)",
     "draftsSyncing": "Checking the server for drafts…",
     "draftsCacheNote": "Some accounts could not be read — showing the local cache",
+    "draftsLoadFailed": "Couldn't load drafts",
     "draftsOlder": "Older drafts ({count})",
     "draftKeptAttachments": "This draft has {count} attachment(s) on the server (editing attachments isn't supported here yet; they are kept as-is when you save)"
   },
@@ -797,6 +798,7 @@
     "soon": "Coming Soon",
     "loading": "Loading...",
     "cancel": "Cancel",
-    "confirm": "Confirm"
+    "confirm": "Confirm",
+    "preferenceSaveFailed": "Couldn't save your preference. Please try again."
   }
 }

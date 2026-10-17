@@ -503,8 +503,15 @@ export function CalendarView() {
   }, [reloadKey, viewDate]);
 
   // 网格加载：REUI onRangeChange 驱动（挂载时自动触发一次 + 翻月时触发）
+  /**
+   * 范围请求序号（2026-10-17 审计）：快速翻月时旧月份的响应可能晚到，把新月份的
+   * 事件覆盖掉（界面标题是九月、格子里却是十月的安排）。同文件另外两个 effect 都
+   * 有 `cancelled`，这条之前漏了。
+   */
+  const rangeSeqRef = useRef(0);
   const loadRangeAppointments = useCallback(
     async (range: { start: Date; end: Date }) => {
+      const seq = ++rangeSeqRef.current;
       const fmt = (d: Date) =>
         `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
       setLoading(true);
@@ -513,21 +520,25 @@ export function CalendarView() {
         const res = await fetch(
           `/api/calendar?start=${fmt(range.start)}&end=${fmt(range.end)}&v=${reloadKeyRef.current}`,
         );
+        if (seq !== rangeSeqRef.current) return;
         if (res.status === 503) {
           setError(t("notConfigured"));
           return;
         }
         if (!res.ok) {
           const data = (await res.json().catch(() => null)) as { error?: string } | null;
+          if (seq !== rangeSeqRef.current) return;
           setError(data?.error ?? t("loadFailed"));
           return;
         }
         const data = (await res.json()) as { events: ParsedIcsAppointment[] };
+        if (seq !== rangeSeqRef.current) return;
         setAppointments(data.events);
       } catch {
-        setError(t("loadFailed"));
+        if (seq === rangeSeqRef.current) setError(t("loadFailed"));
       } finally {
-        setLoading(false);
+        // 只有最后一次请求才有权把 loading 关掉（旧请求先回来不能提前收 spinner）
+        if (seq === rangeSeqRef.current) setLoading(false);
       }
     },
     [t],

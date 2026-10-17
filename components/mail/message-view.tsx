@@ -45,6 +45,7 @@ import { formatSize } from "@/lib/mail/format";
 import { attachmentUrl, AttachmentPreview } from "@/components/mail/attachment-preview";
 import { CalendarInviteSection } from "@/components/mail/calendar-invite";
 import { JunkIcon, NotJunkIcon } from "@/components/mail/junk-icons";
+import { MAIL_SENT_EVENT } from "@/lib/mail/events";
 import { MOTION_SIZE, TOOLBAR_MS } from "@/components/mail/motion";
 import { Badge } from "@/components/ui/badge";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -297,6 +298,12 @@ export function MessageView({ messageId }: { messageId: string }) {
   // 页内快速回复（4.9）
   const [quickText, setQuickText] = useState("");
   const [quickSending, setQuickSending] = useState(false);
+  /**
+   * 会话列表的重取序号（2026-10-17）：页内快速回复成功后，刚发出去的留底应该
+   * 立刻出现在「会话 N 封」里，而不是等用户切走再回来。单独用一枚序号而不是
+   * 把 `quickText` / `detail` 塞进 thread effect 的依赖：后者会让输入每敲一个字重拉一次。
+   */
+  const [threadReloadKey, setThreadReloadKey] = useState(0);
   // 快速回复折叠（2026-10-06 用户要求）：默认收起——常读信时不需要每封邮件底部
   // 都摊着一个输入框；展开后才显示输入框与发送行。状态是组件内存态，切走再回来
   // 回到收起位（有意如此，不持久化）。
@@ -630,11 +637,6 @@ export function MessageView({ messageId }: { messageId: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    // 换一封信：会话回到「默认展开」，由下面的自动折叠按这封信的空间重新判断
-    // （用户上一次拨动开关的意志不跨邮件延续）；附件区的折叠同理回到展开位
-    setThreadOpen(true);
-    setThreadTouched(false);
-    setAttachmentsOpen(true);
     fetchWithTimeout(`/api/mail/message/${encodeURIComponent(messageId)}/thread`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { items: MailListItem[] } | null) => {
@@ -644,6 +646,18 @@ export function MessageView({ messageId }: { messageId: string }) {
     return () => {
       cancelled = true;
     };
+    // threadReloadKey：页内快速回复成功后只在原实例里重取会话列表（不重置折叠态）
+  }, [messageId, threadReloadKey]);
+
+  // 换一封信：会话回到「默认展开」，由下面的自动折叠按这封信的空间重新判断
+  // （用户上一次拨动开关的意志不跨邮件延续）；附件区的折叠同理回到展开位。
+  // ⚠ 必须与上面的会话**重取**拆成两个 effect：快速回复后只重取、不重取时把用户
+  //   刚展开的会话又收起来。页面层的 `key={messageId}` 保证换信时本组件是全新实例，
+  //   这组复位实际只在挂载时跑一次（保留是为了不依赖“外面别忘了加 key”）。
+  useEffect(() => {
+    setThreadOpen(true);
+    setThreadTouched(false);
+    setAttachmentsOpen(true);
   }, [messageId]);
 
   /**
@@ -863,6 +877,11 @@ export function MessageView({ messageId }: { messageId: string }) {
       if (!res.ok) throw new Error();
       toast.add({ title: t("sent"), type: "success" });
       setQuickText("");
+      // 与完整写信同一条广播（2026-10-17 审计）：左栏列表要立刻多出这封留底，
+      // 未读/「全部标为已读」也一起回正；否则要等下一轮同步心跳（≤10s）才出现。
+      window.dispatchEvent(new Event(MAIL_SENT_EVENT));
+      // 会话计数与列表就地刷新（刚发出的这封旧 session 里还没有）
+      setThreadReloadKey((n) => n + 1);
     } catch {
       toast.add({ title: t("sendFailed"), type: "error" });
     } finally {

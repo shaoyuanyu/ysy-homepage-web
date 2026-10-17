@@ -15,6 +15,7 @@ import { Link, usePathname, useRouter } from "@/lib/i18n/navigation";
 import { OWNER_AUTH_CHANGED_EVENT, OWNER_CACHE_KEY } from "@/lib/auth/events";
 import { cn } from "@/lib/utils";
 import { UNREAD_DOT_CLASS } from "@/components/mail/unread-color";
+import { MAIL_UNREAD_EVENT } from "@/lib/mail/events";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -90,11 +91,21 @@ function MailEntry({ className }: { className?: string }) {
     const timer = setInterval(load, 5 * 60 * 1000);
     window.addEventListener("focus", load);
     window.addEventListener(OWNER_AUTH_CHANGED_EVENT, load);
+    /** 全局 watcher 每 2 秒拉一次 `/accounts` 并广播未读总数（2026-10-17）：
+     *  顶栏圆点与页面角标必须同源同时更新——旧实现只有 5 分钟轮询 + focus，
+     *  用户会看到「页内角标已经变了，顶栏圆点还挂着 / 还不见」（审计发现）。
+     *  轮询留着当兜底：watcher 只在站主 localStorage 缓存命中时才启动。 */
+    const onUnread = (e: Event) => {
+      const total = (e as CustomEvent<{ total?: unknown }>).detail?.total;
+      if (typeof total === "number") setCount(total);
+    };
+    window.addEventListener(MAIL_UNREAD_EVENT, onUnread);
     return () => {
       cancelled = true;
       clearInterval(timer);
       window.removeEventListener("focus", load);
       window.removeEventListener(OWNER_AUTH_CHANGED_EVENT, load);
+      window.removeEventListener(MAIL_UNREAD_EVENT, onUnread);
     };
   }, []);
 

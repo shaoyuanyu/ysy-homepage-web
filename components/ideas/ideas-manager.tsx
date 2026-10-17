@@ -101,7 +101,6 @@ export function IdeasManager({ initialIdeas }: { initialIdeas: Idea[] }) {
     if (!content || submitting) return;
     setSubmitting(true);
     setError(null);
-    const prev = ideas;
     try {
       const res = await fetch("/api/ideas", {
         method: "POST",
@@ -114,7 +113,8 @@ export function IdeasManager({ initialIdeas }: { initialIdeas: Idea[] }) {
       setInput("");
       inputRef.current?.focus();
     } catch {
-      setIdeas(prev);
+      // 创建不是乐观更新（成功才入列）→ 失败时什么也不用回滚。
+      // ⚠ 旧写法 `setIdeas(prev)` 会把请求期间**其它成功的操作**一起抹掉（2026-10-17 审计）。
       setError(t("error.save"));
     } finally {
       setSubmitting(false);
@@ -123,7 +123,8 @@ export function IdeasManager({ initialIdeas }: { initialIdeas: Idea[] }) {
 
   async function handleToggleStatus(idea: Idea) {
     const next: IdeaStatus = idea.status === "open" ? "done" : "open";
-    const prev = ideas;
+    // 只回滚这一条：整表快照会把并发成功的其它修改一起回退
+    const before = { status: idea.status, updatedAt: idea.updatedAt };
     setIdeas((list) =>
       list.map((i) => (i.id === idea.id ? { ...i, status: next, updatedAt: Date.now() } : i)),
     );
@@ -136,7 +137,7 @@ export function IdeasManager({ initialIdeas }: { initialIdeas: Idea[] }) {
       });
       if (!res.ok) throw new Error("update failed");
     } catch {
-      setIdeas(prev);
+      setIdeas((list) => list.map((i) => (i.id === idea.id ? { ...i, ...before } : i)));
       setError(t("error.save"));
     }
   }
@@ -147,7 +148,7 @@ export function IdeasManager({ initialIdeas }: { initialIdeas: Idea[] }) {
       setEditingId(null);
       return;
     }
-    const prev = ideas;
+    const before = { content: idea.content, updatedAt: idea.updatedAt };
     setIdeas((list) =>
       list.map((i) => (i.id === idea.id ? { ...i, content, updatedAt: Date.now() } : i)),
     );
@@ -161,7 +162,11 @@ export function IdeasManager({ initialIdeas }: { initialIdeas: Idea[] }) {
       });
       if (!res.ok) throw new Error("update failed");
     } catch {
-      setIdeas(prev);
+      // 回滚这一条的正文，并**把编辑框重新打开、保留用户刚输入的文本**——
+      // 直接关掉编辑态会让用户白写一遍（2026-10-17 审计）
+      setIdeas((list) => list.map((i) => (i.id === idea.id ? { ...i, ...before } : i)));
+      setEditingId(idea.id);
+      setEditingText(content);
       setError(t("error.save"));
     }
   }
@@ -176,7 +181,6 @@ export function IdeasManager({ initialIdeas }: { initialIdeas: Idea[] }) {
   async function performDelete() {
     const idea = pendingDelete;
     if (!idea) return;
-    const prev = ideas;
     setDeleting(true);
     setIdeas((list) => list.filter((i) => i.id !== idea.id));
     setError(null);
@@ -185,7 +189,11 @@ export function IdeasManager({ initialIdeas }: { initialIdeas: Idea[] }) {
       if (!res.ok) throw new Error("delete failed");
       setPendingDelete(null);
     } catch {
-      setIdeas(prev);
+      // 只把这一条按原顺序放回（createdAt 倒序，与服务端一致）——
+      // 旧写法用整表快照回滚，会把并发成功的其它修改一起抹掉（2026-10-17 审计）
+      setIdeas((list) => [idea, ...list].sort((a, b) => b.createdAt - a.createdAt));
+      // 关掉确认弹窗，否则错误提示被遮罩挡在后面，用户只看到「弹窗卡住」
+      setPendingDelete(null);
       setError(t("error.delete"));
     } finally {
       setDeleting(false);

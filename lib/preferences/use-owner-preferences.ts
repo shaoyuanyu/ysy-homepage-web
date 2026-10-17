@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 
+import { toast } from "@/components/ui/toast";
 import { OWNER_AUTH_CHANGED_EVENT } from "@/lib/auth/events";
 import {
   PREFERENCE_KEYS,
@@ -30,10 +32,19 @@ export const OWNER_PREFS_CHANGED_EVENT = "owner-prefs-changed";
  * 限制：单用户低并发；owner 会话内不轮询，跨设备需刷新页面感知。
  */
 export function useOwnerPreferences() {
+  const t = useTranslations("misc");
   const [ready, setReady] = useState(false);
   const [isOwner, setIsOwner] = useState(false);
   const [prefs, setPrefs] = useState<OwnerPreferences>({});
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * 待提交的偏好批次（2026-10-17 审计）：旧实现只有一个 500ms 定时器，
+   * 500ms 内改了**两个不同的 key** 时定时器会被重置，只剩最后一个发出去——
+   * 前一个看起来生效了，刷新后却回到旧值。现在每次改动写进同一批次，一次 PATCH 全带上。
+   */
+  const pendingSave = useRef<OwnerPreferences>({});
+  /** 卸载时也要把防抖窗口里的改动发出去（组件没了，响应里的 setPrefs 是空操作） */
+  const flushRef = useRef<() => void>(() => {});
 
   // 监听其他 hook 实例的偏好变更（如设置弹窗切换后主视图实时生效）
   useEffect(() => {
@@ -131,6 +142,9 @@ export function useOwnerPreferences() {
       cancelled = true;
       window.removeEventListener(OWNER_AUTH_CHANGED_EVENT, load);
       if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+      // 防抖窗口内卸载（切页 / 关弹窗）：把还没发出去的偏好发掉，不然这次设置白改
+      flushRef.current();
     };
   }, []);
 
@@ -148,20 +162,11 @@ export function useOwnerPreferences() {
       );
 
       if (isOwner) {
+        pendingSave.current[key] = clean;
         if (saveTimer.current) clearTimeout(saveTimer.current);
         saveTimer.current = setTimeout(() => {
-          fetch("/api/preferences", {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ [key]: clean }),
-          })
-            .then((r) => r.json().catch(() => null))
-            .then((data: { preferences?: OwnerPreferences } | null) => {
-              if (data?.preferences) setPrefs(data.preferences);
-            })
-            .catch(() => {
-              // 网络失败静默：下次改动会重试；刷新后从服务器读回旧值
-            });
+          saveTimer.current = null;
+          flushRef.current();
         }, 500);
       } else {
         writeLocal(key, clean);
@@ -169,6 +174,37 @@ export function useOwnerPreferences() {
     },
     [isOwner],
   );
+
+  /**
+   * 提交待保存的偏好（一次 PATCH 带上这一批的所有 key）。
+   * - 成功：若请求期间没有新改动，用服务端返回的完整偏好回填（否则以本地为准）；
+   * - 失败：这批合并回待提交（**不覆盖**请求期间更新的同 key），并明确提示
+   *   ——旧实现 `.catch(() => {})` 静默，用户以为保存了，刷新后才失去设置。
+   */
+  const flushPrefs = useCallback(() => {
+    const batch = pendingSave.current;
+    pendingSave.current = {};
+    if (Object.keys(batch).length === 0) return;
+    fetch("/api/preferences", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(batch),
+    })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`${r.status}`);
+        return (await r.json().catch(() => null)) as { preferences?: OwnerPreferences } | null;
+      })
+      .then((data) => {
+        // 请求期间用户又改了别的（或同一个）key：不能用这次响应覆盖本地
+        if (Object.keys(pendingSave.current).length > 0) return;
+        if (data?.preferences) setPrefs(data.preferences);
+      })
+      .catch(() => {
+        pendingSave.current = { ...batch, ...pendingSave.current };
+        toast.add({ title: t("preferenceSaveFailed"), type: "error" });
+      });
+  }, [t]);
+  flushRef.current = flushPrefs;
 
   return { ready, isOwner, prefs, setPref };
 }

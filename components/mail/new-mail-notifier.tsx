@@ -40,19 +40,15 @@ import { toast } from "@/components/ui/toast";
  *   · 页面不可见时先攒着、回到页面再弹（见 `onVisible`）：polite 播报在用户听不见的
  *     时候念完等于没念。视觉上等价——toast 的倒计时在窗口失焦时本来就暂停。
  */
-export const MAIL_UNREAD_EVENT = "mail:unread";
-export const MAIL_NEW_MAIL_EVENT = "mail:new-mail";
-/**
- * 「服务端刚跑完一轮同步」（2026-10-16）。听众：左栏列表（`mail-client.tsx`）。
- *
- * 信号 = `/health` 每账号的 `lastSync` 前进。它是**同步轮次的心跳**（每轮结束才更新，
- * 真机 5s 配置下实测约 24s 一跳），不是「内容变了」的精确信号——它的用途是**兜底**：
- * 别处（手机、网页版、服务商端规则）动过邮件时本页一个事件都收不到，列表靠它在一轮
- * 同步内跟上，而不用等用户切回窗口或点刷新。
- * ⚠ 频率防御在**听众那侧**（`mail-client.tsx` 的 `SERVER_SYNC_REFRESH_MIN_MS` 节流）：
- *   不能假定这个信号「一定很慢」—— 后端实现变化（比如改成写请求时刻）会让它每拍都动。
- */
-export const MAIL_SYNCED_EVENT = "mail:synced";
+// 事件名统一在 `lib/mail/events.ts`（详情页 / 顶栏邮箱入口 / 自有地址集合也订阅
+// 它们，事件名留在本文件会让 lib 反过来 import components）。这里 re-export，
+// 既有 import 不需要改。
+import {
+  MAIL_NEW_MAIL_EVENT,
+  MAIL_SYNCED_EVENT,
+  MAIL_UNREAD_EVENT,
+} from "@/lib/mail/events";
+export { MAIL_NEW_MAIL_EVENT, MAIL_SYNCED_EVENT, MAIL_UNREAD_EVENT };
 
 /** 轮询间隔（2 秒；配合 webmaild 的 5 秒同步节拍） */
 const POLL_MS = 2_000;

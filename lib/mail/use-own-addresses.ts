@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { MAIL_ACCOUNTS_CHANGED_EVENT } from "@/lib/mail/events";
 import type { MailOwnAddress } from "@/lib/mail/types";
 
 /** 两套注册表条目共有的字段（webmail 是 displayName，mailagentd 也是 displayName） */
@@ -60,23 +61,30 @@ export function useOwnAddresses(): {
       fetch(path)
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null);
-    void Promise.all([get("/api/mail/accounts"), get("/api/mail/agent/accounts")]).then(
-      ([mine, agent]) => {
-        if (cancelled) return;
-        const seen = new Set<string>();
-        const merged: MailOwnAddress[] = [];
-        for (const a of [...normalize(mine, "account"), ...normalize(agent, "agent")]) {
-          const key = a.email.toLowerCase();
-          if (seen.has(key)) continue;
-          seen.add(key);
-          merged.push(a);
-        }
-        setOwn(merged);
-        setReady(true);
-      },
-    );
+    const load = () => {
+      void Promise.all([get("/api/mail/accounts"), get("/api/mail/agent/accounts")]).then(
+        ([mine, agent]) => {
+          if (cancelled) return;
+          const seen = new Set<string>();
+          const merged: MailOwnAddress[] = [];
+          for (const a of [...normalize(mine, "account"), ...normalize(agent, "agent")]) {
+            const key = a.email.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            merged.push(a);
+          }
+          setOwn(merged);
+          setReady(true);
+        },
+      );
+    };
+    load();
+    // 账号增删/改地址后，各页面的「我的账号」判断（双向角标、回复全部剔自己）
+    // 必须跟着失效——这些页面在账号弹窗开着时都是常驻的、不会重挂载（2026-10-17 审计）
+    window.addEventListener(MAIL_ACCOUNTS_CHANGED_EVENT, load);
     return () => {
       cancelled = true;
+      window.removeEventListener(MAIL_ACCOUNTS_CHANGED_EVENT, load);
     };
   }, []);
 

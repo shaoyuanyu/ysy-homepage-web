@@ -703,6 +703,7 @@
     "draftContentNotLoaded": "内容未读取（点开时从服务器取）",
     "draftsSyncing": "正在与服务器核对草稿…",
     "draftsCacheNote": "部分账号的草稿箱暂时读不到，下面是本地缓存",
+    "draftsLoadFailed": "草稿读取失败",
     "draftsOlder": "更早的草稿（{count}）",
     "draftKeptAttachments": "这封草稿在服务器上带 {count} 个附件（本站暂不支持编辑附件，保存时会原样保留）"
   },
@@ -797,6 +798,7 @@
     "soon": "即将上线",
     "loading": "加载中...",
     "cancel": "取消",
-    "confirm": "确定"
+    "confirm": "确定",
+    "preferenceSaveFailed": "设置保存失败，请稍后重试"
   }
 }

@@ -1557,9 +1557,10 @@ test.describe("Idea 速记（主人专属）", () => {
     await page.getByRole("button", { name: "保存" }).click();
     await expect(page.getByText(origin)).toBeVisible();
 
-    // 标记完成 → 出现「已完成」徽标
-    await page.getByRole("button", { name: "标记为已完成" }).click();
-    await expect(page.getByText(origin).locator("..")).toContainText("已完成");
+    // 标记完成 → 出现「已完成」徽标（⚠ 作用域到本行：残留的其它 Idea 会让裸按钮歧义）
+    const row = page.locator("li", { hasText: origin });
+    await row.getByRole("button", { name: "标记为已完成" }).click();
+    await expect(row).toContainText("已完成");
 
     // 行内编辑：改内容后保存（保存按钮在列表项内，避免与顶部表单按钮歧义）
     await page.getByRole("button", { name: "编辑" }).first().click();
@@ -1586,6 +1587,70 @@ test.describe("Idea 速记（主人专属）", () => {
     await confirm.getByRole("button", { name: "删除" }).click();
     await expect(page.getByText(edited)).toHaveCount(0);
     expect(nativeDialogs, "不应弹出原生 confirm").toEqual([]);
+  });
+
+  /**
+   * 失败回滚只能回滚**这一条**（2026-10-17 审计）。
+   *
+   * 旧实现每次操作前 `const prev = ideas` 保存整表快照，失败时 `setIdeas(prev)` ——
+   * 如果请求期间另一条操作成功（B 标完成），A 的失败会把 B 的成功一起抹掉。
+   * 这里让 A 的 PATCH 延迟后失败、B 正常成功，断言 B 仍为「已完成」。
+   */
+  test("失败回滚只影响这一条：并发的另一条成功修改不被覆盖", async ({ page }) => {
+    const code = new TOTP({ secret: totpSecret! }).generate();
+    await loginWithCode(page, code);
+    await gotoReady(page, "/ideas");
+
+    const marker = `E2E rollback ${Date.now()}`;
+    const contentA = `${marker} A`;
+    const contentB = `${marker} B`;
+    let idA: string | undefined;
+    let idB: string | undefined;
+    try {
+      for (const content of [contentA, contentB]) {
+        await page.getByLabel(/记录一个 Idea/).fill(content);
+        await page.getByRole("button", { name: "保存" }).click();
+        await expect(page.getByText(content)).toBeVisible();
+      }
+
+      // 取两条的 id（页面不暴露 id，走 API 查）
+      const data = (await (await page.request.get("/api/ideas")).json()) as {
+        ideas: { id: string; content: string }[];
+      };
+      idA = data.ideas.find((i) => i.content === contentA)!.id;
+      idB = data.ideas.find((i) => i.content === contentB)!.id;
+
+      // 只让 A 的 PATCH 延迟后失败；B 的请求照常走真实服务端
+      await page.route("**/api/ideas/*", async (route) => {
+        const req = route.request();
+        if (req.method() === "PATCH" && req.url().endsWith(`/${idA}`)) {
+          await new Promise((r) => setTimeout(r, 600));
+          await route.fulfill({
+            status: 500,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "boom" }),
+          });
+          return;
+        }
+        await route.continue();
+      });
+
+      const rowA = page.locator("li", { hasText: contentA });
+      const rowB = page.locator("li", { hasText: contentB });
+      await rowA.getByRole("button", { name: "标记为已完成" }).click();
+      await rowB.getByRole("button", { name: "标记为已完成" }).click();
+
+      // B 先成功落库；A 稍后失败 → 只回滚 A
+      await expect(rowB).toHaveAttribute("data-idea-status", "done");
+      await expect(page.getByText("保存失败，请重试")).toBeVisible();
+      await expect(rowA).toHaveAttribute("data-idea-status", "open");
+      await expect(rowB, "A 的失败不能把 B 的成功一起回滚").toHaveAttribute("data-idea-status", "done");
+    } finally {
+      // 用例失败也要自清理（否则残留的「标记为已完成」按钮会让后续用例歧义）
+      for (const id of [idA, idB]) {
+        if (id) await page.request.delete(`/api/ideas/${id}`).catch(() => {});
+      }
+    }
   });
 });
 
@@ -3151,6 +3216,8 @@ function stubMailApi(
     listQueries?: string[];
     /** `GET /drafts` 的查询串（区分"读缓存 / 刷新 / 按归属键找"三种读法） */
     draftQueries?: string[];
+    /** `GET /drafts` 返回该状态码（验证「读失败 ≠ 暂无草稿」的错误态） */
+    draftsError?: number;
     /** 草稿桩的实时引用（用例可塞服务器草稿） */
     draftStore?: Record<string, unknown>[];
     move?: unknown[];
@@ -3191,6 +3258,12 @@ function stubMailApi(
     junkFolderItems?: boolean;
     /** 列表桩的实时引用（用例可往里追加，验证「历史回填期间列表自动刷新」，2026-10-08） */
     listStore?: unknown[];
+    /**
+     * `POST /send` 成功后把 `draftId` 对应的草稿从草稿桩里删掉（2026-10-17）。
+     * 默认为 false：部分用例发完信还要回到同一封草稿继续验证（「显示名只作用于本封」）。
+     * 真实的 webmaild 一定会删；草稿箱「发走后不留行」的用例显式打开它。
+     */
+    deleteDraftOnSend?: boolean;
     /** `POST /mark-all-read` 的请求体（验证「全部标为已读」的作用域跟着 tab 走，第九轮） */
     markAllRead?: unknown[];
     /**
@@ -3298,6 +3371,13 @@ function stubMailApi(
       // ③ `?kind=&kindRef=`（写信页只问它关心的那一封）。桩对三者都返回 items，
       // 但把查询串记下来，供"写信页不再拉整箱"的断言用。
       calls.draftQueries?.push(url.search);
+      if (calls.draftsError) {
+        return route.fulfill({
+          status: calls.draftsError,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "webmaild_unreachable" }),
+        });
+      }
       const kind = url.searchParams.get("kind");
       const kindRef = url.searchParams.get("kindRef");
       let items = draftStore;
@@ -3562,7 +3642,14 @@ function stubMailApi(
       return json({ updated: 2 });
     }
     if (path === "/send") {
-      calls.send.push(route.request().postDataJSON());
+      const body = route.request().postDataJSON() as { draftId?: string };
+      calls.send.push(body);
+      // 真实服务端契约：`draftId` 给了就删掉那封草稿（幂等）——草稿箱要靠它变空。
+      // ⚠ 只有显式开启的用例才删：有些用例还靠同一封草稿验「署名随草稿保存」。
+      if (body?.draftId && calls.deleteDraftOnSend) {
+        const idx = draftStore.findIndex((d) => d.id === body.draftId);
+        if (idx >= 0) draftStore.splice(idx, 1);
+      }
       return json({ messageId: "<new@local>", sentFolder: "Sent" });
     }
     if (path === "/delete") {
@@ -5809,6 +5896,7 @@ test.describe("站内邮件（/mail）", () => {
         drafts: [] as unknown[],
         draftQueries: [] as string[],
         draftStore: undefined as Record<string, unknown>[] | undefined,
+        deleteDraftOnSend: true,
       };
       await stubMailApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
@@ -5876,6 +5964,14 @@ test.describe("站内邮件（/mail）", () => {
       // 草稿箱打开时**先出缓存、再去服务端对一遍**（两种读法各一次）
       expect(calls.draftQueries.some((q) => q.includes("refresh=1")), "草稿箱要带 refresh=1 去核对").toBe(true);
 
+      // 工具栏「刷新」在草稿 tab 里必须刷**草稿**（`/drafts?refresh=1`），而不是去拉邮件列表
+      // （旧实现调 `loadCurrent()`，按钮转一圈、草稿列表一动不动；2026-10-17 审计）
+      const refreshCount = calls.draftQueries.filter((q) => q.includes("refresh=1")).length;
+      await page.getByRole("button", { name: "刷新", exact: true }).click();
+      await expect
+        .poll(() => calls.draftQueries.filter((q) => q.includes("refresh=1")).length)
+        .toBeGreaterThan(refreshCount);
+
       // 点开这封服务器草稿 → 写信页**按 id 取单封**（服务端此时才抓原文解析）
       await rows.first().locator("[data-mail-row]").click();
       await expect(page).toHaveURL(/\/mail\/compose\?draft=srv-new/);
@@ -5884,6 +5980,47 @@ test.describe("站内邮件（/mail）", () => {
         .toBe(true);
       await expect(page.locator("#mail-to")).toHaveValue("phone@example.com");
       await expect(page.locator("#mail-subject")).toHaveValue("手机上写了一半");
+
+      // 从草稿发送：服务端删掉这封草稿，写信页广播 `mail:drafts-changed`——回到列表
+      // 时这一行必须已经没了（旧实现只广播 `mail:sent`，发完信回来那封草稿还赖着）
+      await page.getByRole("button", { name: "发送" }).click();
+      await expect.poll(() => calls.send.length).toBe(1);
+      await expect(page).toHaveURL(/\/mail(\?[^/]*)?$/);
+      // 确认仍在草稿 tab（否则下面的 0 行是“根本没渲染草稿列表”的假绿）
+      await expect(page.getByRole("tab", { name: "草稿", exact: true })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      await expect(rows, "发走的那封草稿不该还留在草稿箱").toHaveCount(0);
+      await expect(page.locator('[data-slot="drafts-older-toggle"]')).toContainText("更早的草稿（1）");
+    });
+
+    /**
+     * 草稿读取失败 ≠ 没有草稿（2026-10-17 审计）。
+     *
+     * 旧实现 `GET /drafts` 失败时 `setDrafts([])`——服务挂着时界面显示「暂无草稿」，
+     * 用户会以为草稿被清空了。契约：错误态要说「读取失败」并给重试；重试成功后回到真实空态。
+     */
+    test("草稿箱读取失败：错误态 + 重试，不显示成「暂无草稿」", async ({ page }) => {
+      const calls = {
+        flags: [],
+        send: [],
+        delete: [],
+        draftsError: 502 as number | undefined,
+        draftQueries: [] as string[],
+      };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      await page.getByRole("tab", { name: "草稿", exact: true }).click();
+      await expect(page.getByText("草稿读取失败")).toBeVisible();
+      await expect(page.getByText("暂无草稿")).toHaveCount(0);
+
+      calls.draftsError = undefined;
+      await page.getByRole("button", { name: "重试" }).click();
+      await expect(page.getByText("暂无草稿")).toBeVisible();
     });
 
     test("草稿箱：每行标出账号，且跟随账号筛选", async ({ page }) => {
@@ -6403,6 +6540,62 @@ test.describe("站内邮件（/mail）", () => {
     });
 
     /**
+     * 搜索态收到新邮件：列表**不动**（搜索时列表自己变会打断阅读），但未读数字与
+     * 「全部标为已读」的可用性必须跟上（2026-10-17 审计）。
+     *
+     * 旧实现里静默刷新的 effect 在 `q.trim()` / 草稿视图下**整段提前 return**，连
+     * `loadAccounts()` 也一起跳过——页头角标（watcher 另一个轮询）已经变了，工具栏的
+     * 开关数字与按钮却停在旧值，得退出搜索才更新。
+     */
+    test("搜索态收到新邮件：列表不动，未读数字与一键已读照常更新", async ({ page }) => {
+      const calls = {
+        flags: [],
+        send: [],
+        delete: [],
+        accountStore: undefined as Record<string, unknown>[] | undefined,
+        healthStore: undefined as { lastNewMail: string; lastSync: string } | undefined,
+        listStore: undefined as unknown[] | undefined,
+      };
+      await stubMailApi(page, calls);
+      // 起点：全部已读（按钮禁用）
+      calls.accountStore![0].unread = 0;
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      const pane = page.locator('[data-slot="mail-pane-list"]');
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      const markAll = page.getByRole("button", { name: "全部标为已读" });
+      await expect(markAll).toBeDisabled();
+
+      // 开始搜索：只匹配 Weekly（1 行）
+      await pane.getByRole("button", { name: "搜索", exact: true }).click();
+      await pane.getByRole("textbox", { name: "搜索邮件…" }).fill("Weekly");
+      await expect(rows).toHaveCount(1);
+      await expect(rows.first()).toContainText("Weekly Digest");
+
+      // 后台进一封**不匹配**的新邮件
+      calls.listStore = [
+        mailItem({
+          messageId: "mid:search-incoming@test.local",
+          date: "2026-10-17T04:00:00.000Z",
+          subject: "刚到的这一封",
+          fromAddr: "fresh@example.net",
+          snippet: "刚刚收到",
+        }),
+        ...MAIL_LIST,
+      ];
+      calls.accountStore![0].unread = 1;
+      calls.healthStore!.lastNewMail = new Date(Date.now() + 60_000).toISOString();
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+
+      // 列表保持搜索结果（不插入新行），数字与按钮自己跟上
+      await expect(page.locator('[data-slot="unseen-count"]')).toHaveText("1");
+      await expect(markAll).toBeEnabled();
+      await expect(rows).toHaveCount(1);
+    });
+
+    /**
      * 发信成功后列表要自己多出那封留底（2026-10-16 用户追问「『全部』tab 下的列表不也
      * 该刷新吗」）。
      *
@@ -6448,6 +6641,93 @@ test.describe("站内邮件（/mail）", () => {
       // 不点刷新：列表自己多出这一封
       await expect(rows).toHaveCount(before + 1, { timeout: 10_000 });
       await expect(rows.first()).toContainText("刚写完的这封");
+    });
+
+    /**
+     * 页内快速回复发信成功后，左栏列表也要自己多出留底（2026-10-17 审计）。
+     *
+     * `quickSend` 之前只 toast + 清空输入，不广播 `mail:sent`：同一页里完整写信会刷新
+     * 列表，而快速回复不会——「发件」tab 要等到下一轮同步心跳（≤10s）才出现这封信。
+     */
+    test("快速回复：发信成功后左栏列表自动多出那封留底", async ({ page }) => {
+      const calls = { flags: [], send: [] as unknown[], delete: [], listStore: undefined as unknown[] | undefined };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      await expect(rows.first()).toBeVisible();
+      const before = await rows.count();
+
+      // 打开第一封（桩返回 w03 详情），展开快速回复并发送
+      await rows.nth(0).locator("[data-mail-row]").click();
+      const detail = page.locator('[data-slot="mail-pane-detail"]');
+      await expect(detail).toContainText("HTML Newsletter");
+      const quick = detail.locator('[data-slot="mail-quick-reply"]');
+      await quick.getByRole("button", { name: "快速回复" }).click();
+      await quick.locator("textarea").fill("谢谢，收到了。");
+
+      // 服务商侧留底（桩不自己造，用例显式摆上）：与完整写信用例同一做法
+      calls.listStore = [
+        mailItem({
+          messageId: "mid:quick-sent@test.local",
+          date: "2026-10-17T05:00:00.000Z",
+          subject: "Re: HTML Newsletter",
+          fromAddr: "me@mail.example.cn",
+          snippet: "谢谢，收到了。",
+          copies: [{ accountId: "acc1", folder: "已发送", uid: 10 }],
+        }),
+        ...MAIL_LIST,
+      ];
+      await quick.getByRole("button", { name: "发送", exact: true }).click();
+      await expect.poll(() => calls.send.length).toBe(1);
+
+      // 不点刷新：列表自己多出这一封（回归时这里会停在 before）
+      await expect(rows).toHaveCount(before + 1, { timeout: 10_000 });
+      await expect(rows.first()).toContainText("Re: HTML Newsletter");
+    });
+
+    /**
+     * 换一封信时，**所有按封状态**都必须复位（2026-10-17 审计）。
+     *
+     * App Router 在 `/mail/message/:id` 之间导航时复用同一个页面/组件实例。旧实现只复位了
+     * 会话/附件折叠，快速回复的文字、错误页、`remoteShown` 等都跨信遗留——最严重的是：
+     * 在 A 的快速回复里写的信，切到 B 后点发送，发件人/收件人却是 B 的（内容发错人）。
+     * 修法是页面层的 `key={messageId}`。
+     */
+    test("详情页：换信时快速回复与错误态都复位（不会把 A 的草稿发给 B）", async ({ page }) => {
+      const calls = { flags: [], send: [], delete: [], detailError: undefined as number | undefined };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      const detail = page.locator('[data-slot="mail-pane-detail"]');
+
+      // 打开第一封，在快速回复里写一半
+      await rows.nth(0).locator("[data-mail-row]").click();
+      await expect(detail).toContainText("HTML Newsletter");
+      const quick = detail.locator('[data-slot="mail-quick-reply"]');
+      await quick.getByRole("button", { name: "快速回复" }).click();
+      await expect(quick).toHaveAttribute("data-open", "true");
+      await quick.locator("textarea").fill("写给 A 的信");
+
+      // ① 切到另一封：快速回复回到收起位、文字为空
+      await rows.nth(2).locator("[data-mail-row]").click();
+      await expect(detail).toContainText("Weekly Digest");
+      await expect(quick).toHaveAttribute("data-open", "false");
+      await expect(quick.locator("textarea")).toHaveValue("");
+
+      // ② 错误态不跨信：A 的请求失败 → 切到 B → 错误页不能粘住
+      calls.detailError = 502;
+      await rows.nth(3).locator("[data-mail-row]").click();
+      await expect(detail).toContainText("邮件服务暂时不可用");
+      calls.detailError = undefined;
+      await rows.nth(2).locator("[data-mail-row]").click();
+      await expect(detail).toContainText("Weekly Digest");
+      await expect(detail).not.toContainText("邮件服务暂时不可用");
     });
 
     /**
@@ -6528,6 +6808,54 @@ test.describe("站内邮件（/mail）", () => {
       calls.healthStore!.lastSync = new Date(Date.now() + 60_000).toISOString();
       await expect(rows).toHaveCount(before + 1, { timeout: 15_000 });
       await expect(page.getByText("在别处改动过的那封")).toBeVisible();
+    });
+
+    /**
+     * 静默刷新不能把分页游标往回拨（2026-10-17 审计）。
+     *
+     * `reconcile` 会保留「比首屏更老」的已加载页，而服务端的 `next` 指向**首屏最后一封
+     * 之后**——旧实现无条件 `setNext(data.next)`，于是已经加载完的列表在每次后台刷新后
+     * 都会重新长出「加载更多」/哨兵续页，把保留下来的整页再取一遍：同一封邮件出现两次，
+     * React 还报重复 key。
+     *
+     * 写法：每页 2 条，等哨兵把 5 条全部自动加载完（`next = null`、按钮消失）→ 触发一次
+     * 静默刷新 → 游标必须仍是 null。修复前：按钮重新出现、自动续页把行数从 5 拉到 8。
+     */
+    test("静默刷新：已加载完的列表不会重新长出「加载更多」/重复行", async ({ page }) => {
+      const calls = {
+        flags: [],
+        send: [],
+        delete: [],
+        pageSize: 2,
+        listQueries: [] as string[],
+      };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      const more = page.locator('[data-slot="mail-load-more"]');
+      // 哨兵自动续页：等 5 条全部加载完
+      await expect(rows).toHaveCount(MAIL_LIST.length, { timeout: 10_000 });
+      await expect(more).toHaveCount(0);
+
+      // 触发静默刷新（切回页面 = 零轮询成本的同步点），等它的列表请求回来
+      const queriesBefore = calls.listQueries.length;
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await expect
+        .poll(() => calls.listQueries.length, { message: "静默刷新应该重取一次首屏" })
+        .toBeGreaterThan(queriesBefore);
+
+      // 若游标被回拨，哨兵会立刻发起 `before=...` 续页；给它 1 秒时间暴露
+      await page
+        .waitForResponse((r) => r.url().includes("before=") && r.request().method() === "GET", {
+          timeout: 1_000,
+        })
+        .catch(() => null);
+
+      await expect(more, "已加载完时不该凭空冒出「加载更多」").toHaveCount(0);
+      await expect(rows, "行数不能因重复续页而变多").toHaveCount(MAIL_LIST.length);
     });
 
     /**
@@ -9314,12 +9642,12 @@ const AGENT_RFC822 = {
 
 function stubMailAgentApi(
   page: Page,
-  calls: { pending: { id: number; action: string }[] },
+  calls: { pending: { id: number; action: string }[]; ledger?: number },
   /**
    * 故障注入（2026-10-10 第十二轮）：状态码按请求实时读取，用例可中途改。
    * undefined/0 = 正常。
    */
-  faults?: { timeline?: number; message?: number },
+  faults?: { timeline?: number; message?: number; ledger?: number },
 ) {
   let pendingItems = [
     { id: 7, created_at: "2026-09-26T12:00:00.000Z", to_json: '["someone@example.org"]', subject: "代发确认", text: "请确认是否发出这封邮件。" },
@@ -9378,6 +9706,8 @@ function stubMailAgentApi(
       });
     }
     if (path === "/ledger") {
+      calls.ledger = (calls.ledger ?? 0) + 1;
+      if (faults?.ledger) return fail(faults.ledger);
       return json({
         items: [
           { id: 3, ts: "2026-09-26T10:00:01.000Z", tool: "read_message", ok: 1, message_id: "mid:m1@test.local", detail_json: "{}", error: null },
@@ -9520,7 +9850,7 @@ test.describe("agent 邮件入口（/mail/agent）", () => {
     });
 
     test("台账：待确认 POST 确认、判定展开拉推理（两种文本分开）、工具调用台账", async ({ page }) => {
-      const calls = { pending: [] as { id: number; action: string }[] };
+      const calls = { pending: [] as { id: number; action: string }[], ledger: 0 };
       await stubMailAgentApi(page, calls);
       const code = new TOTP({ secret: totpSecret! }).generate();
       await loginWithCode(page, code);
@@ -9533,12 +9863,22 @@ test.describe("agent 邮件入口（/mail/agent）", () => {
       await expect(page.getByText("判定", { exact: true })).toBeVisible();
       await expect(page.getByText("工具调用记录", { exact: true })).toBeVisible();
 
+      // 先等台账初次加载完成，并记下请求数——后面的「确认后刷新」以它为基准。
+      // ⚠ 不能只用 `>= 2`：初次挂载的请求可能晚于确认动作，那样即使不刷新也会假绿。
+      const ledger = page.locator('[data-slot="agent-ledger"]');
+      await expect(ledger).toContainText("read_message");
+      const ledgerBefore = calls.ledger;
+
       // 待确认队列：确认发出（页面唯二的 POST，人操作）
       const pending = page.locator('[data-slot="agent-pending"]');
       await expect(pending).toContainText("代发确认");
       await pending.getByRole("button", { name: "确认发出" }).click();
       await expect.poll(() => calls.pending).toEqual([{ id: 7, action: "confirm" }]);
       await expect(pending).toContainText("没有待确认的外发");
+      // 确认发出会在服务端落一条工具调用记录：同页的台账要自己重取（不是切页才更新）
+      await expect
+        .poll(() => calls.ledger, { message: "确认后台账应重新拉取" })
+        .toBeGreaterThan(ledgerBefore);
 
       // 判定列表：展开后才拉推理；trace 与 summary 分开展示并带 model/prompt_version
       const judgments = page.locator('[data-slot="agent-judgments"]');
@@ -9551,9 +9891,30 @@ test.describe("agent 邮件入口（/mail/agent）", () => {
       await expect(reasoning).toContainText("test-model · judge-v1");
 
       // 工具调用台账
-      const ledger = page.locator('[data-slot="agent-ledger"]');
       await expect(ledger).toContainText("read_message");
       await expect(ledger).toContainText("mid:m1@test.local");
+    });
+
+    /**
+     * 台账读取失败 ≠「暂无工具调用」（2026-10-17 审计）：失败要给出可重试的错误态，
+     * 不能把「服务挂了」画成「确实没有任何调用记录」。
+     */
+    test("工具调用台账读取失败：错误态 + 重试，不显示成「暂无工具调用」", async ({ page }) => {
+      const calls = { pending: [] as { id: number; action: string }[], ledger: 0 };
+      const faults: { ledger?: number } = { ledger: 502 };
+      await stubMailAgentApi(page, calls, faults);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail/agent");
+      await page.getByRole("tab", { name: "处理记录" }).click();
+      const ledger = page.locator('[data-slot="agent-ledger"]');
+      await expect(ledger).toContainText("agent 后台服务暂时不可用");
+      await expect(ledger).not.toContainText("暂无工具调用");
+
+      faults.ledger = undefined;
+      await ledger.getByRole("button", { name: "重试" }).click();
+      await expect(ledger).toContainText("read_message");
     });
   });
 });

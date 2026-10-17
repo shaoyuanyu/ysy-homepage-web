@@ -35,10 +35,15 @@ import { decodeMessageId, encodeMessageId, MAIL_LIST_ORDER_KEY } from "@/lib/mai
 import { formatDate } from "@/lib/mail/format";
 import { mailNavOptions } from "@/lib/mail/nav";
 import { useOwnAddresses } from "@/lib/mail/use-own-addresses";
-import { MAIL_ACCOUNTS_CHANGED_EVENT } from "@/components/mail/accounts-dialog";
-import { MAIL_DRAFTS_CHANGED_EVENT, MAIL_SENT_EVENT } from "@/components/mail/compose-form";
+import {
+  MAIL_ACCOUNTS_CHANGED_EVENT,
+  MAIL_DRAFTS_CHANGED_EVENT,
+  MAIL_NEW_MAIL_EVENT,
+  MAIL_SENT_EVENT,
+  MAIL_SYNCED_EVENT,
+  MAIL_UNREAD_EVENT,
+} from "@/lib/mail/events";
 import { broadcastItemChange, MAIL_ITEM_CHANGED_EVENT, type MailItemChange } from "@/components/mail/message-view";
-import { MAIL_NEW_MAIL_EVENT, MAIL_SYNCED_EVENT, MAIL_UNREAD_EVENT } from "@/components/mail/new-mail-notifier";
 import { UNREAD_TOGGLE_CLASS, UNREAD_TOGGLE_DOT_CLASS } from "@/components/mail/unread-color";
 import { AccountMenu } from "@/components/mail/account-menu";
 import { MailBatchBar } from "@/components/mail/mail-batch-bar";
@@ -115,6 +120,23 @@ const SERVER_SYNC_REFRESH_MIN_MS = 10_000;
 /** 查询串里的 view 是否合法（非法值一律回落到默认 tab，避免手改 URL 把列表搞成空白） */
 function isViewFilter(v: string | null): v is ViewFilter {
   return v === "all" || v === "received" || v === "sent" || v === "drafts" || v === "junk";
+}
+
+/**
+ * 「加载更多」的追加去重（2026-10-17 审计）：列表在翻页期间可能因为新邮件到达 /
+ * 别处删信而整体位移，旧游标取回的那一页可能与已加载行重叠。重复行不只是难看——
+ * 会话行会被算两次、React 会报重复 key、选择态也会拿着同一个 id 来回切。
+ * 以 messageId 为准保留先到的那行（首次加载的数据与服务端首屏一致）。
+ */
+function appendUnique(prev: MailListItem[], next: MailListItem[]): MailListItem[] {
+  const seen = new Set(prev.map((m) => m.messageId));
+  const out = [...prev];
+  for (const m of next) {
+    if (seen.has(m.messageId)) continue;
+    seen.add(m.messageId);
+    out.push(m);
+  }
+  return out;
 }
 
 /**
@@ -200,6 +222,19 @@ export function MailClient({
   }, [activeId]);
 
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
+  /**
+   * 账号列表是否**成功加载过**（2026-10-17）：`unreadAll` 在 accounts 为空时算出来是 0，
+   * 若照旧广播给顶栏圆点/大标题角标，页面每次挂载都会先把已有的未读点抹掉、2 秒后
+   * 再由 watcher 补回来（可见闪烁）。只有拿到过真实账号才广播。
+   */
+  const [accountsLoaded, setAccountsLoaded] = useState(false);
+  /**
+   * 账号配置版本（2026-10-17）：`accountIdsKey` 只能看出增删账号，**看不出文件夹白名单 /
+   * 连接字段的修改**（id 没变）。账号弹窗保存后需要一个信号让列表按新配置重取——
+   * 否则在「垃圾」tab 里改完白名单，眼前还是旧那一批邮件，直到手动切 tab。
+   * 用法：在 `junkFolders` 的依赖里带上它，`loadCurrent` → `reload` 会跟着重建。
+   */
+  const [accountsEpoch, setAccountsEpoch] = useState(0);
   // 自己的地址（收件人视角的「双向邮件」判定：发件人与收件人都是我的账号，2026-10-06）
   const { ready: ownReady, emails: ownEmails } = useOwnAddresses();
   // 账号筛选（2026-10-05 用户定稿）：单选——"all"（全部账号）或某个账号 id；
@@ -290,6 +325,12 @@ export function MailClient({
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [matchCount, setMatchCount] = useState<number | null>(null);
   const [listQuery, setListQuery] = useState<string | null>(null);
+  /**
+   * 静默合并刷新（reconcile）的序号："全选全部匹配"的计数 effect 带上它——后台自己
+   * 进了一封匹配的邮件 / 删掉一封时，`listQuery` 字符串不变，旧实现不会重取 count，
+   * 批量条于是按旧数字判断 20 封上限、确认文案也与实际操作封数对不上。
+   */
+  const [listEpoch, setListEpoch] = useState(0);
   /**
    * 当前视图下「真正生效」的筛选值（2026-10-06 用户定稿）：「未读」在「发件」「草稿」
    * 不可用（「发件」不可能有未读——与「草稿」同规则；「星标」仅「草稿」不可用，
@@ -438,6 +479,12 @@ export function MailClient({
   const [draftsSyncing, setDraftsSyncing] = useState(false);
   /** 核对失败的账号（下面显示"当前是本地缓存"，别让用户以为草稿箱空了） */
   const [draftErrors, setDraftErrors] = useState<string[]>([]);
+  /**
+   * 草稿列表**读不出来**（连本地缓存都失败）的错误。2026-10-17 审计前的写法是
+   * `setDrafts([])` —— 服务挂了被渲染成「暂无草稿」，用户会以为草稿被清空了。
+   * `null` = 正常；与 `drafts === null`（首次未加载）配合区分「加载中 / 加载失败 / 真的没有」。
+   */
+  const [draftsError, setDraftsError] = useState<string | null>(null);
   /** 「更早的草稿」折叠区（默认收起：QQ 草稿箱里有 141 封 2014 年起的旧草稿） */
   const [olderDraftsOpen, setOlderDraftsOpen] = useState(false);
   const [next, setNext] = useState<string | null>(null);
@@ -460,6 +507,14 @@ export function MailClient({
   const [deletingDraft, setDeletingDraft] = useState(false);
   // 加载序号：只有「最后一次加载」的响应允许落地（连点 tab 时防旧响应覆盖新结果）
   const loadSeqRef = useRef(0);
+  /**
+   * 当前列表行数（给 `reconcile` 的分页游标判断用）。用 ref 而不是把 `items` 塞进
+   * `load` 的依赖：那会让 `loadCurrent` / `reload` 跟着列表长度变化，触发反复重取。
+   */
+  const itemsCountRef = useRef(0);
+  useEffect(() => {
+    itemsCountRef.current = items.length;
+  }, [items.length]);
   // 首次加载完成前显示骨架屏；之后重载保持旧内容（避免每次点筛选都闪一下骨架）
   const hasLoadedRef = useRef(false);
   const listRef = useRef<HTMLUListElement>(null);
@@ -519,7 +574,7 @@ export function MailClient({
       if (seq !== loadSeqRef.current) return;
       setItems((prev) => {
         const merged = opts.append
-          ? [...prev, ...data.items]
+          ? appendUnique(prev, data.items)
           : opts.reconcile
             ? reconcileRows(prev, data.items, data.next !== null)
             : data.items;
@@ -534,9 +589,23 @@ export function MailClient({
         }
         return merged;
       });
-      // 合并模式的分页游标也要跟着换成服务端的（首屏已经换成服务端那一份了）：
-      // 「加载更多」得从新首屏的末尾继续，否则会跳页/重复。
-      setNext(data.next);
+      /**
+       * 分页游标（2026-10-17 审计修正）：**合并刷新时不能无脑换成服务端的 `next`**。
+       *
+       * 服务端的 `next` 指向「本次首屏最后一封之后」；而 `reconcile` 特意保留了比它更老的
+       * 那些**已加载页**。照抄 `next`，下一次「加载更多」/ 哨兵续页就会把保留下来的整页
+       * 再取一遍 —— 列表出现重复行（React 还会报重复 key）。
+       *
+       * 三种情况：
+       * - 服务端说「没有更多」→ 游标作废（这次首屏就是全部匹配，旧行已被 reconcile 丢弃）；
+       * - 本地一行都没有（首次加载失败后的补刷）→ 用服务端的，否则永远翻不了页；
+       * - 其余 → **保留原游标**（它指向本地最后一行之后，正是下一次要接着取的位置；
+       *   已加载完时保留 null，不会凭空长出「加载更多」）。
+       */
+      if (!opts.reconcile || data.next === null) setNext(data.next);
+      else if (itemsCountRef.current === 0) setNext(data.next);
+      // 合并刷新完成：让「全选全部匹配」的计数重新拉一次（见 listEpoch 注释）
+      if (opts.reconcile) setListEpoch((n) => n + 1);
     },
     [],
   );
@@ -545,34 +614,47 @@ export function MailClient({
   const loadAccounts = useCallback(() => {
     fetchWithTimeout("/api/mail/accounts")
       .then((r) => (r.ok ? r.json() : []))
-      .then((data: MailAccount[]) => setAccounts(data.filter((a) => a.enabled)))
+      .then((data: MailAccount[]) => {
+        setAccounts(data.filter((a) => a.enabled));
+        setAccountsLoaded(true);
+      })
       .catch(() => {});
   }, []);
 
   /** 草稿箱加载（「草稿」tab 与写信页保存广播共用；数据量小，整表拉取） */
-  const loadDrafts = useCallback(async () => {
+  const loadDrafts = useCallback(async (opts?: { silent?: boolean }) => {
+    // 后台刷新（切回页面 / 同步心跳 / 写信页自动保存）不显示「正在与服务器核对」：
+    // `?refresh=1` 每 10~24 秒就会跑一次，这条提示会反复闪。手动刷新 / 进 tab 才显示。
+    const silent = opts?.silent === true;
     // ① 本地缓存先出列表（快、断网也能看）
     try {
       const r = await fetchWithTimeout("/api/mail/drafts");
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `${r.status}`);
       const data = (await r.json()) as { items?: MailDraft[]; errors?: { error: string }[] };
       setDrafts(data.items ?? []);
       setDraftErrors((data.errors ?? []).map((e) => e.error));
-    } catch {
-      setDrafts([]);
+      setDraftsError(null);
+    } catch (err) {
+      // ⚠ 不能 `setDrafts([])`：读失败 ≠ 没有草稿（那会让人以为草稿被清空）。
+      // 保持 null（首次）→ 渲染错误态 + 重试；已有列表则原地留着 + 缓存提示。
+      setDraftsError(err instanceof Error ? err.message : String(err));
+      setDraftErrors((prev) => (prev.length ? prev : ["network"]));
       return;
     }
     // ② 再去服务商草稿箱对一遍（手机写的草稿由此进来）。TTL 在后端，来回切 tab 不会再刷。
-    setDraftsSyncing(true);
+    if (!silent) setDraftsSyncing(true);
     try {
       // 跨境 IMAP 核对可能要十几秒，给比普通读路径更宽的上限
       const r = await fetchWithTimeout("/api/mail/drafts?refresh=1", undefined, 60_000);
       const data = (await r.json()) as { items?: MailDraft[]; errors?: { error: string }[] };
       setDrafts(data.items ?? []);
       setDraftErrors((data.errors ?? []).map((e) => e.error));
+      setDraftsError(null);
     } catch {
-      // 核对失败：留着缓存那份，不打扰（下面会显示"显示的是本地缓存"）
+      // 核对失败：留着缓存那份，并如实标注（此前这里什么也不做，注释承诺的提示不会出现）
+      setDraftErrors((prev) => (prev.length ? prev : ["network"]));
     } finally {
-      setDraftsSyncing(false);
+      if (!silent) setDraftsSyncing(false);
     }
   }, []);
 
@@ -580,7 +662,8 @@ export function MailClient({
   useEffect(() => {
     if (view !== "drafts") return;
     loadDrafts();
-    const onChanged = () => loadDrafts();
+    // 写信页自动保存很频繁：后台刷新不显示「核对中」提示（见 loadDrafts 的 silent）
+    const onChanged = () => loadDrafts({ silent: true });
     window.addEventListener(MAIL_DRAFTS_CHANGED_EVENT, onChanged);
     return () => window.removeEventListener(MAIL_DRAFTS_CHANGED_EVENT, onChanged);
   }, [view, loadDrafts]);
@@ -592,6 +675,9 @@ export function MailClient({
       // 同步文件夹白名单可能刚被改过（勾上「垃圾邮件」等）→ 垃圾视图的路径缓存作废
       junkCacheRef.current.clear();
       loadAccounts();
+      // 账号 id 不变时 `accountIdsKey` 看不出文件夹白名单的变化 → 用版本号让
+      // `junkFolders`（进而 loadCurrent / reload）重建，列表按新配置重取
+      setAccountsEpoch((n) => n + 1);
     };
     window.addEventListener(MAIL_ACCOUNTS_CHANGED_EVENT, onAccountsChanged);
     return () => window.removeEventListener(MAIL_ACCOUNTS_CHANGED_EVENT, onAccountsChanged);
@@ -631,6 +717,9 @@ export function MailClient({
   const accountIdsKey = useMemo(() => accounts.map((a) => a.id).join(","), [accounts]);
 
   const junkFolders = useCallback(async (): Promise<{ account: string; path: string }[]> => {
+    // 版本号只当依赖用：账号 id 不变、但文件夹白名单改了时也要强制重建本回调
+    // （见 accountsEpoch 注释）。`void` 是为了让 eslint 认得出它真的被读了。
+    void accountsEpoch;
     if (view !== "junk") return [];
     const ids = accountFilter === "all" ? accountIdsKey.split(",").filter(Boolean) : [accountFilter];
     const out: { account: string; path: string }[] = [];
@@ -652,7 +741,9 @@ export function MailClient({
     }
     setJunkNote(out.length ? null : hasFolder ? "unsynced" : "none");
     return out;
-  }, [view, accountFilter, accountIdsKey]);
+    // accountsEpoch：账号 id 不变但文件夹白名单改了时，让这个回调（进而 loadCurrent /
+    // reload）重建，列表按新配置重取（见 accountsEpoch 注释）
+  }, [view, accountFilter, accountIdsKey, accountsEpoch]);
 
   /**
    * 拉取「当前筛选」的列表——四处调用（初次/筛选变化、刷新、全部标为已读、加载更多）
@@ -739,13 +830,20 @@ export function MailClient({
       window.clearTimeout(timer);
     }
     try {
-      await loadCurrent();
+      // 草稿视图的数据源是 `/drafts`，不是 `/messages`（2026-10-17 审计）：此前它
+      // 也调 `loadCurrent()`，于是按钮转一圈、草稿列表一动不动（还把邮件列表的
+      // items 写成了脏数据）。
+      if (view === "drafts") await loadDrafts();
+      else await loadCurrent();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      // 手动刷新也要把未读数字带上：列表已读状态可能刚被服务端改过，
+      // 「全部标为已读」的禁用态不能等下一次后台心跳（2026-10-17 审计）
+      loadAccounts();
       setRefreshing(false);
     }
-  }, [loadCurrent]);
+  }, [loadCurrent, loadDrafts, view, loadAccounts]);
 
   /**
    * 抓取期间的列表自动刷新（2026-10-08）。
@@ -763,9 +861,13 @@ export function MailClient({
     if (!syncing || view === "drafts" || q.trim()) return;
     const timer = window.setInterval(() => {
       void loadCurrent().catch(() => {});
+      // 列表在长，未读数字 / 「全部标为已读」的可用性也要跟着长：它们来自 `/accounts`，
+      // 不让它跟着这 2 秒节拍走，用户在首轮同步里会看见「邮件一封封出现，未读数一直 0」
+      // （2026-10-17 审计；本轮之前靠 `mail:synced` 兜底，最长延迟 10s）
+      loadAccounts();
     }, 2_000);
     return () => window.clearInterval(timer);
-  }, [syncing, view, q, loadCurrent]);
+  }, [syncing, view, q, loadCurrent, loadAccounts]);
 
   /**
    * 「后台或别处动了数据」→ 静默刷新左栏列表 **+ 未读数字**（2026-10-16 用户报「收到
@@ -800,32 +902,44 @@ export function MailClient({
    */
   const lastServerSyncRefreshRef = useRef(0);
   useEffect(() => {
-    if (view === "drafts" || q.trim()) return;
-    const refresh = () => {
+    /**
+     * `reloadDrafts`：草稿视图下是否重取草稿。`mail:new-mail` 不动草稿箱（新邮件 ≠ 草稿），
+     * 其余三个源都可能（写完/删除/别处改了草稿、一轮同步跑完草稿镜像）。
+     * ⚠ **不再提前 return**（2026-10-17 审计）：搜索态 / 草稿视图原本整段跳过，连未读
+     *   数字也不刷——角标在涨、开关数字与「全部标为已读」却停在旧值，退出搜索才更新。
+     *   现在：列表按老规则跳过，`loadAccounts()` 永远执行。
+     */
+    const refresh = (reloadDrafts = false) => {
       // 记时间戳：兜底重取（`mail:synced`）拿它当节流闸门
       lastServerSyncRefreshRef.current = Date.now();
-      void loadCurrent({ reconcile: true }).catch(() => {});
+      if (view === "drafts") {
+        if (reloadDrafts) void loadDrafts({ silent: true });
+      } else if (!q.trim()) {
+        void loadCurrent({ reconcile: true }).catch(() => {});
+      }
       // 未读数字 / 「全部标为已读」的可用性（见上方 ⚠「列表与未读数必须一起刷新」）
       loadAccounts();
     };
     const onVisible = () => {
-      if (document.visibilityState === "visible") refresh();
+      if (document.visibilityState === "visible") refresh(true);
     };
     const onServerSynced = () => {
       if (Date.now() - lastServerSyncRefreshRef.current < SERVER_SYNC_REFRESH_MIN_MS) return;
-      refresh();
+      refresh(true);
     };
-    window.addEventListener(MAIL_NEW_MAIL_EVENT, refresh);
-    window.addEventListener(MAIL_SENT_EVENT, refresh);
+    const onNewMail = () => refresh();
+    const onSent = () => refresh(true);
+    window.addEventListener(MAIL_NEW_MAIL_EVENT, onNewMail);
+    window.addEventListener(MAIL_SENT_EVENT, onSent);
     window.addEventListener(MAIL_SYNCED_EVENT, onServerSynced);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
-      window.removeEventListener(MAIL_NEW_MAIL_EVENT, refresh);
-      window.removeEventListener(MAIL_SENT_EVENT, refresh);
+      window.removeEventListener(MAIL_NEW_MAIL_EVENT, onNewMail);
+      window.removeEventListener(MAIL_SENT_EVENT, onSent);
       window.removeEventListener(MAIL_SYNCED_EVENT, onServerSynced);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [view, q, loadCurrent, loadAccounts]);
+  }, [view, q, loadCurrent, loadDrafts, loadAccounts]);
 
   /**
    * 「全部标为已读」（2026-10-05 用户定稿）：范围 = 当前账号筛选（「全部账号」= 全部账号）；
@@ -916,7 +1030,7 @@ export function MailClient({
     return () => {
       cancelled = true;
     };
-  }, [selectMode, listQuery, view]);
+  }, [selectMode, listQuery, view, listEpoch]);
 
   // 视图 / 账号 / 搜索变化时清空选择（选择模式本身保留：用户可能想接着选下一批）
   // ⚠ 「全部匹配」也一并退出：那个范围是按上一个筛选算的，换了筛选必须重新点一次，
@@ -937,7 +1051,10 @@ export function MailClient({
     ? matchCount === null
       ? null
       : Math.max(0, matchCount - excludedCount)
-    : selected.size;
+    : // 逐行模式用**现有行**的选中数，不用 `selected.size`：静默刷新可能把某条已选邮件
+      // 从列表里摘掉（别处删了/移走），旧写法会把幽灵 id 算进「已选 N」，而批量请求
+      // 只发 `selectedItems`——确认文案与实际封数对不上（2026-10-17 审计）
+      selectedItems.length;
   const deleteBlocked = matchedCount === null || matchedCount > MAX_BATCH_DELETE;
 
   const exitSelectMode = useCallback(() => {
@@ -1356,6 +1473,9 @@ export function MailClient({
           return;
         }
         toast.add({ title: t("junkUndone"), type: "success" });
+        // 信回到原文件夹（通常是收件箱）→ 未读可能因此 +1：立即回正，不等下一轮
+        // 同步心跳（`mail:synced` 最长要 10s 才被放行，2026-10-17 审计）
+        loadAccounts();
         // **乐观放回**：撤销后这封信回到了原文件夹，列表里该重新出现它（"已移回收件箱"
         // 的完成信号就是它回来）。
         // ⚠ 标记 `stale`：手里这份 `m.copies` 是**搬走前**的垃圾夹副本（uid 已失效），
@@ -1382,7 +1502,7 @@ export function MailClient({
         });
       }
     },
-    [reload, t, restoreRow],
+    [reload, t, restoreRow, loadAccounts],
   );
 
   /**
@@ -1426,6 +1546,12 @@ export function MailClient({
           return;
         }
         toast.add({ title: t("notJunkDone"), type: "success" });
+        // 这封不再属于当前（垃圾）视图：右栏若正看着它，跟列表一起退回占位。
+        // 旧实现只摘了列表行，右栏留着那封信、工具栏仍显示「移出垃圾」；
+        // 而它手里的垃圾夹 uid 已经失效，再点一下会搬到别的邮件上（2026-10-17 审计）。
+        broadcastItemChange({ messageId: m.messageId, deleted: true, source: "list" });
+        // 搬到收件箱 = 可能多一封未读（旧实现只 reload 列表，未读数字要等同步心跳）
+        loadAccounts();
         void (async () => {
           await Promise.all(
             accountIds.map((accountId) =>
@@ -1447,7 +1573,7 @@ export function MailClient({
         });
       }
     },
-    [reload, t, removeRow, restoreRow],
+    [reload, t, removeRow, restoreRow, loadAccounts],
   );
 
   /**
@@ -1485,6 +1611,8 @@ export function MailClient({
           // 「界面说没了、刷新又回来」——放回去并按服务端重取
           restoreRow(m);
           toast.add({ title: t("junkFailed"), description: skipped[0].reason, type: "error" });
+          // 有副本真的搬走了（affected > 0）→ 收件箱未读可能已变
+          loadAccounts();
           await reload();
           return;
         }
@@ -1750,8 +1878,9 @@ export function MailClient({
     [accounts],
   );
   useEffect(() => {
+    if (!accountsLoaded) return;
     window.dispatchEvent(new CustomEvent(MAIL_UNREAD_EVENT, { detail: { total: unreadAll } }));
-  }, [unreadAll]);
+  }, [unreadAll, accountsLoaded]);
 
   /**
    * 列表空态文案（2026-10-05 用户指定）：有筛选时把条件说清楚——
@@ -2302,7 +2431,35 @@ export function MailClient({
           // - 行点击进写信页继续编辑（站内打开时按需抓原文解析）；
           // - 30 天前的旧草稿收进折叠区（数据一封不少，只是不糊住当前在写的那几封）。
           drafts === null ? (
-            <ListSkeleton />
+            draftsError ? (
+              // 读失败 ≠ 没有草稿（2026-10-17 审计）：旧实现会把这里渲染成「暂无草稿」
+              <Empty>
+                <EmptyMedia variant="icon">
+                  <CircleAlertIcon aria-hidden />
+                </EmptyMedia>
+                <EmptyHeader>
+                  <EmptyTitle>{t("draftsLoadFailed")}</EmptyTitle>
+                  <EmptyDescription>{mailErrorText(draftsError, t)}</EmptyDescription>
+                </EmptyHeader>
+                {mailErrorKind(draftsError) === "unauthorized" ? (
+                  <Link
+                    href="/login"
+                    data-slot="button"
+                    className={buttonVariants({ variant: "outline", size: "sm" })}
+                  >
+                    <LogInIcon data-icon="default" />
+                    {t("relogin")}
+                  </Link>
+                ) : (
+                  <Button variant="outline" size="sm" onClick={() => void loadDrafts()}>
+                    <RefreshCwIcon data-icon="default" />
+                    {t("retry")}
+                  </Button>
+                )}
+              </Empty>
+            ) : (
+              <ListSkeleton />
+            )
           ) : visibleDrafts.length === 0 && olderVisible.length === 0 ? (
             <Empty>
               <EmptyMedia variant="icon">

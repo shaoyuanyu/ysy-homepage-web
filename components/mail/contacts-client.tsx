@@ -70,14 +70,28 @@ export function ContactsClient() {
   const [deleting, setDeleting] = useState(false);
   const [savingKnown, setSavingKnown] = useState<string | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  /**
+   * 搜索请求序号（2026-10-17 审计）：慢的旧响应不能覆盖新关键词的结果。
+   * 300ms 防抖只能降低概率——快速输入时两个请求仍可能并发，而网络回来的顺序不保证。
+   * 每次进入 `loadContacts` 递增；响应落地前比对，不是最后一次就丢掉（连错误也不报，
+   * 否则旧请求的失败会在新结果上弹一条无关错误）。
+   */
+  const contactSeq = useRef(0);
 
   const loadContacts = useCallback(async (query: string) => {
+    const seq = ++contactSeq.current;
     const params = new URLSearchParams();
     if (query.trim()) params.set("q", query.trim());
-    const res = await fetchWithTimeout(`/api/mail/contacts?${params}`);
-    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
-    const data = (await res.json()) as { items: MailContact[] };
-    setContacts(data.items);
+    try {
+      const res = await fetchWithTimeout(`/api/mail/contacts?${params}`);
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
+      const data = (await res.json()) as { items: MailContact[] };
+      if (seq !== contactSeq.current) return;
+      setContacts(data.items);
+    } catch (err) {
+      // 过期请求的失败静默丢弃；只有最后一次请求的错误才交给调用方展示
+      if (seq === contactSeq.current) throw err;
+    }
   }, []);
 
   const loadKnown = useCallback(async () => {

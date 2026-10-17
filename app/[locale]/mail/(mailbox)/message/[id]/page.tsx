@@ -25,6 +25,13 @@ export async function generateMetadata({ params }: Props) {
 export default async function MailMessagePage({ params }: Props) {
   const { locale, id } = await params;
   setRequestLocale(locale);
+  const messageId = decodeMessageId(id);
 
-  return <MessageView messageId={decodeMessageId(id)} />;
+  return (
+    // ⚠ `key`（2026-10-17 审计）：App Router 在 `/mail/message/:id` 之间导航时复用同一个
+    // 页面/组件实例——不加 key，MessageView 里所有「按封」状态都会跨信遗留：快速回复
+    // 里写给 A 的文字会出现在 B 的输入框里（发送时用的却是 B 的收件人）、A 的错误页会
+    // 粘在 B 上、对 A 点过「显示图片」后 B 就没有那个按钮了。见 MAIL-AGENT.md 4.12。
+    <MessageView key={messageId} messageId={messageId} />
+  );
 }

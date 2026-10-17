@@ -103,8 +103,10 @@ function SyncFolderRow({
   );
 }
 
-/** 账号增删后广播，邮件列表（MailClient）据此刷新账号筛选 chips */
-export const MAIL_ACCOUNTS_CHANGED_EVENT = "mail-accounts-changed";
+// 事件名统一在 `lib/mail/events.ts`（`useOwnAddresses` 等 lib 模块也订阅它）；
+// 这里 re-export，既有 import 不需要改。
+import { MAIL_ACCOUNTS_CHANGED_EVENT } from "@/lib/mail/events";
+export { MAIL_ACCOUNTS_CHANGED_EVENT };
 
 interface AddForm {
   /** 备注名（仅站内 UI 显示，**不外发**） */
