@@ -382,6 +382,8 @@
     },
     "selectMessage": "Select a message",
     "selectMessageHint": "Pick a message from the list on the left to read it here",
+    "emptyHintBrowse": "to browse",
+    "emptyHintOpen": "to open",
     "loadMore": "Load more",
     "listStats": "{loaded} loaded · {unread} unread",
     "accountsOverviewLabel": "Accounts overview",

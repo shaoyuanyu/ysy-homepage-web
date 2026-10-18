@@ -269,13 +269,25 @@
   }
 }
 
-/* ---- /mail 右栏占位插画（未选择邮件时，2026-10-16）----
-   中心是一封打开的信封（信纸升起、三行字写出），四周散着四封合上的信。
-   四封信各自缓慢浮动，7 秒一轮、错开相位；信纸一轮 12 秒（升起 1.6 秒、
-   字写完 2.7 秒，其余时间静止）。仅装饰：prefers-reduced-motion 下四封信
-   静止。 */
+/* ---- /mail 右栏空态（未选择邮件时，2026-10-18 重做）----
+   场景：一封封好的信浮在中央。封口先绕上沿向上翻开，露出信封内部；信纸从里面
+   升起、四行字依次写出、信纸右上角亮起一枚未读点；随后信纸落回，封口合上。
+   四周散着四封合上的信，按各自周期缓慢漂浮。
 
-@keyframes mail-placeholder-float {
+   时间轴（14s 一轮）：
+     0.6–1.8s   封口向上翻开
+     1.8–3.6s   信纸升起
+     2.3–3.9s   四行字依次写出（`--line-delay` 逐行错开）
+     3.5–4.1s   未读点亮起，8.7–9.5s 淡出
+     9.5–11.1s  信纸落回
+     11.1–12.3s 封口合上
+   漂浮 / 星芒的周期与相位由组件内联的 CSS 变量给出，互不同步；光晕固定
+   9 秒一轮呼吸。
+
+   仅装饰：prefers-reduced-motion 下停在「封口翻开、信纸升起、字已写完、未读点
+   亮着」的静帧——静帧本身必须是完整构图。 */
+
+@keyframes mail-empty-float {
   0%,
   100% {
     transform: translateY(0);
@@ -285,68 +297,235 @@
   }
 }
 
-.mail-placeholder-float {
-  animation: mail-placeholder-float 7s ease-in-out infinite;
+.mail-empty-float {
+  animation: mail-empty-float var(--float-duration, 8s) ease-in-out infinite;
+  animation-delay: var(--float-delay, 0s);
 }
 
-@keyframes mail-placeholder-rise {
-  0% {
+@keyframes mail-empty-flap {
+  0%,
+  4% {
+    transform: scaleY(1);
+    animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1);
+  }
+  13% {
+    transform: scaleY(-1);
+    animation-timing-function: linear;
+  }
+  79% {
+    transform: scaleY(-1);
+    animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1);
+  }
+  88%,
+  100% {
+    transform: scaleY(1);
+  }
+}
+
+/* 封口绕上沿翻折：scaleY 从 1 过 0 到 -1 = 一张纸绕折线翻到背面。
+   `transform-box: view-box` 让原点直接取画布坐标系里的折线（y = 封口上沿） */
+.mail-empty-flap {
+  transform-box: view-box;
+  transform-origin: 280px 150px;
+  animation: mail-empty-flap 14s infinite;
+}
+
+/* 火漆在封口翻到背面后就应该看不见了（它贴在封口的正面）：
+   翻开的前半程淡出，合上且稳定后再淡入 */
+@keyframes mail-empty-seal {
+  0%,
+  4% {
+    opacity: 1;
+  }
+  7% {
+    opacity: 0;
+  }
+  86% {
+    opacity: 0;
+  }
+  89%,
+  100% {
+    opacity: 1;
+  }
+}
+
+.mail-empty-seal {
+  animation: mail-empty-seal 14s infinite;
+}
+
+@keyframes mail-empty-rise {
+  0%,
+  13% {
     transform: translateY(0);
     animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
   }
-  13.333% {
-    transform: translateY(-56px);
+  26% {
+    transform: translateY(-108px);
     animation-timing-function: linear;
   }
-  66.667% {
-    transform: translateY(-56px);
-    animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1);
+  68% {
+    transform: translateY(-108px);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
   }
-  80%,
+  79%,
   100% {
     transform: translateY(0);
   }
 }
 
-@keyframes mail-placeholder-write {
-  0% {
+.mail-empty-letter {
+  animation: mail-empty-rise 14s infinite;
+}
+
+@keyframes mail-empty-write {
+  0%,
+  13% {
     stroke-dashoffset: 1;
   }
-  9% {
+  21% {
     stroke-dashoffset: 0;
   }
-  80% {
+  66% {
     stroke-dashoffset: 0;
   }
-  84%,
+  72%,
   100% {
     stroke-dashoffset: 1;
   }
 }
 
-.mail-placeholder-letter {
-  animation: mail-placeholder-rise 12s infinite;
-}
-
 /* 行元素带 pathLength="1"，dasharray 与 dashoffset 都以「整条线 = 1」计 */
-.mail-placeholder-line {
+.mail-empty-line {
   stroke-dasharray: 1;
   stroke-dashoffset: 1;
-  animation: mail-placeholder-write 12s 1.6s infinite;
+  animation: mail-empty-write 14s var(--line-delay, 0s) infinite;
+}
+
+@keyframes mail-empty-dot {
+  0%,
+  25% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  29% {
+    opacity: 1;
+    transform: scale(1.25);
+  }
+  32%,
+  62% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  68%,
+  100% {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+}
+
+.mail-empty-dot {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mail-empty-dot 14s ease-out infinite;
+}
+
+@keyframes mail-empty-twinkle {
+  0%,
+  62%,
+  100% {
+    opacity: 0;
+    transform: scale(0.5) rotate(0deg);
+  }
+  72% {
+    opacity: 0.5;
+    transform: scale(1) rotate(15deg);
+  }
+  84% {
+    opacity: 0;
+    transform: scale(0.7) rotate(30deg);
+  }
+}
+
+.mail-empty-spark {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mail-empty-twinkle 9s ease-in-out infinite;
+  animation-delay: var(--spark-delay, 0s);
+}
+
+@keyframes mail-empty-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+.mail-empty-halo {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mail-empty-breathe 9s ease-in-out infinite;
+}
+
+/* 右栏空态的纸面点阵：中心清晰、向四周淡出，只作背景质地，不与正文抢注意力 */
+.mail-empty-grid {
+  background-image: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--muted-foreground) 17%, transparent) 1px,
+    transparent 1px
+  );
+  background-position: center;
+  background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(ellipse 55% 48% at 50% 40%, #000 12%, transparent 74%);
+  mask-image: radial-gradient(ellipse 55% 48% at 50% 40%, #000 12%, transparent 74%);
+}
+
+/* 同心圆层：向下渐隐，别让圆环横穿标题与说明文字 */
+.mail-empty-rings {
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 52%, transparent 86%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 52%, transparent 86%);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mail-placeholder-letter {
+  .mail-empty-flap {
     animation: none;
-    transform: translateY(-56px);
+    transform: scaleY(-1);
   }
 
-  .mail-placeholder-line {
+  .mail-empty-seal {
+    animation: none;
+    opacity: 0;
+  }
+
+  .mail-empty-letter {
+    animation: none;
+    transform: translateY(-108px);
+  }
+
+  .mail-empty-line {
     animation: none;
     stroke-dashoffset: 0;
   }
 
-  .mail-placeholder-float {
+  .mail-empty-dot {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .mail-empty-spark {
+    animation: none;
+    opacity: 0.4;
+  }
+
+  .mail-empty-halo,
+  .mail-empty-float {
     animation: none;
   }
 }

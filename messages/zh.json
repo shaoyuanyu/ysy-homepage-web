@@ -382,6 +382,8 @@
     },
     "selectMessage": "选择一封邮件",
     "selectMessageHint": "从左侧列表选择一封邮件，内容会显示在这里",
+    "emptyHintBrowse": "浏览",
+    "emptyHintOpen": "打开",
     "loadMore": "加载更多",
     "listStats": "已加载 {loaded} 封 · 未读 {unread}",
     "accountsOverviewLabel": "账号一览",
