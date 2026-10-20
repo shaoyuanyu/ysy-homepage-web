@@ -5549,6 +5549,18 @@
               "t": "2025-12-31 23:59:59"
             }
           ]
+        },
+        {
+          "y": 2027,
+          "link": "https://ieee-cas.org/event/conference/2027-ieee-international-conference-multimedia-expo-icme",
+          "tz": "Etc/GMT+12",
+          "date": "July 13-17, 2027",
+          "place": "Xiamen, China",
+          "timeline": [
+            {
+              "t": "2026-12-30 23:59:59"
+            }
+          ]
         }
       ]
     },
@@ -6665,6 +6677,31 @@
             },
             {
               "t": "2026-04-29 23:59:59",
+              "c": "Cycle 2"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://conferences.sigcomm.org/imc/2027/",
+          "tz": "Etc/GMT+12",
+          "date": "Oct 25-29, 2027",
+          "place": "Atlanta, GA, USA",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2026-11-10 23:59:59"
+            },
+            {
+              "t": "2026-11-17 23:59:59",
+              "c": "Cycle 1; rebuttal period January 26-February 2, 2027"
+            },
+            {
+              "k": "abstract",
+              "t": "2027-03-31 23:59:59"
+            },
+            {
+              "t": "2027-04-07 23:59:59",
               "c": "Cycle 2"
             }
           ]
