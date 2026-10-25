@@ -347,7 +347,7 @@
           "y": 2026,
           "link": "https://www.acml-conf.org/2026/",
           "tz": "Etc/GMT+12",
-          "date": "TBD",
+          "date": "December 1-4, 2026",
           "place": "Melbourne, Australia",
           "timeline": [
             {
@@ -2375,7 +2375,7 @@
               "c": "Round 1"
             },
             {
-              "t": "2026-10-01 23:59:59",
+              "t": "2026-11-01 23:59:59",
               "c": "Round 2"
             }
           ]
