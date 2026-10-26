@@ -161,7 +161,8 @@ export function MailShell({ children }: { children: ReactNode }) {
 
   return (
     <MailBarProvider>
-      <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1">
+      {/* data-slot：几何钩子（E2E 量「专注模式四周各 8px」与普通形态的列宽用） */}
+      <div data-slot="mail-shell" className="flex flex-col gap-4 lg:min-h-0 lg:flex-1">
         <div className="flex min-w-0 flex-col gap-4 lg:min-h-0 lg:flex-1 lg:gap-0 lg:rounded-xl lg:border lg:border-border">
           {/* ⚠ 全屏查看只改**列模板**（单列）并把列表那栏 display:none：列表保持挂载，
               滚动位置 / 已加载分页 / 筛选状态都留着，退出全屏立刻回到原样 */}

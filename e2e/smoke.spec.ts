@@ -7282,8 +7282,22 @@ test.describe("站内邮件（/mail）", () => {
       const detail = page.locator('[data-slot="mail-pane-detail"]');
       const list = page.locator('[data-slot="mail-pane-list"]');
       const pageBox = page.locator('[data-slot="mail-page"]');
+      const shellBox = page.locator('[data-slot="mail-shell"]');
       const heightOf = (loc: typeof detail) =>
         loc.evaluate((el) => Math.round(el.getBoundingClientRect().height));
+      const widthOf = (loc: typeof detail) =>
+        loc.evaluate((el) => Math.round(el.getBoundingClientRect().width));
+      /** 四周外边距：专注模式要求「四周各 8px」，不能只看宽，四边都要量 */
+      const insets = (loc: typeof detail) =>
+        loc.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          return {
+            left: Math.round(r.left),
+            right: Math.round(window.innerWidth - r.right),
+            top: Math.round(r.top),
+            bottom: Math.round(window.innerHeight - r.bottom),
+          };
+        });
 
       // 普通形态：站点外壳都在，容器把「顶栏 57 + 页脚 65」那一截让出去
       await expect(header).toBeVisible();
@@ -7291,8 +7305,13 @@ test.describe("站内邮件（/mail）", () => {
       await expect(footer).toBeVisible();
       await expect(page.locator("html")).not.toHaveAttribute("data-mail-focus", ".*");
       const normalPageH = await heightOf(pageBox);
+      const normalPageW = await widthOf(pageBox);
+      const normalShellW = await widthOf(shellBox);
       const normalDetail = await heightOf(detail);
+      const normalDetailW = await widthOf(detail);
       expect(normalPageH, "普通形态容器 = 视口 − 顶栏 − 页脚").toBeLessThan(900);
+      expect(normalPageW, "普通形态 = 站点标准列 max-w-6xl").toBeLessThanOrEqual(1152);
+      expect(normalShellW, "普通形态面板区 = 标准列 − 左右内边距").toBe(normalPageW - 48);
 
       // 开关在中缝上（「全屏查看」那枚再往上一格），不在操作栏里
       await expect(page.locator('[data-slot="mail-focus-mode"]')).toHaveAttribute(
@@ -7317,6 +7336,18 @@ test.describe("站内邮件（/mail）", () => {
       const focusPageH = await heightOf(pageBox);
       expect(Math.abs(focusPageH - 900), `专注模式下容器 = 100dvh（实测 ${focusPageH}）`).toBeLessThanOrEqual(2);
       expect(await heightOf(detail), "详情栏应高出一大截").toBeGreaterThan(normalDetail + 150);
+      // ⚠ 2026-10-26 用户要求：横向也占满（解除 max-w-6xl），但四周保留 0.5rem 外边距
+      expect(await widthOf(pageBox), "专注模式容器 = 满视口宽").toBe(1280);
+      expect(await widthOf(shellBox), "面板区 = 视口 − 16px（四周各 8px）").toBe(1280 - 16);
+      expect(await insets(shellBox), "专注模式四周留白各 8px").toEqual({
+        left: 8,
+        right: 8,
+        top: 8,
+        bottom: 8,
+      });
+      expect(await widthOf(detail), "详情栏应跟着变宽（解除 max-w-6xl）").toBeGreaterThan(
+        normalDetailW + 100,
+      );
       // 左栏**还在**：收左栏是「全屏查看」的事，两个开关各管各的
       await expect(list).toBeVisible();
 
@@ -7332,6 +7363,10 @@ test.describe("站内邮件（/mail）", () => {
       await expect(pageHeader).toBeVisible();
       await expect(footer).toBeVisible();
       expect(await heightOf(pageBox), "退出专注模式后容器高度复位").toBe(normalPageH);
+      expect(await widthOf(pageBox), "退出专注模式后容器宽度复位（回到 max-w-6xl）").toBe(
+        normalPageW,
+      );
+      expect(await widthOf(shellBox), "退出专注模式后面板区宽度也复位").toBe(normalShellW);
       await expect(page.getByRole("button", { name: "专注模式" })).toBeVisible();
 
       // ④ 按「关闭」回列表：**开关还在（列表页也有）、模式还开着**（2026-10-16 第二轮）

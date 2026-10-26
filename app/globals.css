@@ -1049,17 +1049,23 @@ section[id^="ccf-field"] {
 /* 邮件「专注模式」（`html[data-mail-focus]`，2026-10-16 用户要求）：
    「在 mac 上邮件内容区（尤其高度）太小」的正面解法——把**站点外壳**整块让开：
    顶栏 / 页脚 / 右下角浮动导航钮 / `/mail` 页头（标题 + 通讯录·账号·设置·agent 四颗入口）
-   全部隐藏，页面上下留白从 `py-12` 收到 0.5rem，邮件面板直接吃满视口。
+   全部隐藏，页面四周留白从 `py-12` / `px-4·sm:px-6` 收到统一的 0.5rem，
+   邮件面板直接吃满视口。
    高度公式里那两截（顶栏 3.5rem + 1px、页脚 4.0625rem）随之作废，改由这里直接给 `100dvh`
    ——否则容器会比视口矮 122px，白留一条边。
+
+   2026-10-26 用户要求「不仅占满纵向空间，而且占满横向空间（保留适当的外边距）」：
+   同时放开站点的标准列 `max-w-6xl`（右栏能多出的宽度随视口变宽而增大：1280 宽
+   +144px、1920 宽 +800px），四周各留 0.5rem——与纵向同档，看着像「最大化」而不是「贴边」。
 
    ⚠ 状态由 `components/mail/mail-shell.tsx` 挂在 `<html>` 上（`data-mail-focus`）：
      页面容器与页头都长在**服务端 layout** 里（根 layout 的顶栏/页脚更够不着），
      只有 documentElement 是它们共同的祖先。开关持久化在 localStorage（`lib/mail/focus.ts`），
      刷新时的**首帧**由 `app/layout.tsx` 的内联脚本先挂上，免得先闪一下外壳。
    ⚠ 断点 `64rem` 与开关本身的 `lg` 门槛一致：窄屏详情本来就是整页，没有这回事。
-   ⚠ 页面容器要覆盖的是 Tailwind 的 `py-12` / `lg:h-[calc(100dvh_-_…)]`（同为单类选择器），
-     这里靠 `html[属性] [data-slot]` 的更高权重取胜，不靠顺序。 */
+   ⚠ 页面容器要覆盖的是 Tailwind 的 `max-w-6xl` / `py-12` / `px-4·sm:px-6` /
+     `lg:h-[calc(100dvh_-_…)]`（同为单类选择器），这里靠 `html[属性] [data-slot]`
+     的更高权重取胜，不靠顺序。 */
 @media (min-width: 64rem) {
   html[data-mail-focus] .site-header,
   html[data-mail-focus] [data-slot="site-footer"],
@@ -1067,10 +1073,17 @@ section[id^="ccf-field"] {
   html[data-mail-focus] [data-slot="mail-page-header"] {
     display: none;
   }
+  /* 全局 `html { scrollbar-gutter: stable }`（防长短页面切换抖动）会恒定预留一条
+     滚动条槽；专注模式下页面锁死 100dvh、根本不需要滚动条，留着它右侧就比左侧
+     多 15px（Windows / Linux 的经典滚动条）。这里放开，四周才是等宽的 8px。 */
+  html[data-mail-focus] {
+    scrollbar-gutter: auto;
+  }
   html[data-mail-focus] [data-slot="mail-page"] {
+    max-width: none;
     height: 100dvh;
-    padding-top: 0.5rem;
-    padding-bottom: 0.5rem;
+    /* 四周同档：横向从 16/24px 收到 8px，纵向从 48px 收到 8px */
+    padding: 0.5rem;
   }
 }
 
