@@ -7366,6 +7366,32 @@ test.describe("站内邮件（/mail）", () => {
       await expect(page.locator("html")).not.toHaveAttribute("data-mail-focus", ".*");
       await expect(header).toBeVisible();
       await expect(pageHeader).toBeVisible();
+
+      /**
+       * ⚠ 回归钉（2026-10-26 用户报「邮箱页悬浮导航钮有时错位」）：
+       *   专注模式把页脚 `display:none` 期间，浮动钮若仍按页脚 rect（全为 0）算避让，
+       *   会得出最大上移量、把自己顶到屏幕顶部；而宽屏邮箱页整页锁高、不产生 window
+       *   scroll，退出专注模式后**再没有任何一次校正**，于是它一直挂在右上角。
+       *   判据只看用户能看见的结果：退出后它得回到右下角（不在上半屏），且不压住页脚。
+       *   ⚠ 位置带 200ms 过渡 → 用 poll 等落地，别读中间帧。
+       */
+      const fab = page.locator('[data-slot="nav-fab"]');
+      await expect(fab).toBeVisible();
+      // ⚠ 位置有 200ms 过渡：等「不压页脚」这个终态落地，别读中间帧
+      //   （刚退出时它先出现在未变换的位置，再花 200ms 上移到位）。
+      await expect
+        .poll(
+          async () => {
+            const f = await fab.boundingBox();
+            const ft = await footer.boundingBox();
+            return f && ft ? Math.round(f.y + f.height - ft.y) : -1;
+          },
+          { message: "浮动钮应停在页脚上方，不许压住页脚" },
+        )
+        .toBeLessThanOrEqual(0);
+      const fabBox = (await fab.boundingBox())!;
+      expect(fabBox.y, "退出专注模式后浮动钮应回到右下角（不许被顶到上半屏）").toBeGreaterThan(450);
+
       await page.reload();
       await expect(page.locator("html")).not.toHaveAttribute("data-mail-focus", ".*");
       await expect(header).toBeVisible();
