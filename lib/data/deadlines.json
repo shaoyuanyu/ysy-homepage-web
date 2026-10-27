@@ -1923,6 +1923,19 @@
               "t": "2026-02-04 23:59:59"
             }
           ]
+        },
+        {
+          "y": 2027,
+          "link": "https://learningtheory.org/colt2027/",
+          "tz": "Etc/GMT+12",
+          "date": "June 28 - July 2, 2027",
+          "place": "Tokyo, Japan",
+          "timeline": [
+            {
+              "t": "2027-01-29 23:59:59",
+              "c": "Expected rebuttal March 29 - April 2; author notification on or before"
+            }
+          ]
         }
       ]
     },
