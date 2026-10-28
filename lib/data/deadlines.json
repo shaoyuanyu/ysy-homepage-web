@@ -1848,12 +1848,7 @@
           "place": "Macau SAR, China / Online",
           "timeline": [
             {
-              "t": "2026-10-12 23:59:59",
-              "c": "ARR Submission"
-            },
-            {
-              "t": "2026-12-23 23:59:59",
-              "c": "COLING commitment after ARR meta-reviews; reviewed papers only"
+              "t": "2026-10-12 23:59:59"
             }
           ]
         }
@@ -7184,6 +7179,14 @@
             {
               "t": "2026-11-16 23:59:59",
               "c": "Main Track; rebuttal/revision period: February 16-March 8, 2027"
+            },
+            {
+              "k": "abstract",
+              "t": "2026-12-06 23:59:59"
+            },
+            {
+              "t": "2026-12-13 23:59:59",
+              "c": "Industry Track; rebuttal period: February 15-26, 2027"
             }
           ]
         }
