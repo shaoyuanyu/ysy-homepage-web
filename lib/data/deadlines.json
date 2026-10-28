@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-10-27",
+  "fetchedAt": "2026-10-28",
   "source": "ccfddl/ccf-deadlines (allconf.yml)",
   "conferences": [
     {
@@ -4396,6 +4396,22 @@
               "t": "2026-01-26 23:59:59"
             }
           ]
+        },
+        {
+          "y": 2027,
+          "link": "https://gecco-2027.sigevo.org/HomePage",
+          "tz": "Etc/GMT+12",
+          "date": "July 12-16, 2027",
+          "place": "Kraków, Poland",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-01-18 23:59:59"
+            },
+            {
+              "t": "2027-01-25 23:59:59"
+            }
+          ]
         }
       ]
     },
@@ -5255,11 +5271,11 @@
           "timeline": [
             {
               "t": "2026-06-11 17:00:00",
-              "c": "first round"
+              "c": "first round; notification date is approximate"
             },
             {
               "t": "2026-11-11 17:00:00",
-              "c": "second round"
+              "c": "second round; notification date is approximate"
             }
           ]
         }
@@ -6677,6 +6693,18 @@
           "timeline": [
             {
               "t": "2026-04-30 23:59:59"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://ijcb2027.ieee-biometrics.org/",
+          "tz": "Etc/GMT+12",
+          "date": "September 13-17, 2027",
+          "place": "Foz do Iguaçu, Brazil",
+          "timeline": [
+            {
+              "t": "2027-04-10 23:59:59"
             }
           ]
         }
@@ -12002,6 +12030,10 @@
             {
               "t": "2026-08-24 23:59:59",
               "c": "Full Paper"
+            },
+            {
+              "t": "2026-11-17 23:59:59",
+              "c": "Short Paper"
             }
           ]
         }
