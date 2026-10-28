@@ -686,6 +686,7 @@
     "deleteDraftConfirmBody": "删除后无法恢复。",
     "draftDeleted": "草稿已删除",
     "newMailToast": "收到 {count} 封新邮件",
+    "newMailToastOpen": "查看",
     "unreadBadge": "未读 {count} 封",
     "previewOpen": "预览",
     "previewDownload": "下载原件",

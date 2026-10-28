@@ -686,6 +686,7 @@
     "deleteDraftConfirmBody": "This cannot be undone.",
     "draftDeleted": "Draft deleted",
     "newMailToast": "{count, plural, one {# new message} other {# new messages}}",
+    "newMailToastOpen": "Open",
     "unreadBadge": "{count} unread",
     "previewOpen": "Preview",
     "previewDownload": "Download",

@@ -7,7 +7,18 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { XIcon, CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"
 
-const toast = ToastPrimitive.createToastManager()
+/**
+ * `toast.add({ data })` 的自定义数据。
+ *
+ * `onActivate`：整条 toast 可点击（触摸 / 鼠标）时执行的动作。**它只解决"点得上"**——
+ * 键盘与读屏需要一个真正可聚焦的入口，调用方必须**同时**传 `actionProps`
+ * （渲染成 Base UI 的 `Toast.Action` 按钮），两条路径指向同一个动作。
+ */
+export interface ToastData {
+  onActivate?: () => void
+}
+
+const toast = ToastPrimitive.createToastManager<ToastData>()
 
 function ToastProvider({ ...props }: ToastPrimitive.Provider.Props) {
   return <ToastPrimitive.Provider {...props} />
@@ -180,21 +191,57 @@ function ToastIcon({ type }: { type: string | undefined }) {
 }
 
 function ToastList() {
-  const { toasts } = ToastPrimitive.useToastManager()
+  const { toasts, close } = ToastPrimitive.useToastManager<ToastData>()
+  /**
+   * 最近一次按下的位置：整条可点的 toast 用它把「点击」与 Base UI 的
+   * swipe 关闭区分开——滑走之后再补发的那个 click 会让用户莫名其妙跳了页。
+   */
+  const pressRef = React.useRef<{ x: number; y: number } | null>(null)
 
-  return toasts.map((toastItem) => (
-    <Toast key={toastItem.id} toast={toastItem}>
-      <ToastContent>
-        <ToastIcon type={toastItem.type} />
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <ToastTitle />
-          <ToastDescription />
-        </div>
-        <ToastAction />
-        <ToastClose />
-      </ToastContent>
-    </Toast>
-  ))
+  return toasts.map((toastItem) => {
+    const onActivate = toastItem.data?.onActivate
+    return (
+      <Toast
+        key={toastItem.id}
+        toast={toastItem}
+        data-clickable={onActivate ? "" : undefined}
+        className={onActivate ? "cursor-pointer" : undefined}
+        onPointerDown={
+          onActivate
+            ? (event) => {
+                pressRef.current = { x: event.clientX, y: event.clientY }
+              }
+            : undefined
+        }
+        onClick={
+          onActivate
+            ? (event) => {
+                const press = pressRef.current
+                pressRef.current = null
+                const target = event.target as HTMLElement | null
+                // 关闭按钮是它自己的交互目标，别让整条点击抢走（它自己会关）
+                if (target?.closest('[data-slot="toast-close"]')) return
+                // swipe 关闭后的残余 click：位移超过 10px 一律当滑动
+                if (!press || Math.hypot(event.clientX - press.x, event.clientY - press.y) > 10) return
+                // 操作按钮自己已经执行过同一动作，这里只补关闭
+                if (!target?.closest('[data-slot="toast-action"]')) onActivate()
+                close(toastItem.id)
+              }
+            : undefined
+        }
+      >
+        <ToastContent>
+          <ToastIcon type={toastItem.type} />
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <ToastTitle />
+            <ToastDescription />
+          </div>
+          <ToastAction />
+          <ToastClose />
+        </ToastContent>
+      </Toast>
+    )
+  })
 }
 
 function Toaster({

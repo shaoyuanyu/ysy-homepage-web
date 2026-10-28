@@ -6430,6 +6430,72 @@ test.describe("站内邮件（/mail）", () => {
     });
 
     /**
+     * 新邮件提醒**点得动**（2026-10-28 用户报）：「收到新邮件时会有弹窗提示，但是点击
+     * 弹窗似乎并没有反应（不会跳转）（至少在移动端是这样）」。
+     *
+     * 根因：`announce()` 只 `toast.add({ title, type })`——这条提醒没有任何点击处理，
+     * 气泡正文是死的（只有右上角 ✕ 能关）。修法两条路径都去 `/mail`：`data.onActivate`
+     * 让整条可点（触摸 / 鼠标），`actionProps` 为键盘 / 读屏提供可聚焦的「查看」按钮。
+     * 只补其中一条都不够：移动端的习惯是直接戳气泡，键盘用户点不到一个不可聚焦的 div。
+     *
+     * 在**首页**触发：邮箱页里跳到 `/mail` 看不出 URL 变化。视口取 390×844（用户报障
+     * 的场景，同时覆盖窄屏下气泡不会把「查看」挤出屏幕）。点击目标是标题（气泡正文区），
+     * 不是「查看」按钮。
+     */
+    test("新邮件提醒：点击 toast 跳到邮箱（移动端）", async ({ page }) => {
+      // 首页上先确认 watcher 跑完首轮（首轮只建基线不提示）：它每次轮询都会广播
+      // `mail:unread`，用它计数，避免「改数据时基线还没建立 → 永远不弹」的竞态
+      await page.addInitScript(() => {
+        const w = window as unknown as { __mailPolls?: number };
+        w.__mailPolls = 0;
+        window.addEventListener("mail:unread", () => {
+          w.__mailPolls = (w.__mailPolls ?? 0) + 1;
+        });
+      });
+
+      const calls = {
+        flags: [],
+        send: [],
+        delete: [],
+        accountStore: undefined as Record<string, unknown>[] | undefined,
+        healthStore: undefined as { lastNewMail: string; lastSync: string } | undefined,
+      };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await gotoReady(page, "/");
+      await expect
+        .poll(() =>
+          page.evaluate(() => (window as unknown as { __mailPolls?: number }).__mailPolls ?? 0),
+        )
+        .toBeGreaterThan(0);
+
+      // 模拟新邮件到达（与「未读角标」用例同一套桩）
+      calls.accountStore![0].unread = 4;
+      calls.healthStore!.lastNewMail = new Date(Date.now() + 60_000).toISOString();
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+
+      const title = page.locator('[data-slot="toast-title"]');
+      await expect(title).toContainText("收到 1 封新邮件");
+      // 键盘 / 读屏的可聚焦入口（只靠「整条可点」，键盘用户没有入口）
+      await expect(page.locator('[data-slot="toast-action"]')).toHaveText("查看");
+
+      // 点 ✕ 只关闭、不跳转（整条可点最容易把关闭按钮一起吞掉——等它退场再断 URL）
+      await page.locator('[data-slot="toast-close"]').click();
+      await expect(title).toHaveCount(0);
+      await expect(page).toHaveURL(/\/$/);
+
+      // 再来一封，点气泡正文（移动端的习惯动作）
+      calls.healthStore!.lastNewMail = new Date(Date.now() + 120_000).toISOString();
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await expect(title).toContainText("收到 1 封新邮件");
+      await title.click();
+      await expect(page).toHaveURL(/\/mail$/);
+    });
+
+    /**
      * 新邮件到达时**左栏列表也要跟着长出来**（2026-10-16 用户报）：
      * 「页面开着的时候收到新邮件，右上角弹了提醒、角标也涨了，但左栏列表里没有那一封」。
      *

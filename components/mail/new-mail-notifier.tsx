@@ -5,6 +5,8 @@ import { useTranslations } from "next-intl";
 
 import { cn } from "@/lib/utils";
 import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
+import { mailNavOptions } from "@/lib/mail/nav";
+import { useRouter } from "@/lib/i18n/navigation";
 import { OWNER_AUTH_CHANGED_EVENT, OWNER_CACHE_KEY } from "@/lib/auth/events";
 import { UNREAD_BADGE_CLASS } from "@/components/mail/unread-color";
 import { toast } from "@/components/ui/toast";
@@ -88,6 +90,7 @@ interface HealthResponse {
 
 export function MailNewMailWatcher() {
   const t = useTranslations("mail");
+  const router = useRouter();
 
   useEffect(() => {
     let disposed = false;
@@ -108,10 +111,25 @@ export function MailNewMailWatcher() {
       }
     };
 
-    /** 弹提醒——**同时就是读屏播报**（见文件头 ⚠），所以它只在这一处发 */
+    /** 点提醒 → 打开邮箱（默认视图就是列表；宽屏不整页滚动，见 mailNavOptions） */
+    const openMailbox = () => router.push("/mail", mailNavOptions());
+
+    /**
+     * 弹提醒——**同时就是读屏播报**（见文件头 ⚠），所以它只在这一处发。
+     *
+     * ⚠ 提醒必须**点得动**（2026-10-28 用户报「点击弹窗没反应，不会跳转」）：
+     * `data.onActivate` 让整条可点（触摸 / 鼠标），`actionProps` 是键盘与读屏的
+     * 可聚焦入口，两条路径都去 `/mail`。只加 `actionProps` 不行——移动端用户
+     * 的习惯是直接戳气泡本身；只加 `onActivate` 也不行——键盘/读屏没有入口。
+     */
     const announce = (delta: number) => {
       window.dispatchEvent(new CustomEvent(MAIL_NEW_MAIL_EVENT, { detail: { delta } }));
-      toast.add({ title: t("newMailToast", { count: delta }), type: "info" });
+      toast.add({
+        title: t("newMailToast", { count: delta }),
+        type: "info",
+        data: { onActivate: openMailbox },
+        actionProps: { children: t("newMailToastOpen"), onClick: openMailbox },
+      });
     };
 
     const poll = async () => {
@@ -213,7 +231,7 @@ export function MailNewMailWatcher() {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener(OWNER_AUTH_CHANGED_EVENT, onAuth);
     };
-  }, [t]);
+  }, [router, t]);
 
   return null;
 }
