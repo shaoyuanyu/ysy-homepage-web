@@ -2251,7 +2251,8 @@
           "place": "Brisbane, Australia",
           "timeline": [
             {
-              "t": "2026-10-31 23:59:59"
+              "t": "2026-11-30 23:59:59",
+              "c": "Paper submission due (extended)"
             }
           ]
         }
