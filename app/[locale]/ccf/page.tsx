@@ -1,7 +1,11 @@
 import { useTranslations } from "next-intl";
 
-import { Badge } from "@/components/ui/badge";
 import { CcfDirectory } from "@/components/ccf/ccf-directory";
+import {
+  ScholarNote,
+  ScholarPage,
+  ScholarSourceLink,
+} from "@/components/scholar/scholar-shell";
 import { pageMetadata } from "@/lib/i18n/metadata";
 
 type Props = {
@@ -16,38 +20,23 @@ export default function CcfPage() {
   const t = useTranslations("ccf");
 
   return (
-    <div className="w-full mx-auto max-w-6xl px-4 py-12 sm:px-6">
-      <div className="mb-8 flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-3xl font-bold">{t("title")}</h1>
-          <Badge variant="secondary">{t("versionBadge")}</Badge>
-        </div>
-        <p className="text-muted-foreground">{t("description")}</p>
-        <p className="text-xs text-muted-foreground">
+    <ScholarPage
+      title={t("title")}
+      version={t("versionBadge")}
+      description={t("description")}
+      meta={
+        <>
           {t("source")}{" "}
-          <a
-            href="https://ccf.atom.im/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-4 hover:text-foreground"
-          >
-            ccf.atom.im
-          </a>
+          <ScholarSourceLink href="https://ccf.atom.im/">ccf.atom.im</ScholarSourceLink>
           {" · "}
-          <a
-            href="https://www.ccf.org.cn/Academic_Evaluation/By_category/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-4 hover:text-foreground"
-          >
+          <ScholarSourceLink href="https://www.ccf.org.cn/Academic_Evaluation/By_category/">
             CCF
-          </a>
-        </p>
-      </div>
+          </ScholarSourceLink>
+        </>
+      }
+    >
       <CcfDirectory />
-      <p className="mt-14 border-t pt-4 text-xs text-muted-foreground">
-        {t("sourceNote")}
-      </p>
-    </div>
+      <ScholarNote>{t("sourceNote")}</ScholarNote>
+    </ScholarPage>
   );
 }

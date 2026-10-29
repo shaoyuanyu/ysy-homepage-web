@@ -109,6 +109,9 @@ const GROUPS = [
 const SHARED = [
   /^components\/ui\//,
   /^components\/layout\//,
+  // 学术数据四页（速查 / CCF / 分区表 / Deadline）共用的页头、导航、统计条、
+  // 筛选面板与领域筛选：改它等于同时改四个功能组，无法安全收窄
+  /^components\/scholar\//,
   /^components\/providers\.tsx$/,
   /^components\/sections\//,
   /^components\/analytics\//,

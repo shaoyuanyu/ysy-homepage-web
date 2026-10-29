@@ -146,6 +146,18 @@ const rawCas = casData as unknown as {
   stats: { zones: Partial<Record<CasZone, number>>; top: number };
 };
 
+/** 虚词：非句首时一律小写 */
+const TITLE_STOP = new Set([
+  "a", "an", "and", "as", "at", "by", "for", "from", "in", "into", "of",
+  "on", "or", "the", "to", "via", "with",
+]);
+
+/** 必须保持全大写的缩写（其余全大写词一律按普通单词转 Title Case） */
+const TITLE_KEEP = new Set([
+  "ACM", "AEU", "AI", "ASME", "CCF", "ETRI", "ICGA", "IEEE", "IEICE",
+  "IETE", "IMA", "INFORMS", "ISA", "RAIRO", "SIAM", "SIGMOD", "VLDB",
+]);
+
 /** 行内紧凑数组 → CasSub 对象（调用方按需展开，避免运行时解析开销） */
 function unpackSub(sub: [string, string, CasZone, number, number]): CasSub {
   return { en: sub[0], zh: sub[1], l: sub[2], r: sub[3], t: sub[4] };
@@ -157,6 +169,7 @@ export const cas = {
   version: rawCas.version,
   rows: rawCas.rows.map((row) => ({
     ...row,
+    n: displayTitle(row.n),
     m: row.m as CasEntry["m"],
     s: row.s.map(unpackSub),
   })),
@@ -166,6 +179,26 @@ export const cas = {
   /** 中科院大类名称（中文，数据唯一值） */
   mainField: rawCas.rows[0]?.m[0] ?? "",
 };
+
+/**
+ * 小类学科名的显示缩写：去掉与期刊所属大类重复的前缀。
+ *
+ * 数据里的中文名自带大类前缀（`计算机：信息系统`），英文名同理
+ * （`Computer Science, Information Systems`）。本页只收「计算机科学」大类，
+ * 1292 条小类里有 779 条前缀就是它 —— 每行都重复一遍「计算机：」是纯噪音，
+ * 而且把真正要看的学科名挤到右边，英文界面下被截成
+ * `Computer Science, Informa…`（截掉的部分恰好就是信息所在）。
+ *
+ * 前缀**不是**本大类时保留（`工程：电子与电气`）—— 它携带「跨大类」信息，
+ * 是这一列难得的不重复内容。完整中英名仍在行内 tooltip 里。
+ */
+export function shortSubjectName(sub: CasSub, mainField: string, isZh: boolean) {
+  const colon = sub.zh.indexOf("：");
+  const zhPrefix = colon > 0 ? sub.zh.slice(0, colon) : "";
+  const sameField = zhPrefix !== "" && mainField.startsWith(zhPrefix);
+  if (!sameField) return isZh ? sub.zh : sub.en;
+  return isZh ? sub.zh.slice(colon + 1) : sub.en.replace(/^[^,]+, ?/, "");
+}
 
 // ---- 会议 deadline 日历（自动同步自 ccfddl + 本地覆盖层合并）----
 import deadlineData from "./deadlines.json";
@@ -249,3 +282,57 @@ export const deadlines: DeadlineConf[] = mergeDeadlines(
   deadlinesOverrides,
 );
 export const deadlinesFetchedAt = rawDeadlines.fetchedAt;
+
+/**
+ * 「喊叫式」全大写刊名的规范化（仅作用于**整串全大写**的名称）。
+ *
+ * 中科院分区表原始数据里有 269/758 条刊名是整串大写（`IEEE TRANSACTIONS ON
+ * PATTERN ANALYSIS AND MACHINE INTELLIGENCE`），其余是正常 Title Case。同一
+ * 列表里两种写法混排，大写那批会比周围粗一圈、并抢走 Top 徽章的注意力——
+ * 看起来既像数据脏，又像样式坏了。
+ *
+ * 规则：逐词首字母大写、其余小写；虚词（of / the / on / and …）小写；
+ * 缩写白名单（IEEE / ACM / VLDB …）与含数字的词（3D）原样保留；连字符与斜杠
+ * 分段处理，所以 `KNOWLEDGE-BASED` → `Knowledge-Based`、`IEEE-ACM` → `IEEE-ACM`。
+ *
+ * 已经是正常大小写（含全小写、含中文）的名称**原样返回**，故可安全地对全量
+ * 数据调用。
+ */
+export function displayTitle(raw: string): string {
+  if (!raw) return raw;
+  const letters = raw.replace(/[^A-Za-z]/g, "");
+  if (!letters || raw !== raw.toUpperCase()) return raw;
+  return raw
+    .split(/\s+/)
+    .map((token, wi) =>
+      token
+        .split(/([/&-])/)
+        .map((part, pi) => {
+          if (!/[A-Za-z]/.test(part)) return part;
+          if (/\d/.test(part)) return part;
+          if (TITLE_KEEP.has(part)) return part;
+          const lower = part.toLowerCase();
+          if (wi > 0 && pi === 0 && TITLE_STOP.has(lower)) return lower;
+          return lower.charAt(0).toUpperCase() + lower.slice(1);
+        })
+        .join(""),
+    )
+    .join(" ");
+}
+
+/**
+ * 期刊 ISSN 展示串。
+ *
+ * 数据里的 ISSN 字段是「印刷版/电子版」（`"1553-877X/1553-877X"`），
+ * 大量期刊两者相同。原样拼进列表行就成了 `ISSN 1553-877X/1553-877X`——
+ * 同一串号写两遍，读者会以为是数据错了。这里去重后再输出。
+ */
+export function formatIssn(raw: string | null | undefined): string {
+  if (!raw) return "";
+  const list = raw
+    .split("/")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const uniq = list.filter((s, i) => list.indexOf(s) === i);
+  return uniq.length > 0 ? `ISSN ${uniq.join(" / ")}` : "";
+}

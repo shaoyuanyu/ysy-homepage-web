@@ -1,46 +1,38 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import {
-  BookOpenIcon,
-  BookMarkedIcon,
-  RotateCcwIcon,
-  ShieldCheckIcon,
-  TagsIcon,
-} from "lucide-react";
+import { BookMarkedIcon, RotateCcwIcon } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { SearchInput } from "@/components/ui/search-input";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  ScholarCount,
+  ScholarFilter,
+  ScholarFilterRow,
+  ScholarStats,
+} from "@/components/scholar/scholar-shell";
 import { useOwnerPreferences } from "@/lib/preferences/use-owner-preferences";
-import { cas, type CasEntry, type CasSub, type CasZone } from "@/lib/data";
-import { casBarClass, casChipClass, casDotClass } from "@/lib/design/grade";
+import { cas, formatIssn, shortSubjectName, type CasEntry, type CasZone } from "@/lib/data";
+import { casChipClass, casDotClass, casZoneTextClass, GRADE_CHIP_CLASS, TOP_CHIP_CLASS } from "@/lib/design/grade";
 
 type ZoneFilter = "all" | "1" | "2" | "3" | "4";
 type TopFilter = "all" | "top" | "non";
 
 /* ---- 分区专属配色：见 lib/design/grade.ts（与 ccf / deadlines / venues 同一事实来源）---- */
 
-/** Top 期刊徽章（行内标题旁金色胶囊） */
+/** Top 期刊徽章（几何与分区徽章同源；用中性前景色实底与等级色区分） */
 function TopBadge({ show }: { show: boolean }) {
   const t = useTranslations("cas");
   if (!show) return null;
   return (
-    <Badge
-      variant="outline"
-      className="eyebrow-label shrink-0 px-2 py-0 font-semibold text-amber-700 ring-amber-700/30 dark:text-amber-500 dark:ring-amber-500/30"
+    <span
+      className={`${GRADE_CHIP_CLASS} font-mono font-semibold ${TOP_CHIP_CLASS}`}
     >
       {t("topBadge")}
-    </Badge>
+    </span>
   );
 }
 
@@ -51,125 +43,101 @@ function WosChip({ w }: { w: string }) {
   const onHold = /OnHold|Suppressed/.test(w);
   const isS = clean.includes("SCIE") || clean.includes("SSCI");
   return (
-    <Badge
-      variant="secondary"
-      className={`eyebrow-label hidden shrink-0 font-normal sm:inline-flex ${
+    <span
+      className={`shrink-0 text-xs whitespace-nowrap ${
         onHold
-          ? "text-amber-700 dark:text-amber-500"
+          ? "font-medium text-amber-700 dark:text-amber-500"
           : isS
-            ? "text-primary"
+            ? "font-medium text-foreground/70"
             : "text-muted-foreground"
       }`}
     >
       {clean || w}
       {onHold ? ` · ${t("wosOnHold")}` : ""}
-    </Badge>
+    </span>
   );
 }
 
-/* ---- 小类（JCR 学科）chips 展示（超宽屏常驻列；窄屏收进图标 tooltip） ---- */
-
-/** 学科分区点色：整串静态类由 lib/design/grade.ts 提供 */
-
-/** 学科本地化显示名 */
-function subName(sub: CasSub, isZh: boolean) {
-  return isZh ? sub.zh : sub.en;
-}
+/* ---- 小类（JCR 学科）：嵌在刊名下面的一行知识点，随行宽自动换行 ---- */
 
 /**
- * 期刊行小类信息：
- * - 超宽屏（xl+）：右侧常驻小类列（色点 + 本地化名 + 排名，hover 有中英对照 tooltip）
- * - 窄屏（< xl）：折叠为一个学科图标，hover 弹出完整小类列表
+ * 期刊行 = 左对齐的三行文本块 + 右上角状态徽章。
+ *
+ * 结构上的关键决定：**小类是「挂在刊名下面的子列表」，不是平行的一列。**
+ * 每本刊挂 1–4 个学科，条数不定；把变长的子列表放到右侧独立一列，会同时出现
+ * 两个毛病（2026-10-29 用户指着截图问「这种排版你自己觉得没问题吗」）：
+ *   1. **左半行 L 形空白**——刊名 + 元信息只占顶部，而那一竖列要等最长的子列表
+ *      走完：一本挂 4 个小类的刊，行高 100px，左边 60px 是空的；
+ *   2. **子列表的数字被推到列右缘，紧贴徽章**——`1区 19/352 [Top] [1区]` 四个
+ *      深色 token 挤在 180px 里，看着像渲染重复。
+ * 子列表归属父项，就应该缩在父项下面：整行变成一条左对齐的文本流，行高也稳
+ * （小类几乎总能在 1 行内铺完，758 行行高基本一致，不再忽高忽低）。
  */
-function Subjects({ entry }: { entry: CasEntry }) {
+function SubjectLine({ entry, mainZone }: { entry: CasEntry; mainZone: CasZone }) {
   const t = useTranslations("cas");
   const isZh = useLocale() === "zh";
+  if (!entry.s.length) return null;
 
   return (
-    <>
-      {/* 超宽屏常驻列 */}
-      <span className="hidden max-w-md shrink-0 flex-col items-end gap-1 xl:flex">
-        {entry.s.map((sub) => (
-          <span
-            key={sub.en}
-            className="inline-flex max-w-full items-center gap-1.5 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-none text-muted-foreground"
-            title={t("subjectTooltip", {
-              zh: sub.zh,
-              en: sub.en,
-              rank: sub.r,
-              total: sub.t,
-            })}
-          >
-            <span
-              aria-hidden
-              className={`size-1 shrink-0 rounded-full ${casDotClass(sub.l)}`}
-            />
-            <span className="truncate">{subName(sub, isZh)}</span>
-            <span className="shrink-0 tabular-nums text-muted-foreground">
-              {sub.l} [{sub.r}/{sub.t}]
-            </span>
-          </span>
-        ))}
-      </span>
-
-      {/* 窄屏：学科图标 + hover 弹出完整小类列表 */}
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <button
-              type="button"
-              aria-label={t("subjectsLabel")}
-              className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground xl:hidden"
-            />
-          }
-        >
-          <TagsIcon className="size-3.5" aria-hidden />
-        </TooltipTrigger>
-        <TooltipContent side="left" align="start" className="max-w-xs">
-          <span className="flex w-full flex-col gap-1.5 py-0.5">
-            {/* 小类学科标题：**不用 .eyebrow-label**——zh 文案是中文，放等宽会拉取
-                1.3MB 的 cjk 分片，且中英文案（小类学科 / JCR Subjects）会不对称。 */}
-            <span className="block text-xs font-semibold text-background/85">
-              {t("subjectsLabel")}
-            </span>
-            {entry.s.map((sub) => (
-              <span
-                key={sub.en}
-                className="flex min-w-0 items-baseline gap-1.5 text-left"
-              >
-                <span
-                  aria-hidden
-                  className={`mt-1.5 size-1 shrink-0 self-start rounded-full ${casDotClass(sub.l)}`}
-                />
-                {/* 中英对照名（当前语言在前） */}
-                <span className="min-w-0 leading-snug">
-                  {subName(sub, isZh)}
-                  <span className="text-background/60"> · {isZh ? sub.en : sub.zh}</span>
-                </span>
-                <span className="ml-auto shrink-0 tabular-nums text-background/70">
-                  {sub.l} [{sub.r}/{sub.t}]
-                </span>
+    <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs">
+      {/* 一个行级标签，而不是列头：它解释了下面一串东西是什么（小类），
+          而 `大类` 那个概念由元信息行的「大类排名」与徽章的 aria-label 负责。
+          ⚠ 不要用 `text-muted-foreground/70`：实测对比度 2.82:1（AA 需 4.5）。 */}
+      <span className="shrink-0 text-muted-foreground">{t("subjectsLabel")}</span>
+      {entry.s.map((sub, i) => {
+        const deviates = sub.l !== mainZone;
+        const zoneLabel = t("zoneBadge", { zone: sub.l });
+        return (
+          <Fragment key={sub.en}>
+            {i > 0 ? (
+              <span aria-hidden className="shrink-0 text-muted-foreground">
+                ·
               </span>
-            ))}
-          </span>
-        </TooltipContent>
-      </Tooltip>
-    </>
+            ) : null}
+            <span
+              className="flex min-w-0 items-baseline gap-x-1.5"
+              title={t(deviates ? "subjectTooltipDeviates" : "subjectTooltip", {
+                zh: sub.zh,
+                en: sub.en,
+                zone: zoneLabel,
+                main: t("zoneBadge", { zone: mainZone }),
+                rank: sub.r,
+                total: sub.t,
+              })}
+            >
+              <span className="text-muted-foreground">
+                {shortSubjectName(sub, cas.mainField, isZh)}
+              </span>
+              {/* 分区着色只在「与所属大类不一致」时出现：同一行里 90% 的小类与
+                  大类同区，若逐条上色，一行会出现三四个色点，颜色反而不携带信息。
+                  改后颜色 = 异常值信号（小类 2区 但大类 1区），正常条目一律次要色。 */}
+              <span
+                className={`shrink-0 tabular-nums ${
+                  deviates ? casZoneTextClass(sub.l) : "text-muted-foreground"
+                }`}
+              >
+                {zoneLabel}
+              </span>
+              <span className="shrink-0 tabular-nums text-muted-foreground">
+                {sub.r}/{sub.t}
+              </span>
+            </span>
+          </Fragment>
+        );
+      })}
+    </span>
   );
 }
 
-/* ---- 分区徽章（大类分区号） ---- */
+/* ---- 分区徽章（大类分区号；与 CCF 等级徽章同规格：`1区` 而非裸数字） ---- */
 function ZoneBadge({ zone }: { zone: CasZone }) {
   const t = useTranslations("cas");
   return (
-    <span className="flex shrink-0 items-center gap-1.5">
-      <Badge
-        variant="outline"
-        className={`eyebrow-label w-7 shrink-0 justify-center rounded-md font-bold ring-1 ring-inset ${casChipClass(zone)}`}
-        aria-label={`${zone} ${t("zone")}`}
-      >
-        {zone}
-      </Badge>
+    <span
+      className={`${GRADE_CHIP_CLASS} font-mono font-semibold ${casChipClass(zone)}`}
+      aria-label={t("zoneAria", { zone })}
+    >
+      {t("zoneBadge", { zone })}
     </span>
   );
 }
@@ -180,70 +148,38 @@ function EntryRow({ entry }: { entry: CasEntry }) {
   // entry.m = [大类中文名, 分区, 大类内排名, 大类内总数]
   const [, mainZone, mainRank, mainTotal] = entry.m;
   return (
-    <li className="group relative flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-muted/60">
-      {/* 分区色条 */}
-      <span
-        aria-hidden
-        className={`absolute inset-y-1 left-0 w-[3px] rounded-r-full opacity-0 transition-opacity group-hover:opacity-100 ${casBarClass(mainZone)}`}
-      />
+    <li className="flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-foreground/5">
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="min-w-0 truncate text-sm font-medium tracking-tight">
-            {entry.n}
-          </span>
-          <TopBadge show={entry.top} />
+        <span className="min-w-0 truncate font-serif text-base" data-proper-name="" title={entry.n}>
+          {entry.n}
         </span>
-        <span className="truncate text-xs text-muted-foreground">
-          {entry.i ? `ISSN ${entry.i}` : ""}
-          <span className="mx-1.5 text-muted-foreground">·</span>
-          {t("rank")} {mainRank}/{mainTotal}
+        {/* 小类紧贴刊名：它是这张表的主角（分区/排名），ISSN 那行是身份信息，放最后。 */}
+        <SubjectLine entry={entry} mainZone={mainZone} />
+        <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+          {entry.i ? (
+            <span className="shrink-0 font-mono">{formatIssn(entry.i)}</span>
+          ) : null}
+          {entry.i ? <span className="shrink-0" aria-hidden>·</span> : null}
+          <span className="shrink-0 whitespace-nowrap">
+            {t("rank")} <span className="tabular-nums">{mainRank}/{mainTotal}</span>
+          </span>
+          {/* WoS 收录用 `·` 与前面两项同规格分隔：只靠颜色深浅区分时，
+              `1/758 SCIE` 会被读成一个 token。 */}
+          {entry.w ? <span className="shrink-0" aria-hidden>·</span> : null}
           <WosChip w={entry.w} />
         </span>
       </span>
-      <Subjects entry={entry} />
-      <ZoneBadge zone={mainZone} />
+      {/* 状态徽章：右上角一列，右缘固定。小类不再占右侧一列，
+          所以这里只放「这本刊整体是什么档」的两个标记。 */}
+      <span className="flex shrink-0 items-start gap-1.5">
+        <TopBadge show={entry.top} />
+        <ZoneBadge zone={mainZone} />
+      </span>
     </li>
   );
 }
 
-/** 顶部统计卡片 */
-function StatCard({
-  icon: Icon,
-  value,
-  label,
-  highlight = false,
-}: {
-  icon: typeof BookOpenIcon;
-  value: number | string;
-  label: string;
-  highlight?: boolean;
-}) {
-  return (
-    <Card
-      className={`py-0 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${
-        highlight ? "border-primary/30 bg-primary/5" : "hover:border-border"
-      }`}
-    >
-      <CardContent className="flex items-center gap-3 p-3.5 sm:p-4">
-        <div
-          className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${
-            highlight
-              ? "bg-primary/15 text-primary"
-              : "bg-muted text-muted-foreground"
-          }`}
-        >
-          <Icon className="size-5" />
-        </div>
-        <div className="min-w-0">
-          <p className="text-xl font-mono leading-none font-semibold tracking-tight">
-            {value}
-          </p>
-          <p className="mt-1.5 truncate text-xs text-muted-foreground">{label}</p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
+/* ---- 统计条由 ScholarStats 统一渲染（原四张大卡片已移除） ---- */
 
 export function CasDirectory() {
   const t = useTranslations("cas");
@@ -345,47 +281,56 @@ export function CasDirectory() {
   const statsZ1 = zones["1"];
   const total = cas.rows.length;
   const topCount = cas.rows.filter((e) => e.top).length;
+  const scieCount = cas.rows.filter((e) => e.w.includes("SCIE")).length;
 
   return (
-    <div className="flex flex-col gap-8">
-      {/* 统计卡片 */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard icon={BookOpenIcon} value={total} label={t("statsTotal")} highlight />
-        <StatCard icon={BookMarkedIcon} value={statsZ1} label={t("statsZone1")} />
-        <StatCard icon={ShieldCheckIcon} value={topCount} label={t("statsTop")} />
-        <StatCard
-          icon={BookOpenIcon}
-          value={cas.rows.filter((e) => e.w.includes("SCIE")).length}
-          label={t("statsSCIE")}
-        />
-      </div>
+    <div className="flex flex-col gap-6">
+      {/* 统计条（四页统一形态） */}
+      <ScholarStats
+        items={[
+          { value: total, label: t("statsTotal") },
+          { value: statsZ1, label: t("statsZone1") },
+          { value: topCount, label: t("statsTop") },
+          { value: scieCount, label: t("statsSCIE") },
+        ]}
+      />
 
-      {/* sticky 筛选栏 */}
-      <div className="sticky top-14 z-30 rounded-2xl border bg-background/85 px-3 py-3 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/70">
-        <div className="flex flex-wrap items-center gap-2">
+      {/* 筛选面板：搜索 + 分区 + Top */}
+      <ScholarFilter>
+        <ScholarFilterRow>
           <SearchInput
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t("searchPlaceholder")}
-            className="w-full sm:w-64 lg:w-72"
+            className="w-full sm:w-64"
             clearLabel={t("clearSearch")}
             aria-label={t("searchPlaceholder")}
           />
 
           <ToggleGroup
+            size="sm"
             value={[zone]}
             onValueChange={(v) => setZone((v[0] as ZoneFilter) ?? "all")}
             className="ccf-segmented flex-wrap"
             aria-label={t("zoneAllLabel")}
           >
             <ToggleGroupItem value="all">{t("zoneAll")}</ToggleGroupItem>
-            <ToggleGroupItem value="1">{t("zone1")}</ToggleGroupItem>
-            <ToggleGroupItem value="2">{t("zone2")}</ToggleGroupItem>
-            <ToggleGroupItem value="3">{t("zone3")}</ToggleGroupItem>
-            <ToggleGroupItem value="4">{t("zone4")}</ToggleGroupItem>
+            {(["1", "2", "3", "4"] as const).map((z) => (
+              <ToggleGroupItem key={z} value={z}>
+                {/* 圆点 = 该分区的颜色，跟行尾徽章/小类色点同一套（grade.ts）。
+                    图例不单独占一行：分区名已经写在这个控件里，染上色它就是图例，
+                    而且筛选面板吸顶常驻——比列表页脚的图例永远看得见。 */}
+                <span
+                  aria-hidden
+                  className={`size-1.5 rounded-full ${casDotClass(z)}`}
+                />
+                {t(`zone${z}`)}
+              </ToggleGroupItem>
+            ))}
           </ToggleGroup>
 
           <ToggleGroup
+            size="sm"
             value={[top]}
             onValueChange={(v) => setTop((v[0] as TopFilter) ?? "all")}
             className="ccf-segmented flex-wrap"
@@ -396,22 +341,11 @@ export function CasDirectory() {
             <ToggleGroupItem value="non">{t("topNone")}</ToggleGroupItem>
           </ToggleGroup>
 
-          {/* ⚠ 不要用 font-mono：本元素含中文「本」（同 CCF 页的「项」）。 */}
-          <Badge
-            variant="outline"
-            className="ml-auto hidden shrink-0 tabular-nums font-normal text-muted-foreground lg:inline-flex"
-          >
+          <ScholarCount>
             {shown} {t("items")}
-          </Badge>
-        </div>
-      </div>
-
-      {/* 小类学科筛选已移除：页面仅按大类分区/Top/搜索过滤，期刊行内仍展示所属小类信息 */}
-
-      {/* 匹配统计 */}
-      <p className="text-xs text-muted-foreground">
-        {t("stats", { total, z1: statsZ1, top: topCount, matched: shown })}
-      </p>
+          </ScholarCount>
+        </ScholarFilterRow>
+      </ScholarFilter>
 
       {shown === 0 ? (
         <Empty>
@@ -427,11 +361,13 @@ export function CasDirectory() {
           </Button>
         </Empty>
       ) : (
-        <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border bg-card">
-          {filtered.map((e) => (
-            <EntryRow key={e.n} entry={e} />
-          ))}
-        </ul>
+        <div className="overflow-hidden rounded-xl border bg-card">
+          <ul className="divide-y divide-border/60">
+            {filtered.map((e) => (
+              <EntryRow key={e.n} entry={e} />
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );

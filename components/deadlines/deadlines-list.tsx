@@ -9,14 +9,11 @@ import {
   ClockIcon,
   ExternalLinkIcon,
   Globe2Icon,
-  LayersIcon,
   MapPinIcon,
   RotateCcwIcon,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -34,9 +31,16 @@ import {
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { SearchInput } from "@/components/ui/search-input";
 import { Spinner } from "@/components/ui/spinner";
-import { ccfBarClass, ccfChipClass } from "@/lib/design/grade";
+import { ccfChipClass, ccfDotClass, GRADE_CHIP_CLASS, TONE_CHIP } from "@/lib/design/grade";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { toast } from "@/components/ui/toast";
+import { ScholarFieldFilter } from "@/components/scholar/field-filter";
+import {
+  ScholarCount,
+  ScholarFilter,
+  ScholarFilterRow,
+  ScholarStats,
+} from "@/components/scholar/scholar-shell";
 import { useOwnerPreferences } from "@/lib/preferences/use-owner-preferences";
 import { buildIcsText, deadlineEventUid, icsEventSummary, toIcsUtc } from "@/lib/ical";
 import type { DeadlineConf, DeadlineTimelineEntry, DeadlineYear } from "@/lib/data";
@@ -48,10 +52,10 @@ const FIELD_EN: Record<string, string> = {
   计算机体系结构: "Architecture",
   计算机网络: "Networks",
   网络与信息安全: "Security",
-  软件工程: "Software Eng.",
-  数据库: "Databases & Mining",
+  软件工程: "Software",
+  数据库: "Databases",
   计算机科学理论: "Theory",
-  计算机图形学与多媒体: "Graphics & MM",
+  计算机图形学与多媒体: "Graphics",
   人工智能: "AI",
   人机交互与普适计算: "HCI",
   交叉: "Interdisciplinary",
@@ -67,17 +71,25 @@ type RangeFilter = "last-year" | "this-year" | "all" | "30" | "90";
 
 function LevelBadge({ level }: { level: "A" | "B" | "C" | "none" }) {
   const t = useTranslations("deadlines.levels");
+  const tRoot = useTranslations("deadlines");
   // 全拼显示（CCF-A）而非缩写：后期可能收录 CCF 目录之外的会议
-  // （如 CORE 评级），届时可按来源扩展前缀
-  const text = level === "none" ? "·" : `CCF-${level}`;
+  // （如 CORE 评级），届时可按来源扩展前缀。
+  // 未收录不用 `·`：一个 20px 小方器里的中点没有任何可读含义（读者只能
+  // 靠位置猜它是徽章），用与筛选按钮同一个词（“未收录 / Not ranked”）。
+  const text = level === "none" ? tRoot("levelNone") : `CCF-${level}`;
+  // `CCF-A` 是代码式标签（mono / semibold）；「未收录」是自然语言，改用 sans /
+  // normal —— 与速查页的 `Non-CCF` 徽章同一个处理。
+  const typeClass =
+    level === "none"
+      ? "font-sans font-normal"
+      : "font-mono font-semibold";
   return (
-    <Badge
-      variant="outline"
-      className={`eyebrow-label w-auto min-w-7 shrink-0 justify-center rounded-md px-1.5 font-bold ring-1 ring-inset ${ccfChipClass(level)}`}
+    <span
+      className={`${GRADE_CHIP_CLASS} ${typeClass} ${ccfChipClass(level)}`}
       aria-label={level === "none" ? t("none") : `${text} ${t("class")}`}
     >
       {text}
-    </Badge>
+    </span>
   );
 }
 
@@ -98,42 +110,7 @@ type FlatItem = {
   bestPast: MainDeadline | null;
 };
 
-function StatCard({
-  icon: Icon,
-  value,
-  label,
-  highlight = false,
-}: {
-  icon: typeof LayersIcon;
-  value: number;
-  label: string;
-  highlight?: boolean;
-}) {
-  return (
-    <Card
-      className={`py-0 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${
-        highlight ? "border-primary/30 bg-primary/5" : "hover:border-border"
-      }`}
-    >
-      <CardContent className="flex items-center gap-3 p-3.5 sm:p-4">
-        <div
-          className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${
-            highlight ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"
-          }`}
-        >
-          <Icon className="size-5" />
-        </div>
-        <div className="min-w-0">
-          <p className="text-xl font-mono leading-none font-semibold tracking-tight">
-            {value}
-          </p>
-          <p className="mt-1.5 truncate text-xs text-muted-foreground">{label}</p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
+/** ---- 统计条由 ScholarStats 统一渲染（原四张大卡片已移除） ---- */
 /** Google 日历「新建日程」链接（一次性快照；Google 无 X- 属性可承载会期，描述只留全称） */
 function googleCalendarUrl(
   conf: DeadlineConf,
@@ -271,6 +248,12 @@ export function DeadlinesList({
   const locale = useLocale();
   const isZh = locale === "zh";
   const { isOwner } = useOwnerPreferences();
+
+  /** 领域全名（悬停提示用） */
+  const fieldFullName = (f: string) => (isZh ? f : FIELD_EN[FIELD_KEY(f)] ?? f);
+  /** 筛选标签用短名：官方名以「/」分段（英文用「,」），头一段就是领域短名 */
+  const fieldShortName = (f: string) =>
+    fieldFullName(f).split(isZh ? "/" : ",")[0].trim();
 
   const [query, setQuery] = useState("");
   const [level, setLevel] = useState<LevelFilter>("all");
@@ -502,45 +485,53 @@ export function DeadlinesList({
   );
 
   return (
-    <div className="flex flex-col gap-8">
-      {/* 统计卡片 */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard icon={LayersIcon} value={total} label={t("statsTotal")} highlight />
-        <StatCard icon={ClockIcon} value={count30} label={t("stats30")} />
-        <StatCard icon={ClockIcon} value={count90} label={t("stats90")} />
-        <StatCard icon={CalendarDaysIcon} value={countYear} label={t("statsUpcoming")} />
-      </div>
+    <div className="flex flex-col gap-6">
+      {/* 统计条（四页统一形态） */}
+      <ScholarStats
+        items={[
+          { value: total, label: t("statsTotal") },
+          { value: count30, label: t("stats30") },
+          { value: count90, label: t("stats90") },
+          { value: countYear, label: t("statsUpcoming") },
+        ]}
+      />
 
-      {/* sticky 筛选栏 */}
-      <div className="sticky top-14 z-30 rounded-2xl border bg-background/85 px-3 py-3 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/70">
-        <div className="flex flex-wrap items-center gap-2">
-          {/* md 以下搜索框独占一行；md 起弹性伸缩与筛选组同行 */}
+      {/* 筛选面板：搜索 + 等级 + 时间范围 + 领域，全部 sticky */}
+      <ScholarFilter>
+        <ScholarFilterRow>
           <SearchInput
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t("searchPlaceholder")}
-            className="w-full md:w-auto md:min-w-44 md:max-w-72 md:flex-1"
+            className="w-full sm:w-64"
             clearLabel={t("clearSearch")}
             aria-label={t("searchPlaceholder")}
           />
           <ToggleGroup
+            size="sm"
             value={[level]}
             onValueChange={(v) => setLevel((v[0] as LevelFilter) ?? "all")}
             className="ccf-segmented flex-wrap"
           >
             <ToggleGroupItem value="all">{t("levelAll")}</ToggleGroupItem>
+            {/* 圆点 = 等级色（与行内 CCF 徽章同一套），让筛选控件本身当图例 */}
             {(["A", "B", "C"] as const).map((l) => (
               <ToggleGroupItem key={l} value={l}>
+                <span aria-hidden className={`size-1.5 rounded-full ${ccfDotClass(l)}`} />
                 {l}
               </ToggleGroupItem>
             ))}
             <ToggleGroupItem value="none">{t("levelNone")}</ToggleGroupItem>
           </ToggleGroup>
           <ToggleGroup
+            size="sm"
             value={[range]}
             onValueChange={(v) => setRange((v[0] as RangeFilter) ?? "all")}
-            // 与搜索框/等级组同行：md 以下弹性占满剩余空间自身滚动，md 起按内容宽度
-            className="ccf-segmented max-w-full flex-nowrap overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden max-md:min-w-0 max-md:flex-1 md:flex-none"
+            // ⚠ 手机端**独占一行**（order-last + w-full + flex-wrap）：短标签
+            //   （去年/今年/全部/30 天/90 天）总宽 ≈ 240px，放得下一行；若让它挤在
+            //   等级组右侧的剩余宽度里，390px 视口只剩 ~70px，第一屏只能看见
+            //   「去年 今」半截（隐藏滚动条让人以为坏了）。md 起回到不换行的内容宽。
+            className="ccf-segmented max-w-full flex-wrap max-md:order-last max-md:w-full md:flex-nowrap"
           >
             <ToggleGroupItem value="last-year">
               <span className="lg:hidden">{t("rangeLastYearShort")}</span>
@@ -563,54 +554,25 @@ export function DeadlinesList({
               <span className="hidden lg:inline">{t("range90")}</span>
             </ToggleGroupItem>
           </ToggleGroup>
-          {/* ⚠ 不要用 font-mono：本元素含中文「个会议」。 */}
-          <Badge
-            variant="outline"
-            className="ml-auto hidden shrink-0 tabular-nums font-normal text-muted-foreground lg:inline-flex"
-          >
+          <ScholarCount>
             {filtered.length} {t("items")}
-          </Badge>
-        </div>
-      </div>
+          </ScholarCount>
+        </ScholarFilterRow>
 
-      {/* 领域多选筛选：可同时勾选多个领域（空 = 全部）
-          ⚠ 同 /ccf：英文字段名可超过视口宽度，chip 需 `max-w-full` + 标签 `truncate`。 */}
-      <nav aria-label={t("fieldFilter")} className="flex flex-wrap gap-1.5">
-        <Button
-          type="button"
-          variant={selectedFields.length === 0 ? "default" : "outline"}
-          size="sm"
-          className="max-w-full rounded-full text-xs"
-          onClick={() => setSelectedFields([])}
-          aria-pressed={selectedFields.length === 0}
-        >
-          <span className="truncate">{t("fieldAll")}</span>
-        </Button>
-        {fields.map((f) => {
-          const key = FIELD_KEY(f);
-          const selected = selectedFields.some((x) => FIELD_KEY(x) === key);
-          return (
-            <Button
-              key={key}
-              type="button"
-              variant={selected ? "default" : "outline"}
-              size="sm"
-              className="max-w-full rounded-full text-xs"
-              onClick={() => toggleField(f)}
-              aria-pressed={selected}
-            >
-              <span className="truncate">{isZh ? f : FIELD_EN[key] ?? f}</span>
-            </Button>
-          );
-        })}
-      </nav>
+        {/* 领域多选：空 = 全部；与 CCF 页同一组件 */}
+        <ScholarFieldFilter
+          ariaLabel={t("fieldFilter")}
+          allLabel={t("fieldAll")}
+          fields={fields}
+          selected={selectedFields}
+          labelOf={fieldShortName}
+          titleOf={fieldFullName}
+          onToggle={toggleField}
+          onClear={() => setSelectedFields([])}
+        />
+      </ScholarFilter>
 
-      {/* 匹配统计 */}
-      <p className="text-xs text-muted-foreground">
-        {t("stats", { total, matched: filtered.length })}
-      </p>
-
-      {/* 会议卡片网格（借鉴 ai-deadlines 布局：倒计时醒目 + 地点/会议时间直接展示） */}
+      {/* 会议卡片网格（倒计时醒目 + 地点/会议时间直接展示） */}
       {filtered.length === 0 ? (
         <Empty>
           <EmptyMedia variant="icon">
@@ -640,33 +602,35 @@ export function DeadlinesList({
                 : daysLeft === 1
                   ? t("dueTomorrow")
                   : t("daysLeft", { days: daysLeft });
-            // 倒计时 urgency 配色（≤3 天红 / ≤7 天橙 / ≤14 天琥珀 / 其余弱化 / 已截止弱化）
+            // 倒计时 urgency 配色（≤7 天红 / ≤30 天琥珀 / 其余弱化 / 已截止弱化）。
+            // 旧版是 ≤3 红 / ≤7 橙 / ≤14 琥珀四档，但 orange-700 与 amber-700 在
+            // 12px 上几乎分辨不出（都是“偏黄的深色”），等于只读得出两档。
+            // 合并为三档后每个档位都对应一个能一句话说清的语义：这周 / 这个月 / 以后。
             const urgencyClass = isPast
               ? "text-muted-foreground"
-              : daysLeft <= 3
+              : daysLeft <= 7
                 ? "text-red-700 dark:text-red-400"
-                : daysLeft <= 7
-                  ? "text-orange-700 dark:text-orange-400"
-                  : daysLeft <= 14
-                    ? "text-amber-700 dark:text-amber-400"
-                    : "text-muted-foreground";
+                : daysLeft <= 30
+                  ? "text-amber-700 dark:text-amber-400"
+                  : "text-muted-foreground";
             const fieldKey = conf.f ? FIELD_KEY(conf.f) : "";
             return (
-              <Card
+              <div
                 key={`${conf.a}-${year.y}`}
-                className={`group relative cursor-pointer py-0 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md focus-within:ring-2 focus-within:ring-ring/60 ${
+                data-slot="card"
+                className={`group relative flex h-full cursor-pointer flex-col overflow-hidden rounded-xl border bg-card transition-colors hover:border-foreground/25 hover:bg-foreground/5 focus-within:ring-2 focus-within:ring-ring/60 ${
                   isPast ? "opacity-70 hover:opacity-100" : ""
                 }`}
                 onClick={() => setOpenItem({ conf, year, best, bestPast })}
               >
                 {/*
-                 * 键盘可达性：整卡可点（鼠标走 Card 的 onClick），但卡片里已经嵌了
-                 * 「会议官网」链接与日历按钮，把 Card 本身做成 role="button" 会造成
+                 * 键盘可达性：整卡可点（鼠标走容器的 onClick），但卡片里已经嵌了
+                 * 「会议官网」链接与日历按钮，把卡片本身做成 role="button" 会造成
                  * 嵌套交互元素（AT 语义混乱）。这里铺一个真正的 <button> 覆盖整卡作为
-                 * 键盘入口，内容层（CardContent，z-10）在它之上，故鼠标点击仍命中内容
-                 * 并冒泡到 Card；键盘 Tab 到的就是这个按钮（名称 = 会议缩写 + 年份）。
-                 * ⚠ 焦点环画在 Card 的 focus-within 上：Card 自带 overflow-hidden，
-                 *   覆盖层上的外扩 ring 会被裁掉。
+                 * 键盘入口，内容层（z-10）在它之上，故鼠标点击仍命中内容并冒泡到容器；
+                 * 键盘 Tab 到的就是这个按钮（名称 = 会议缩写 + 年份）。
+                 * ⚠ 焦点环画在卡片容器的 focus-within 上（overflow-hidden 会裁掉
+                 *   覆盖层自己的外扩 ring）。
                  */}
                 <button
                   type="button"
@@ -675,17 +639,13 @@ export function DeadlinesList({
                   onClick={() => setOpenItem({ conf, year, best, bestPast })}
                   className="absolute inset-0 z-0 rounded-xl outline-none"
                 />
-                <span
-                  aria-hidden
-                  className={`absolute inset-y-0 left-0 w-[3px] rounded-r-full opacity-0 transition-opacity group-hover:opacity-100 ${ccfBarClass(levelKey)}`}
-                />
-                <CardContent className="relative z-10 flex h-full flex-col gap-2 p-3">
+                <div className="relative z-10 flex flex-1 flex-col gap-2 p-4">
                   {/* 顶行：缩写 + 年份 + 等级 · 倒计时 */}
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
                       <span
                         data-slot="deadline-card-title"
-                        className="truncate font-mono text-base font-bold tracking-tight"
+                        className="truncate font-mono text-sm font-semibold"
                       >
                         {conf.a} {year.y}
                       </span>
@@ -693,101 +653,109 @@ export function DeadlinesList({
                     </div>
                     {/* ⚠ 不要用 font-mono：倒计时含中文（还剩/天/明天截止）。
                         用 tabular-nums 保持数字等宽对齐，避免拉取 cjk 分片。 */}
-                    <span className={`shrink-0 tabular-nums text-xs font-medium ${urgencyClass}`}>
+                    <span className={`shrink-0 text-xs font-medium tabular-nums ${urgencyClass}`}>
                       {countdown}
                     </span>
                   </div>
-                  {/* 全称：卡片内唯一的多行文本，弱化到 xs 与其余元数据同层，
-                      避免 3 层字阶（16 缩写 / 14 全称 / 12 元数据）挤在小卡里 */}
+                  {/* 全称：卡片内唯一的多行文本；衬线专名（字体策略 2c），
+                      与缩写（等宽）分层 */}
                   <p
-                    className="line-clamp-2 text-xs leading-snug text-muted-foreground transition-colors group-hover:text-foreground/80"
+                    className="line-clamp-2 font-serif text-sm leading-snug text-foreground"
+                    data-proper-name=""
                     title={conf.n}
                   >
                     {conf.n}
                   </p>
-                  {/* 领域徽章（独立行，细边框 + 图标；筛选命中时高亮） */}
-                  {conf.f && (
-                    <span
-                      className={`flex w-fit items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium ${
-                        selectedFields.length > 0
-                          ? "border-primary/40 bg-primary/5 text-primary"
-                          : "border-border bg-muted/40 text-muted-foreground"
-                      }`}
-                    >
-                      <LayersIcon className="size-3 shrink-0" data-icon="inline-start" />
-                      {isZh ? fieldKey : FIELD_EN[fieldKey] ?? conf.f}
-                    </span>
-                  )}
-                  {/* 截止时间（浏览器本地时区） */}
-                  <div className="flex items-center gap-1.5 pt-1 text-xs tabular-nums text-muted-foreground">
-                    <ClockIcon className="size-3.5 shrink-0" data-icon="inline-start" />
-                    <span className="font-medium text-foreground">
-                      {dateFmt.format(new Date(main.utc))}
-                    </span>
-                  </div>
-                  {/* 地点与会议时间 */}
+                  {/* 截止时间 / 地点 / 会期 */}
                   <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1.5">
+                      <ClockIcon className="size-3.5 shrink-0" aria-hidden />
+                      <span className="font-medium tabular-nums text-foreground">
+                        {dateFmt.format(new Date(main.utc))}
+                      </span>
+                    </span>
                     {year.place && (
-                      <div className="flex items-center gap-1.5">
-                        <MapPinIcon className="size-3.5 shrink-0" data-icon="inline-start" />
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <MapPinIcon className="size-3.5 shrink-0" aria-hidden />
                         <span className="truncate" title={year.place}>
                           {year.place}
                         </span>
-                      </div>
+                      </span>
                     )}
                     {year.date && (
-                      <div className="flex items-center gap-1.5">
-                        <CalendarDaysIcon className="size-3.5 shrink-0" data-icon="inline-start" />
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <CalendarDaysIcon className="size-3.5 shrink-0" aria-hidden />
                         <span className="truncate" title={year.date}>
                           {year.date}
                         </span>
-                      </div>
+                      </span>
                     )}
                   </div>
-                  {/* 底部操作：官网 + 日历 */}
+                  {/* 底部：领域（左） + 官网 / 日历（右） */}
                   <div className="mt-auto flex items-center justify-between gap-2 border-t pt-2">
-                    {year.link ? (
-                      <a
-                        href={year.link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-primary"
+                    {conf.f ? (
+                      <span
+                        className={`flex min-w-0 items-center gap-1 text-xs ${
+                          selectedFields.length > 0
+                            ? "font-medium text-foreground"
+                            : "text-muted-foreground"
+                        }`}
                       >
-                        {t("website")}
-                        <ExternalLinkIcon className="size-3" data-icon="inline-end" />
-                      </a>
-                    ) : null}
-                    {isOwner ? (
-                      /*
-                       * 站主：图标点击 → 打开详情 Dialog 并**直接进入勾选态**（不写数据、不弹菜单）。
-                       * ⚠ Google 日历 / 下载 .ics 只给游客（用户指定）：站主已有本站日历
-                       *   （`/calendar` 能双向同步、能写备注），站外导出对站主只是噪音。
-                       */
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={t("addToCaldav")}
-                        onClick={(e) => {
-                          // 阻止冒泡：否则会再触发卡片的 onClick（进普通详情态）
-                          e.stopPropagation();
-                          setOpenItem({ conf, year, best, bestPast });
-                          setPicking(true);
-                        }}
-                      >
-                        <CalendarPlusIcon data-icon="default" />
-                      </Button>
+                        {/* 领域是**文字**，不挂图标：同一张卡片里已经有截止时间 /
+                            地点 / 会期三个「数据行」图标，再加一个装饰图标会让
+                            底栏与数据行同一视觉层级（图标不表示数据或动作时就不该出现）。 */}
+                        <span className="truncate">
+                          {isZh ? fieldKey : FIELD_EN[fieldKey] ?? conf.f}
+                        </span>
+                      </span>
                     ) : (
-                      <GuestCalendarMenu
-                        conf={conf}
-                        year={year}
-                        main={main}
-                        iconOnly
-                      />
+                      <span />
                     )}
+                    <div className="flex shrink-0 items-center gap-1">
+                      {year.link ? (
+                        <a
+                          href={year.link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label={t("website")}
+                          title={t("website")}
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        >
+                          <Globe2Icon className="size-3.5" aria-hidden />
+                        </a>
+                      ) : null}
+                      {isOwner ? (
+                        /*
+                         * 站主：图标点击 → 打开详情 Dialog 并**直接进入勾选态**（不写数据、不弹菜单）。
+                         * ⚠ Google 日历 / 下载 .ics 只给游客（用户指定）：站主已有本站日历
+                         *   （`/calendar` 能双向同步、能写备注），站外导出对站主只是噪音。
+                         */
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={t("addToCaldav")}
+                          onClick={(e) => {
+                            // 阻止冒泡：否则会再触发卡片的 onClick（进普通详情态）
+                            e.stopPropagation();
+                            setOpenItem({ conf, year, best, bestPast });
+                            setPicking(true);
+                          }}
+                        >
+                          <CalendarPlusIcon data-icon="default" />
+                        </Button>
+                      ) : (
+                        <GuestCalendarMenu
+                          conf={conf}
+                          year={year}
+                          main={main}
+                          iconOnly
+                        />
+                      )}
+                    </div>
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
             );
           })}
         </div>
@@ -818,9 +786,11 @@ export function DeadlinesList({
                 <div className="rounded-xl border p-3.5">
                   <div className="mb-2 flex flex-wrap items-center gap-2 text-sm font-semibold">
                     {openItem.best && (
-                      <Badge variant="secondary" className="text-xs font-normal">
+                      <span
+                        className={`${GRADE_CHIP_CLASS} font-medium bg-muted text-muted-foreground`}
+                      >
                         {t("upcoming")}
-                      </Badge>
+                      </span>
                     )}
                     <span className="text-xs font-normal text-muted-foreground">
                       {t("localTime", { tz: localTzOffset() })}
@@ -868,9 +838,11 @@ export function DeadlinesList({
                               className="size-3.5 shrink-0 accent-primary"
                             />
                           )}
-                          <Badge variant="outline" className="shrink-0 text-xs font-normal">
+                          <span
+                            className={`${GRADE_CHIP_CLASS} font-normal ${TONE_CHIP.neutral}`}
+                          >
                             {t(e.k ?? "paper")}
-                          </Badge>
+                          </span>
                           <span className="tabular-nums">
                             {dateFmt.format(new Date(utc))}
                           </span>

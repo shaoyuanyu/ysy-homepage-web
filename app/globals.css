@@ -17,8 +17,8 @@
             下拉与命令面板、徽章与 chip、表单、提示/Toast、日历网格与工具栏
           · 全部说明性文字 —— 页面 description、卡片描述、空态文案、副标题
           · 全部元数据 —— 日期、分类、计数、页脚
-          · **全部外部专名 —— 会议/期刊全名、地名、论文标题、导航站外链名**
-       2. 有衬线 --font-serif（**两个角色**，其余场景一律不用）：
+          · 导航站外链名、地名
+       2. 有衬线 --font-serif（**三个角色**，其余场景一律不用）：
           a. **长正文** —— 连续阅读的段落：博客正文、速记正文。载体必须带
              `data-longform`，且 ≥16px + 行高 ≥1.6。
           b. **展示标题块（display serif）** —— 仅首页 hero 的人名 + 职务行。
@@ -27,10 +27,20 @@
              `.big-cta_subtitle`（24px 衬线），即「衬线作大字展示标题」。
              ⚠ 全站只此一处；**不要**把它扩散到其它页面标题（那会回到
              「衬线既是大标题又是小字说明」的语义混乱）。
-          ⚠ **绝不用作**：h1/h2/h3（首页 hero 除外）、页面说明、元数据、专名、
-             任何 <16px 的文本。
-          （判据：衬线必须单义。长正文的衬线 = 「你正在读一段正文」；展示标题块
-          的衬线 = 「这是一个身份/品牌签名」。两者都不与「小字说明」混用。）
+          c. **学术专名** —— 会议 / 期刊全名（`/ccf`、`/cas`、`/venues`、
+             `/deadlines` 四页的列表行）。经典书目 / 索引排法：无衬线负责 UI 与
+             元数据，专名用衬线，读者一眼能把「这是刊名」与「页面在说别的事」
+             分开。
+             ⚠ 必须用**前景色**（不要 `text-muted-foreground`）：14px 的 Inter
+               + 次级灰会变成一条「扁」带（x-height 大、字重对比低、行又长），
+               正是「看不进去」的主因。Tinos 同字号宽度还窄 11%，换衬线反而
+               多放得下几个字符。
+             ⚠ 专名一律是拉丁文（数据里没有中文刊名），不会拉取 CJK 分片。
+          ⚠ **绝不用作**：h1/h2/h3（首页 hero 除外）、页面说明、元数据、
+             任何 <14px 的文本。
+          （判据：衬线的每个角色都必须单义。长正文 = 「你正在读一段正文」；
+          展示标题块 = 「这是一个身份/品牌签名」；学术专名 = 「这是刊名/会名」。
+          三者都不与「小字说明」混用。）
        3. 等宽 --font-mono：标识符与数字（缩写、ISSN、年份、日期、凭据）、
           逐字代码（pre/code/kbd、BibTeX）、品牌 Logo，以及
           **全大写技术眉标**（.eyebrow-label，见下方）。
@@ -111,7 +121,7 @@
   /* 有衬线（标题/正文/专名）：西文 Tinos（Times New Roman 度量兼容替身）；
      中文**自托管 Noto Serif SC**（变量字重 + unicode-range 分片）——
      不用系统回退是因为 Windows 会落到 SimSun（点阵味、小字号明显差），
-     而衬线在本方案里覆盖说明性文字与会议/期刊全名，字号偏小、面积很大。 */
+     而衬线在本方案里覆盖长正文与会议/期刊全名，字号偏小、面积很大。 */
   --font-stack-serif: var(--font-tinos), var(--font-noto-serif-sc),
     "Songti SC", "STSong", "SimSun", serif;
   /* 等宽（标识符 / 数字 / 逐字代码）：**全站唯一等宽字体** —— Noto Sans Mono CJK SC
@@ -697,6 +707,33 @@
   border-radius: var(--radius-sm);
 }
 
+/* ---- 写信页 Markdown 预览（2026-10-29）----
+   预览容器同时带 `mail-body`（复用上面邮件正文的文档流排版），这里只补 Markdown 特有的
+   代码块 / 表格描边。不要把这些规则写进 `.mail-body`：收件人的 HTML 邮件里代码/表格
+   可能与发件人的 inline style 打架。 */
+.mail-markdown :where(pre) {
+  background: var(--muted);
+  padding: 0.75rem;
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+.mail-markdown :where(code) {
+  background: var(--muted);
+  padding: 0.1em 0.3em;
+  border-radius: var(--radius-sm);
+}
+.mail-markdown :where(pre code) {
+  background: transparent;
+  padding: 0;
+}
+.mail-markdown :where(table) {
+  width: 100%;
+}
+.mail-markdown :where(th, td) {
+  border: 1px solid var(--border);
+  padding: 0.3em 0.5em;
+}
+
 /* ---- 字体 @font-face 来源 ----
    - Inter / Tinos / Noto Serif SC：由 app/layout.tsx 导入 @fontsource 的 CSS
      （自托管，按 unicode-range 分片，浏览器只下载用到的分片）。
@@ -846,12 +883,14 @@ html.owner-logged-in .owner-only.sheet-stack {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  border-radius: calc(var(--radius-md));
+  /* 外层 6px + 内距 2px → 内部项 4px：同心圆角（outer = inner + padding）。
+     此前是 8px 包 6px，项写死 6px 与 inner/outer 都对不上，视觉上「软」。 */
+  border-radius: 6px;
   padding: 2px;
   background-color: color-mix(in oklab, var(--muted) 65%, transparent);
 }
 .ccf-segmented [data-slot="toggle-group-item"] {
-  border-radius: calc(var(--radius-sm));
+  border-radius: 4px;
   background-color: transparent;
   color: var(--muted-foreground);
   transition:

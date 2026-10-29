@@ -42,6 +42,8 @@ conferences:
     n: "IEEE International Conference on Software Testing, Verification and Validation"
   - a: NOSSDAV
     n: "International Workshop on Network and Operating System Support for Digital Audio and Video"
+  - a: RECOMB
+    n: "International Conference on Research in Computational Molecular Biology"
   - a: SC
     n: "International Conference for High Performance Computing, Networking, Storage, and Analysis"
   - a: SIGCOMM

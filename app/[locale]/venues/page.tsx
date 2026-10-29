@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 
-import { Badge } from "@/components/ui/badge";
 import { VenueExplorer } from "@/components/venues/venue-explorer";
-import { venueStats } from "@/lib/data/venue";
+import {
+  ScholarNote,
+  ScholarPage,
+  ScholarSourceLink,
+} from "@/components/scholar/scholar-shell";
 import { pageMetadata } from "@/lib/i18n/metadata";
 
 type Props = {
@@ -18,53 +21,27 @@ export default function VenuesPage() {
   const t = useTranslations("venues");
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col px-4 py-12 sm:px-6">
-      <div className="mb-8 flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-3xl font-bold">{t("title")}</h1>
-          <Badge variant="secondary">{t("versionBadge")}</Badge>
-        </div>
-        <p className="text-muted-foreground">{t("description")}</p>
-        <p className="text-xs text-muted-foreground">
+    <ScholarPage
+      title={t("title")}
+      version={t("versionBadge")}
+      description={t("description")}
+      meta={
+        <>
           {t("source")}{" "}
-          <a
-            href="https://www.ccf.org.cn/Academic_Evaluation/By_category/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-4 hover:text-foreground"
-          >
+          <ScholarSourceLink href="https://www.ccf.org.cn/Academic_Evaluation/By_category/">
             CCF
-          </a>
+          </ScholarSourceLink>
           {" · "}
-          <a
-            href="https://fenqubiao.com/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-4 hover:text-foreground"
-          >
-            中科院分区表
-          </a>
+          <ScholarSourceLink href="https://fenqubiao.com/">中科院分区表</ScholarSourceLink>
           {" · "}
-          <a
-            href="https://github.com/ccfddl/ccf-deadlines"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-4 hover:text-foreground"
-          >
+          <ScholarSourceLink href="https://github.com/ccfddl/ccf-deadlines">
             ccfddl
-          </a>
-          {" · "}
-          <span>
-            {t("statsMeta", {
-              confs: venueStats.conferences,
-              jours: venueStats.journals,
-              dual: venueStats.dualRankedJournals,
-            })}
-          </span>
-        </p>
-      </div>
+          </ScholarSourceLink>
+        </>
+      }
+    >
       <VenueExplorer />
-      <p className="mt-14 border-t pt-4 text-xs text-muted-foreground">
+      <ScholarNote>
         {t.rich("sourceNote", {
           ccf: (chunks) => (
             <Link href="/ccf" className="underline underline-offset-4 hover:text-foreground">
@@ -85,7 +62,7 @@ export default function VenuesPage() {
             </Link>
           ),
         })}
-      </p>
-    </div>
+      </ScholarNote>
+    </ScholarPage>
   );
 }
