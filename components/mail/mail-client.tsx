@@ -33,6 +33,7 @@ import { cn } from "@/lib/utils";
 import { Link, usePathname, useRouter } from "@/lib/i18n/navigation";
 import { decodeMessageId, encodeMessageId, MAIL_LIST_ORDER_KEY } from "@/lib/mail/id";
 import { formatDate } from "@/lib/mail/format";
+import { isJunkCopy, hasJunkCopy, isJunkOnly, isSentItem } from "@/lib/mail/kind";
 import { mailNavOptions } from "@/lib/mail/nav";
 import { useOwnAddresses } from "@/lib/mail/use-own-addresses";
 import {
@@ -280,6 +281,11 @@ export function MailClient({
     else url.searchParams.set(VIEW_PARAM, next);
     window.history.replaceState(null, "", url);
   }, []);
+  /** 回调里读当前 tab（切 tab 要判「右栏那封还属不属于新 tab」），不把 view 写进行回调依赖 */
+  const viewRef = useRef(view);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
   const [unseenOnly, setUnseenOnly] = useState(false);
   const [flaggedOnly, setFlaggedOnly] = useState(false);
   /**
@@ -1526,32 +1532,53 @@ export function MailClient({
   const notJunkFromList = useCallback(
     async (m: MailListItem) => {
       const accountIds = [...new Set(m.copies.map((c) => c.accountId))];
-      // 乐观：立刻摘行
-      removeRow(m.messageId);
+      const junkCopies = m.copies.filter(isJunkCopy);
+      // 同时存在收件箱副本：只删**垃圾副本**（搬去 INBOX 会造出重复）。
+      // 只有垃圾副本：整封搬回 INBOX（旧行为）。
+      const hasOtherCopies = junkCopies.length < m.copies.length;
+      // 只有「这封会从当前列表消失」时才乐观摘行：在垃圾 tab 里一定能摘；
+      // 别处（「全部」）看到的双副本邮件删掉垃圾副本后仍应留在列表里。
+      const removed = view === "junk" || !hasOtherCopies;
+      if (removed) removeRow(m.messageId);
       try {
-        const res = await fetch("/api/mail/move", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ copies: m.copies, to: "INBOX" }),
-        });
+        const res = hasOtherCopies
+          ? await fetch("/api/mail/delete", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              // purge：硬删垃圾副本（不进回收站），避开服务商对 JUNK→Deleted Messages
+              // 的 MOVE 拒绝
+              body: JSON.stringify({ copies: junkCopies, purge: true }),
+            })
+          : await fetch("/api/mail/move", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ copies: junkCopies, to: "INBOX" }),
+            });
         if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
-        const data = (await res.json()) as { affected: number; skipped?: { reason: string }[] };
-        if (data.affected === 0) {
-          restoreRow(m);
-          toast.add({
-            title: t("notJunkFailed"),
-            description: data.skipped?.[0]?.reason,
-            type: "error",
-          });
-          return;
+        if (!hasOtherCopies) {
+          const data = (await res.json()) as { affected: number; skipped?: { reason: string }[] };
+          if (data.affected === 0) {
+            restoreRow(m);
+            toast.add({
+              title: t("notJunkFailed"),
+              description: data.skipped?.[0]?.reason,
+              type: "error",
+            });
+            return;
+          }
         }
         toast.add({ title: t("notJunkDone"), type: "success" });
         // 这封不再属于当前（垃圾）视图：右栏若正看着它，跟列表一起退回占位。
         // 旧实现只摘了列表行，右栏留着那封信、工具栏仍显示「移出垃圾」；
         // 而它手里的垃圾夹 uid 已经失效，再点一下会搬到别的邮件上（2026-10-17 审计）。
-        broadcastItemChange({ messageId: m.messageId, deleted: true, source: "list" });
-        // 搬到收件箱 = 可能多一封未读（旧实现只 reload 列表，未读数字要等同步心跳）
-        loadAccounts();
+        if (!hasOtherCopies) {
+          broadcastItemChange({ messageId: m.messageId, deleted: true, source: "list" });
+          // 搬到收件箱 = 可能多一封未读（旧实现只 reload 列表，未读数字要等同步心跳）
+          loadAccounts();
+        } else {
+          // 双副本：邮件仍在收件箱/其它文件夹，不能广播 deleted；让列表在同步后重取
+          broadcastItemChange({ messageId: m.messageId, refresh: true, source: "list" });
+        }
         void (async () => {
           await Promise.all(
             accountIds.map((accountId) =>
@@ -1565,7 +1592,7 @@ export function MailClient({
           await reload();
         })();
       } catch (err) {
-        restoreRow(m);
+        if (removed) restoreRow(m);
         toast.add({
           title: t("notJunkFailed"),
           description: err instanceof Error ? err.message : String(err),
@@ -1573,7 +1600,7 @@ export function MailClient({
         });
       }
     },
-    [reload, t, removeRow, restoreRow, loadAccounts],
+    [reload, t, removeRow, restoreRow, loadAccounts, view],
   );
 
   /**
@@ -1773,6 +1800,40 @@ export function MailClient({
   }, [activeMessageId]);
 
   /**
+   * 查看历史（2026-10-29 用户要求）：按 Ctrl+Z 回到「上一封真正看过的邮件」，
+   * 并把 tab 切回当时所在的 tab。
+   *
+   * - 打开 B（之前在看 A）→ 记下 A；切 tab 把当前邮件关掉 → 记下这封（Ctrl+Z 可
+   *   重新打开它，并回到被切走的 tab）；
+   * - 只存 `{ messageId, view, copies }`：切 tab 判断归属只需要 copies；
+   * - 上限 20 条，连续重复项不入栈。
+   */
+  type ViewHistoryEntry = {
+    messageId: string;
+    view: ViewFilter;
+    copies?: MailListItem["copies"];
+  };
+  const viewHistoryRef = useRef<ViewHistoryEntry[]>([]);
+  /** 当前右栏那封的副本快照：切 tab 时列表可能已刷新，不能只靠 `items.find` */
+  const openedSnapshotRef = useRef<ViewHistoryEntry | null>(null);
+  const rememberView = useCallback((entry: ViewHistoryEntry) => {
+    const last = viewHistoryRef.current.at(-1);
+    if (last && last.messageId === entry.messageId && last.view === entry.view) return;
+    viewHistoryRef.current.push(entry);
+    if (viewHistoryRef.current.length > 20) viewHistoryRef.current.shift();
+  }, []);
+
+  /** 这封副本是否属于某个 tab（只判 tab，账号/搜索/星标等其它筛选不在本次范围） */
+  const copiesInView = useCallback((copies: MailListItem["copies"] | undefined, next: ViewFilter) => {
+    if (next === "all") return true;
+    // 收件 = 不是发出的、且不是只躺在垃圾里的（双副本 INBOX+junk 仍算收件）
+    if (next === "received") return !isSentItem(copies) && !isJunkOnly(copies);
+    if (next === "sent") return isSentItem(copies);
+    if (next === "junk") return hasJunkCopy(copies);
+    return false; // drafts
+  }, []);
+
+  /**
    * 点列表行 → 右栏打开这一封；**点的是右栏正看着的那一封则退出详情**（2026-10-16
    * 用户要求：「在邮件列表中再次点击当前正在查看的邮件，应该退出邮件查看」）。
    *
@@ -1790,10 +1851,84 @@ export function MailClient({
         router.push("/mail", mailNavOptions());
         return;
       }
-      router.push(`/mail/message/${encodeMessageId(m.messageId)}`, mailNavOptions());
+      // 从 A 打开 B：记下 A（含它当时所在的 tab）
+      if (activeMessageIdRef.current) {
+        rememberView({
+          messageId: activeMessageIdRef.current,
+          view: viewRef.current,
+          copies: openedSnapshotRef.current?.copies,
+        });
+      }
+      openedSnapshotRef.current = { messageId: m.messageId, view: viewRef.current, copies: m.copies };
+      const q = viewRef.current === "all" ? "" : `?${VIEW_PARAM}=${viewRef.current}`;
+      router.push(`/mail/message/${encodeMessageId(m.messageId)}${q}`, mailNavOptions());
     },
-    [router],
+    [router, rememberView],
   );
+
+  /**
+   * 切 tab（2026-10-29）：如果右栏正看着的邮件不属于新 tab，把它关掉、回到占位；
+   * 并记一条历史，Ctrl+Z 能把它连 tab 一起带回来。
+   *
+   * ⚠ 不按「新 tab 列表里有没有它」判：新列表是异步加载的，加载完成前会把每一封都
+   *   关掉。归属按副本位置算（收件 / 发件 / 垃圾），与列表筛选同一口径。
+   * ⚠ 找不到副本快照时（直接打开详情 URL）不关，宁可保留也不误关。
+   */
+  const selectView = useCallback(
+    (next: ViewFilter) => {
+      if (next === viewRef.current) return;
+      const prevView = viewRef.current;
+      const active = activeMessageIdRef.current;
+      const snap = openedSnapshotRef.current;
+      // 直接用 URL 打开详情（没有点击快照）时，退回到当前列表里找它的副本
+      const copies =
+        snap && snap.messageId === active
+          ? snap.copies
+          : items.find((m) => m.messageId === active)?.copies;
+      const shouldClose = !!active && (next === "drafts" || (!!copies && !copiesInView(copies, next)));
+      if (shouldClose && active) {
+        rememberView({ messageId: active, view: prevView, copies });
+      }
+      // ref 先跟上：紧接着的 openItem/selectView 不能读到旧 tab
+      viewRef.current = next;
+      changeView(next);
+      if (shouldClose) {
+        const url = next === "all" ? "/mail" : `/mail?${VIEW_PARAM}=${next}`;
+        router.push(url, mailNavOptions());
+      }
+    },
+    [changeView, copiesInView, items, rememberView, router],
+  );
+
+  /**
+   * Ctrl+Z / Cmd+Z：回到上一封看过的邮件，并把 tab 切回它当时的 tab。
+   * - 输入框 / 文本域 / contenteditable 里的 Ctrl+Z 归浏览器（撤销打字），不抢；
+   * - 只在邮件列表/详情路由生效，写邮件页不拦；
+   * - 目标 tab 用 `changeView`（不触发 selectView 的关闭/入栈逻辑），再直接 push 详情。
+   */
+  useEffect(() => {
+    if (!pathname.startsWith("/mail") || pathname.startsWith("/mail/compose")) return;
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      if (e.key.toLowerCase() !== "z") return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
+      ) {
+        return;
+      }
+      const entry = viewHistoryRef.current.pop();
+      if (!entry) return;
+      e.preventDefault();
+      openedSnapshotRef.current = entry;
+      changeView(entry.view);
+      const q = entry.view === "all" ? "" : `?${VIEW_PARAM}=${entry.view}`;
+      router.push(`/mail/message/${encodeMessageId(entry.messageId)}${q}`, mailNavOptions());
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [changeView, pathname, router]);
   const deleteRow = useCallback((m: MailListItem) => setPendingDelete(m), []);
   const enterSelectMode = useCallback(() => setSelectMode(true), []);
 
@@ -2216,7 +2351,7 @@ export function MailClient({
               右侧开关上（2026-10-08 实测 390px：「垃圾」和「未读」糊在一起）。挂上 `lg:`
               后窄屏是一个普通 div，回到「内容撑开 + flex-wrap 换行」的老行为。 */}
           <div className="flex items-center lg:@container lg:min-w-0 lg:flex-1">
-            <Tabs value={view} onValueChange={(v) => changeView(v as ViewFilter)}>
+            <Tabs value={view} onValueChange={(v) => selectView(v as ViewFilter)}>
               <TabsList variant="line" aria-label={t("viewSwitcherLabel")}>
                 <TabsTrigger value="all">{t("filterAll")}</TabsTrigger>
                 <TabsTrigger
@@ -2272,7 +2407,7 @@ export function MailClient({
               />
               <DropdownMenuContent align="start" className="w-auto min-w-28">
                 {(["drafts", "junk"] as const).map((v) => (
-                  <DropdownMenuItem key={v} onClick={() => changeView(v)}>
+                  <DropdownMenuItem key={v} onClick={() => selectView(v)}>
                     {v === "drafts" ? t("filterDrafts") : t("filterJunk")}
                     {view === v && <CheckIcon className="ml-auto size-4" aria-hidden />}
                   </DropdownMenuItem>
@@ -2304,7 +2439,7 @@ export function MailClient({
                * 跳过去只是把 tab 名字说对：未读是收件箱的概念，挂在「全部」下没有意义。
                * ⚠ 「垃圾」tab 里**不跳**：那里的未读开关是就地筛垃圾未读（同一个定稿）。
                */
-              if (nextUnseen && !unseenOnly && view === "all") changeView("received");
+              if (nextUnseen && !unseenOnly && view === "all") selectView("received");
               setUnseenOnly(nextUnseen);
               setFlaggedOnly(v.includes("flagged"));
             }}

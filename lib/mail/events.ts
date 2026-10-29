@@ -23,5 +23,9 @@ export const MAIL_SENT_EVENT = "mail:sent";
 /** 草稿变更（写信页自动保存 / 发送后删除 / 草稿箱删除）：草稿列表刷新 */
 export const MAIL_DRAFTS_CHANGED_EVENT = "mail:drafts-changed";
 
+/** 写信页的发件人变化（2026-10-29）：左栏联系人面板据此只显示该账号的联系人。
+ *  detail = 账号 id；空串 = 未选发件人（回到「全部联系人」） */
+export const MAIL_COMPOSE_SENDER_EVENT = "mail:compose-sender";
+
 /** 账号增删改（账号管理弹窗）：列表、顶栏、自己的地址集合等随之刷新 */
 export const MAIL_ACCOUNTS_CHANGED_EVENT = "mail-accounts-changed";

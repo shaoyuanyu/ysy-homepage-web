@@ -80,6 +80,11 @@ pnpm start        # 生产运行
        listen 80;
        server_name shaoyuanyu.cn;
 
+       # 邮件附件（写信页单封上限 25MB，base64 后约 33MB）要能过反代。
+       # Nginx 默认 1MB，附件稍大就返回 413（2026-10-29 实测 1.0MB 的 PDF 即触发）。
+       # 与 webmaild 的 MAX_BODY_BYTES = 40MB 对齐。
+       client_max_body_size 40m;
+
        location /_next/static/ {
            proxy_pass http://127.0.0.1:3000;
            proxy_set_header Host $host;
@@ -96,6 +101,12 @@ pnpm start        # 生产运行
    }
    ```
    （umami 统计面板经 Nginx 分流到 127.0.0.1:3001（域名 status.shaoyuanyu.cn）；HTTPS 就绪后用 certbot 签发证书并将 SITE_URL 改为 https）
+   - ⚠ **`client_max_body_size 40m;` 不能漏**：Nginx 默认只允许 1MB 请求体，而写信页的附件（单封上限 25MB）经 base64 后约 33MB，发大一点就是 413。
+     已上线的服务器可用这条命令补上（需要 sudo）：
+     ```bash
+     sudo sed -i '0,/server_name shaoyuanyu.cn;/s//server_name shaoyuanyu.cn;\n    client_max_body_size 40m;/' /etc/nginx/sites-enabled/shaoyuanyu.cn.conf
+     sudo nginx -t && sudo systemctl reload nginx
+     ```
 3. 服务器上执行：
    ```bash
    git clone <repo> && cd ysy-homepage-web

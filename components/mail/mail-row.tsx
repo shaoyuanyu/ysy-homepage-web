@@ -17,7 +17,7 @@ import {
 
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/mail/format";
-import { isJunkOnly, isSentItem } from "@/lib/mail/kind";
+import { hasJunkCopy, isSentItem } from "@/lib/mail/kind";
 import { accountDotProps } from "@/components/mail/account-dot";
 import { accountName } from "@/components/mail/account-label";
 import { JunkIcon, NotJunkIcon } from "@/components/mail/junk-icons";
@@ -87,7 +87,7 @@ export interface MailRowProps {
   onToggleSelect: (messageId: string) => void;
   onFlag: (item: MailListItem, change: { seen?: boolean; flagged?: boolean }) => void;
   onJunk: (item: MailListItem) => void;
-  /** 这封**只躺在垃圾夹里**时的动作（标为垃圾的逆操作）；判断见 lib/mail/kind.ts 的 isJunkOnly */
+  /** 这封**有垃圾副本**时的动作（标为垃圾的逆操作）；判断见 lib/mail/kind.ts 的 hasJunkCopy */
   onNotJunk: (item: MailListItem) => void;
   onDelete: (item: MailListItem) => void;
   onEnterSelectMode: () => void;
@@ -146,8 +146,8 @@ function MailRowImpl({
    *   非悬浮时二者叠印成「10月10日封」；悬浮时动作条右端的「删除」也被它压掉一半）。
    */
   const hasThreadToggle = showsThread && !stale && !selectMode;
-  /** 这封只在垃圾夹里 → 整理动作换成「移出垃圾」（见 isJunkOnly 的注释） */
-  const junkOnly = isJunkOnly(m.copies);
+  /** 这封有垃圾副本 → 整理动作换成「移出垃圾」（见 hasJunkCopy 的注释） */
+  const junkOnly = hasJunkCopy(m.copies);
   const sent = isSentItem(m.copies);
   const dual =
     ownReady &&

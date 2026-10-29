@@ -7,23 +7,26 @@ import { BookUserIcon, CheckIcon, MailsIcon, PlusIcon, SearchIcon } from "lucide
 
 import { cn } from "@/lib/utils";
 import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
+import { MAIL_COMPOSE_SENDER_EVENT } from "@/lib/mail/events";
 import { Link } from "@/lib/i18n/navigation";
+import { useMailDirectory } from "@/lib/mail/use-mail-directory";
 import { useOwnAddresses } from "@/lib/mail/use-own-addresses";
 import { AccountMenu } from "@/components/mail/account-menu";
 import { accountDotProps } from "@/components/mail/account-dot";
-import { accountName } from "@/components/mail/account-label";
+import { accountDisplayName, accountName } from "@/components/mail/account-label";
 import { MOTION_SIZE } from "@/components/mail/motion";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Empty,
+  EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
 import { SearchInput } from "@/components/ui/search-input";
 import { Spinner } from "@/components/ui/spinner";
-import type { MailAccount, MailContact, MailKnownSender } from "@/lib/mail/types";
+import type { MailAccount } from "@/lib/mail/types";
 
 /** 「本地联系人」筛选项的保留值（`@` 不在账号 id 字符集 `[a-z0-9-]` 里，不会与账号相撞） */
 const LOCAL_FILTER = "@local";
@@ -69,14 +72,29 @@ export function MailContactsPane() {
    */
   const fromParam = searchParams.get("from");
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
-  const [contacts, setContacts] = useState<MailContact[] | null>(null);
-  const [known, setKnown] = useState<MailKnownSender[] | null>(null);
+  /** 联系人 / 往来对象：与写信页共享同一份（`lib/mail/use-mail-directory.ts`），
+   *  写信页要靠它把裸邮箱补成「备注名 <邮箱>」 */
+  const { contacts, known } = useMailDirectory();
   const [filter, setFilter] = useState<string>(fromParam ?? "all");
   const [q, setQ] = useState("");
   // 同一路由换入口账号（compose?from=a → compose?from=b）时跟上；fromParam 没变就不动
   useEffect(() => {
     if (fromParam) setFilter(fromParam);
   }, [fromParam]);
+  /**
+   * 跟随**发件人下拉**（2026-10-29 用户要求：选好发件账号后，左栏只显示该账号的联系人）。
+   * 写信页在发件人变化时广播 `mail:compose-sender`（空串 = 未选发件人 → 回到全部）。
+   * ⚠ 与上面的 `?from=`（入口账号）是两回事：入口决定初值，之后以用户实际选择的
+   *   发件人为准；用户在本面板手动改过档位，在下一次换发件人前也仍然有效。
+   */
+  useEffect(() => {
+    const onSender = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      setFilter(id || "all");
+    };
+    window.addEventListener(MAIL_COMPOSE_SENDER_EVENT, onSender);
+    return () => window.removeEventListener(MAIL_COMPOSE_SENDER_EVENT, onSender);
+  }, []);
   /** 搜索展开态（与邮箱状态同一套交互：常态图标、点击展开、Esc / 失焦且为空收起） */
   const [searchOpen, setSearchOpen] = useState(false);
   /** 最近一次「加入收件人」的邮箱（行内 ✓ 反馈，1.6s 后自动消退） */
@@ -90,14 +108,6 @@ export function MailContactsPane() {
       .then((r) => (r.ok ? r.json() : []))
       .then((d: MailAccount[]) => setAccounts(d))
       .catch(() => {});
-    fetchWithTimeout("/api/mail/contacts")
-      .then((r) => (r.ok ? r.json() : { items: [] }))
-      .then((d: { items: MailContact[] }) => setContacts(d.items))
-      .catch(() => setContacts([]));
-    fetchWithTimeout("/api/mail/contacts/known?limit=200")
-      .then((r) => (r.ok ? r.json() : { items: [] }))
-      .then((d: { items: MailKnownSender[] }) => setKnown(d.items))
-      .catch(() => setKnown([]));
   }, []);
 
   useEffect(() => {
@@ -163,6 +173,9 @@ export function MailContactsPane() {
   };
 
   const loading = contacts === null && known === null;
+  /** 当前档位是否是一个具体账号（空态文案要区分「该账号下没有」与「完全没有联系人」） */
+  const filteredAccount =
+    filter !== "all" && filter !== LOCAL_FILTER ? accounts.find((a) => a.id === filter) : null;
   /** 「全部联系人 (n)」的 n = 联系人总数（已保存 + 往来，剔除自己）；
    *  不随搜索/档位变化（那是筛选结果数，不是总量） */
   const totalCount = useMemo(() => {
@@ -186,7 +199,7 @@ export function MailContactsPane() {
   return (
     <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1">
       {/* 工具栏：档位筛选 + 搜索 + 返回邮箱（与邮件左栏行 1 同一水平线、同一套形态） */}
-      <div className="flex shrink-0 items-center gap-1.5">
+      <div className="flex shrink-0 items-center gap-2">
         {/* 筛选器 = 邮件左栏的账号选择器本体（AccountMenu，2026-10-05 用户定稿「直接复用」）：
             同款两行/单行触发器、搜索展开时同款收窄联动；差异只有文案（全部账号 → 全部联系人）
             与额外一档「本地联系人」（extraItems）。
@@ -206,7 +219,15 @@ export function MailContactsPane() {
           extraItems={[{ value: LOCAL_FILTER, label: t("contactsPane.filterLocal") }]}
           collapsedNameMaxPx={96}
           countOverride={totalCount}
-          accountName={(a) => t("contactsPane.accountFilter", { name: accountName(a) })}
+          accountName={(a) =>
+            t("contactsPane.accountFilter", {
+              // 账号没有备注名/发件人姓名时，`accountName` 会回落到邮箱地址；
+              // 触发器第二行已经显示邮箱，第一行再重复一遍会变成
+              // 「shaoyuanyu@foxmail.com的联系人 + shaoyuanyu@foxmail.com」。
+              // 用「本账号」代替，邮箱仍完整在下行。
+              name: accountDisplayName(a) || t("contactsPane.accountFallback"),
+            })
+          }
         />
         {/* 搜索区（2026-10-05 用户定稿：与邮箱状态同一套伸缩交互）——常态是一个图标
             按钮，点击向左展开为输入框；Esc / 失焦且为空收起。
@@ -306,7 +327,19 @@ export function MailContactsPane() {
               <BookUserIcon aria-hidden />
             </EmptyMedia>
             <EmptyHeader>
-              <EmptyTitle>{t("contactsPane.empty")}</EmptyTitle>
+              {/* 空态分三种（2026-10-29）：搜不到 / 根本还没联系人 / 这个账号下还没有联系人
+                  ——最后一个由「发件人联动档位」引入，统一说「没有联系人」会让人以为
+                  数据丢了 */}
+              <EmptyTitle>
+                {q.trim()
+                  ? t("contactsPane.empty")
+                  : filteredAccount
+                    ? t("contactsPane.emptyAccount")
+                    : t("contactsPane.emptyNoContacts")}
+              </EmptyTitle>
+              {!q.trim() && !filteredAccount && (
+                <EmptyDescription>{t("contactsPane.emptyNoContactsHint")}</EmptyDescription>
+              )}
             </EmptyHeader>
           </Empty>
         ) : (

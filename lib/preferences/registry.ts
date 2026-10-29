@@ -20,6 +20,8 @@ export const PREFERENCE_KEYS = {
   CAS_FILTERS: "cas:filters",
   /** 首页论文区块的置顶（pin）列表：论文 key 数组，顺序即首页展示顺序 */
   PUBLICATIONS_PINNED: "publications:pinned",
+  /** 邮件签名：账号 id → Markdown 签名文本（空串/缺失 = 该账号不使用签名） */
+  MAIL_SIGNATURES: "mail:signatures",
 } as const;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -84,7 +86,24 @@ const VALIDATORS: Record<string, (v: unknown) => unknown | null> = {
   [PREFERENCE_KEYS.CALENDAR_WEEK_START]: sanitizeCalendarWeekStart,
   [PREFERENCE_KEYS.CAS_FILTERS]: sanitizeCasFilters,
   [PREFERENCE_KEYS.PUBLICATIONS_PINNED]: sanitizePublicationsPinned,
+  [PREFERENCE_KEYS.MAIL_SIGNATURES]: sanitizeMailSignatures,
 };
+
+/**
+ * mail:signatures → { [accountId]: markdown }
+ * 清洗：账号 id ≤ 64 字符；签名 ≤ 5000 字符；空白签名丢掉（等价于未设置）。
+ */
+function sanitizeMailSignatures(v: unknown): unknown | null {
+  if (!isRecord(v)) return null;
+  const out: Record<string, string> = {};
+  for (const [id, text] of Object.entries(v)) {
+    if (!id || id.length > 64) continue;
+    if (typeof text !== "string" || text.length > 5000) continue;
+    if (!text.trim()) continue;
+    out[id] = text;
+  }
+  return out;
+}
 
 /**
  * publications:pinned → string[]（论文 key）

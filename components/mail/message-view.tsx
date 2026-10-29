@@ -34,7 +34,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Link, useRouter } from "@/lib/i18n/navigation";
 import { encodeMessageId, MAIL_LIST_ORDER_KEY } from "@/lib/mail/id";
-import { isJunkOnly, isSentItem } from "@/lib/mail/kind";
+import { hasJunkCopy, isJunkCopy, isSentItem } from "@/lib/mail/kind";
 import { mailNavOptions } from "@/lib/mail/nav";
 import {
   isCalendarAttachment,
@@ -371,11 +371,12 @@ export function MessageView({ messageId }: { messageId: string }) {
   const [preview, setPreview] = useState<MailAttachmentMeta | null>(null);
 
   /**
-   * 这封只在垃圾夹里 → 工具栏给的动作是「移出垃圾」而不是「标为垃圾」。
-   * 按**副本位置**判而不是看当前 tab：同一封邮件在「全部」「搜索」「垃圾」里都可能出现，
-   * 而动作取决于它现在在哪（详见 lib/mail/kind.ts 的 isJunkOnly）。
+   * 这封**含有**垃圾副本 → 工具栏给的动作是「移出垃圾」而不是「标为垃圾」。
+   * 2026-10-29：从「只躺在垃圾里」（every）改为「含有垃圾副本」（some）——在「垃圾」
+   * tab 里打开一封同时有收件箱副本的邮件时，旧判据会显示「标为垃圾」，点了反而把
+   * 收件箱副本也搬进垃圾，看起来毫无反应。
    */
-  const junkOnly = detail ? isJunkOnly(detail.copies) : false;
+  const hasJunk = detail ? hasJunkCopy(detail.copies) : false;
 
   /**
    * 移出垃圾（2026-10-10）：这封只在垃圾夹里时，工具栏给的是这个而不是「标为垃圾」。
@@ -387,30 +388,50 @@ export function MessageView({ messageId }: { messageId: string }) {
   const notJunk = useCallback(async () => {
     if (!detail) return;
     setActing(true);
+    const junkCopies = detail.copies.filter(isJunkCopy);
+    // 同时存在收件箱副本：只把**垃圾副本**删掉（搬去 INBOX 会造出重复）；
+    // 只有垃圾副本：沿用旧逻辑，整封搬回 INBOX。
+    const hasOtherCopies = junkCopies.length < detail.copies.length;
     // 乐观：**立刻**退出这封并通知左栏摘行（"已移出垃圾"的完成信号就是它），请求在
     // 后台跑。⚠ 必须摘：留着那一行就是个能再点的「移出垃圾」，而它的 copies 已失效，
     // 再点会搬到**别的邮件**上。失败时广播 refresh，让列表按服务端恢复。
-    broadcastItemChange({ messageId, deleted: true, source: "detail" });
+    // ⚠ 双副本（还有收件箱副本）只删垃圾副本：邮件本身仍在「全部」里，不能广播
+    //   deleted 把那一行也摘掉；用 refresh 让左栏按服务端重取。
+    if (hasOtherCopies) {
+      broadcastItemChange({ messageId, refresh: true, source: "detail" });
+    } else {
+      broadcastItemChange({ messageId, deleted: true, source: "detail" });
+    }
     router.push("/mail", mailNavOptions());
     try {
-      const res = await fetch("/api/mail/move", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ copies: detail.copies, to: "INBOX" }),
-      });
+      const res = hasOtherCopies
+        ? await fetch("/api/mail/delete", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            // purge：硬删垃圾副本（不进回收站）。旧写法走普通 delete，服务商会在
+            // JUNK → Deleted Messages 上拒绝 MOVE（2026-10-29 用户报障）。
+            body: JSON.stringify({ copies: junkCopies, purge: true }),
+          })
+        : await fetch("/api/mail/move", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ copies: junkCopies, to: "INBOX" }),
+          });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `${res.status}`);
-      const data = (await res.json()) as { affected: number; skipped?: { reason: string }[] };
-      if (data.affected === 0) {
-        broadcastItemChange({ messageId, refresh: true, source: "detail" });
-        toast.add({
-          title: t("notJunkFailed"),
-          description: data.skipped?.[0]?.reason,
-          type: "error",
-        });
-        return;
+      if (!hasOtherCopies) {
+        const data = (await res.json()) as { affected: number; skipped?: { reason: string }[] };
+        if (data.affected === 0) {
+          broadcastItemChange({ messageId, refresh: true, source: "detail" });
+          toast.add({
+            title: t("notJunkFailed"),
+            description: data.skipped?.[0]?.reason,
+            type: "error",
+          });
+          return;
+        }
       }
       toast.add({ title: t("notJunkDone"), type: "success" });
-      // 同步放后台，完了再让列表重取（这封现在在收件箱，该回到「全部」这类视图里）
+      // 同步放后台，完了再让列表重取（双副本场景里这封还在收件箱，该回到「全部」这类视图里）
       void (async () => {
         await Promise.all(
           copyAccountIds.map((accountId) =>
@@ -1339,7 +1360,7 @@ export function MessageView({ messageId }: { messageId: string }) {
               ⚠ 图标 2026-10-11 起用 Tabler 盾牌系列（`shield-x` / `shield-check`）——
               用户要求「两枚成一套、又要和删除区分开」。此前用过信封打叉/打勾，其中打勾
               那枚是「全部已读」原有的图标（挪用，已还原）。详见 junk-icons.tsx。 */}
-          {junkOnly ? (
+          {hasJunk ? (
             <Button
               variant="ghost"
               size="sm"

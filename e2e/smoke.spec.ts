@@ -157,6 +157,19 @@ async function pickSender(page: Page, label: string) {
   await expect(page.locator("#mail-from")).toContainText(label);
 }
 
+/**
+ * 正文是 CodeMirror 的 contenteditable（2026-10-29）：没有 `value`，用 innerText。
+ * `fill()` 对 contenteditable 仍然可用（CodeMirror 会收到 input 事件）。
+ */
+async function expectBodyText(page: Page, expected: string | RegExp) {
+  const body = page.locator("#mail-body");
+  if (expected instanceof RegExp) {
+    await expect.poll(() => body.getAttribute("data-value")).toMatch(expected);
+  } else {
+    await expect.poll(() => body.getAttribute("data-value")).toBe(expected);
+  }
+}
+
 async function expectPageOk(page: Page, path: string, heading?: string) {
   const res = await page.goto(path, { waitUntil: "domcontentloaded" });
   expect(res?.status(), `${path} 应返回 200`).toBe(200);
@@ -434,13 +447,16 @@ test.describe("字体策略（按角色）", () => {
   });
 
   /**
-   * ★ 核心不变式：衬线只有两个合法角色，且都有显式标记：
+   * ★ 核心不变式：衬线只有三个合法角色，且都有显式标记：
    *   a. `[data-longform]` —— 长正文（博客/速记正文）
    *   b. `[data-display-serif]` —— 首页 hero 的人名/职务展示标题块
+   *   c. `[data-proper-name]` —— 学术专名（会议/期刊全名，四页数据行）
    * 其余任何地方解析到衬线栈都是违规。
    * 这条断言把「衬线语义单义」变成机器可校验的约束，防止后续新增页面时回退。
+   * ⚠ 曾漏掉 c（2026-10-29 引入学术专名衬线时没同步本用例），导致四个数据页
+   *   长期红着——新增衬线角色时**必须**同时新增标记 + 在这里放行。
    */
-  test("衬线只出现在长正文或首页展示标题块内", async ({ page }) => {
+  test("衬线只出现在三个已标记的角色内", async ({ page }) => {
     test.slow(); // 16 条路由整页导航，见文件顶部「超时预算」
     for (const path of [
       "/",
@@ -466,12 +482,16 @@ test.describe("字体策略（按角色）", () => {
           .filter((el) => {
             const s = getComputedStyle(el);
             if (!s.fontFamily.includes("Tinos")) return false;
-            return !el.closest("[data-longform]") && !el.closest("[data-display-serif]");
+            return (
+              !el.closest("[data-longform]") &&
+              !el.closest("[data-display-serif]") &&
+              !el.closest("[data-proper-name]")
+            );
           })
           .map((el) => `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 48)}`)
           .slice(0, 6),
       );
-      expect(offenders, `${path} 在长正文与展示标题块之外使用了衬线`).toEqual([]);
+      expect(offenders, `${path} 在三个衬线角色之外使用了衬线`).toEqual([]);
     }
   });
 
@@ -551,15 +571,30 @@ test.describe("字体策略（按角色）", () => {
   });
 
   /**
-   * 等宽眉标（.eyebrow-label）：全大写 + 等宽，用于数据卡片的短标签。
+   * 等宽眉标（`.eyebrow-label`）：全大写 + 等宽，用于数据卡片的短标签。
    * 这是 Anthropic 范式的第三种语气（技术性标注），必须落在等宽族。
+   *
+   * ⚠ **这是「样式令牌」的契约测试，不是元素存在性测试**：2026-10-28 用
+   *   `ScholarStats` 替掉四页的大统计卡之后，页面上已经没有 `.eyebrow-label`
+   *   的实际使用者，原版用例（`/ccf` 上找 `.eyebrow-label` 并断言可见）因此
+   *   **长期红着**——测的是「某个历史元素还在不在」，而不是「这个令牌是否仍然
+   *   符合设计」。改为临时插入一个探针元素量计算样式：令牌若被改坏（退回
+   *   无衬线、丢掉 uppercase），这里立刻红；将来真有地方用它时也不必改测试。
    */
-  test("等宽眉标走等宽字体", async ({ page }) => {
+  test("等宽眉标令牌 = 等宽 + 全大写", async ({ page }) => {
     await page.goto("/ccf", { waitUntil: "domcontentloaded" });
-    const badge = page.locator(".eyebrow-label").first();
-    await expect(badge).toBeVisible();
-    expect(await badge.evaluate((el) => getComputedStyle(el).fontFamily)).toMatch(MONO);
-    expect(await badge.evaluate((el) => getComputedStyle(el).textTransform)).toBe("uppercase");
+    const probe = await page.evaluate(() => {
+      const el = document.createElement("span");
+      el.className = "eyebrow-label";
+      el.textContent = "PROBE";
+      document.body.appendChild(el);
+      const s = getComputedStyle(el);
+      const out = { family: s.fontFamily, transform: s.textTransform };
+      el.remove();
+      return out;
+    });
+    expect(probe.family, "`.eyebrow-label` 应走等宽族").toMatch(MONO);
+    expect(probe.transform, "`.eyebrow-label` 应全大写").toBe("uppercase");
   });
 
   /**
@@ -1226,9 +1261,9 @@ test.describe("关键资源", () => {
     ).toBeVisible();
     // 搜索过滤后列表变短（行内第二行固定含「排名 x/y」文本，用它定位行）
     const before = await page.locator("li", { hasText: "排名" }).count();
-    await page.getByLabel("搜索刊名、缩写或 ISSN…").fill("pattern analysis");
+    await page.getByLabel(/搜索/).fill("pattern analysis");
     await expect(
-      page.getByText("IEEE TRANSACTIONS ON PATTERN ANALYSIS AND MACHINE INTELLIGENCE"),
+      page.getByText("IEEE Transactions on Pattern Analysis and Machine Intelligence"),
     ).toBeVisible();
     const after = await page.locator("li", { hasText: "排名" }).count();
     expect(after).toBeGreaterThan(0);
@@ -1256,7 +1291,7 @@ test.describe("Venue Explorer（期刊会议速查）", () => {
 
   test("搜索 CVPR：会议栏命中 + A 徽章 + 详情 Dialog", async ({ page }) => {
     await expectPageOk(page, "/venues");
-    await page.getByLabel("搜索缩写、名称、ISSN 或领域…").fill("CVPR");
+    await page.getByLabel(/搜索/).fill("CVPR");
     await expect(page).toHaveURL(/q=CVPR/);
 
     const confRegion = page.getByRole("region", { name: "会议" });
@@ -1278,7 +1313,7 @@ test.describe("Venue Explorer（期刊会议速查）", () => {
 
   test("搜索 TPAMI：期刊栏双评级徽章对照", async ({ page }) => {
     await expectPageOk(page, "/venues");
-    await page.getByLabel("搜索缩写、名称、ISSN 或领域…").fill("TPAMI");
+    await page.getByLabel(/搜索/).fill("TPAMI");
 
     const jourRegion = page.getByRole("region", { name: "期刊" });
     const card = jourRegion
@@ -3256,6 +3291,8 @@ function stubMailApi(
     junkSynced?: boolean;
     /** 「垃圾」tab 用例：带 folder 参数的列表请求返回一封落在「垃圾邮件」里的桩邮件 */
     junkFolderItems?: boolean;
+    /** 「垃圾」tab 用例：让那封桩邮件同时有 INBOX 与垃圾副本（验证「移出垃圾」走 purge） */
+    junkDualCopy?: boolean;
     /** 列表桩的实时引用（用例可往里追加，验证「历史回填期间列表自动刷新」，2026-10-08） */
     listStore?: unknown[];
     /**
@@ -3585,7 +3622,12 @@ function stubMailApi(
             subject: "中奖通知",
             fromAddr: "spam@example.net",
             snippet: "恭喜您中奖",
-            copies: [{ accountId: "acc1", folder: "垃圾邮件", uid: 42 }],
+            copies: calls.junkDualCopy
+              ? [
+                  { accountId: "acc1", folder: "INBOX", uid: 41 },
+                  { accountId: "acc1", folder: "垃圾邮件", uid: 42 },
+                ]
+              : [{ accountId: "acc1", folder: "垃圾邮件", uid: 42 }],
           }),
         ]);
       } else if (folderParams.length) {
@@ -4767,6 +4809,38 @@ test.describe("站内邮件（/mail）", () => {
     });
 
     /**
+     * 双副本（INBOX + 垃圾）的「移出垃圾」（2026-10-29 报告）：
+     * 旧实现走 `/delete`（MOVE 到回收站），某些服务商直接拒绝（toast
+     * 「MOVE 失败: JUNK ⇄ Deleted Messages」）。现在只硬删垃圾副本（`purge: true`）。
+     */
+    test("垃圾视图：双副本邮件「移出垃圾」走 purge（不会搬进回收站）", async ({ page }) => {
+      const calls = {
+        flags: [],
+        send: [],
+        delete: [] as unknown[],
+        junkSynced: true,
+        junkFolderItems: true,
+        junkDualCopy: true,
+      };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+      await gotoReady(page, "/mail?view=junk");
+
+      const row = page.locator('[data-slot="mail-list"] > li').first();
+      await expect(row).toContainText("中奖通知");
+      await row.hover();
+      await row.getByRole("button", { name: "移出垃圾" }).click();
+
+      await expect.poll(() => calls.delete.length).toBe(1);
+      expect(calls.delete[0]).toMatchObject({
+        purge: true,
+        copies: [{ accountId: "acc1", folder: "垃圾邮件", uid: 42 }],
+      });
+      await expect(page.locator('[data-slot="toast-title"]').first()).toContainText("已移出垃圾");
+    });
+
+    /**
      * 附件预览（2026-10-10）：图片给缩略图、纯文本可就地读；其余类型仍是下载链接
      * （后端只对图片与纯文本放行 inline，前端不越界）。
      */
@@ -5596,7 +5670,14 @@ test.describe("站内邮件（/mail）", () => {
       await expect(replyMenu.getByRole("menuitem", { name: "回复全部" })).toBeVisible();
       await replyMenu.getByRole("menuitem", { name: "回复全部" }).click();
       await expect(page).toHaveURL(/\/mail\/compose\?replyTo=.+&all=1(&from=[^&]*)?$/);
-      await expect(page.locator("#mail-to")).toHaveValue("newsletter@example.com");
+      await expect(page.locator("#mail-to")).toHaveValue("");
+      await expect(
+        page.locator("#mail-to").locator("..").locator('[data-slot="recipient-chip"]'),
+        // 2026-10-29 第二轮：预填的收件人直接是不可拆的 chip（输入框只放“下一个地址”）
+      ).toHaveCount(1);
+      await expect(
+        page.locator("#mail-to").locator("..").locator('[data-slot="recipient-chip"]').first(),
+      ).toContainText("newsletter@example.com");
       // ⚠ 抄送行默认收起（2026-10-06 表单头重设计）：cc 为空时该行不渲染（不是隐藏）。
       //   展开后应仍为空（自己不进 Cc）——语义与旧断言一致，只是要先把行打开
       await expect(page.locator("#mail-cc")).toHaveCount(0);
@@ -5614,8 +5695,8 @@ test.describe("站内邮件（/mail）", () => {
       // 转发：主题加 Fwd:、正文带引用头块、原附件随转发带走、不续引用链
       await gotoReady(page, "/mail/compose?forward=mid%3Aw03%40test.local");
       await expect(page.locator("#mail-subject")).toHaveValue("Fwd: HTML Newsletter");
-      await expect(page.locator("#mail-body")).toHaveValue(/-------- 转发邮件 --------/);
-      await expect(page.locator("#mail-body")).toHaveValue(/发件人: newsletter@example.com/);
+      await expectBodyText(page, /-------- 转发邮件 --------/);
+      await expectBodyText(page, /发件人: newsletter@example.com/);
       await expect(page.getByText("report.pdf")).toBeVisible();
 
       // ⚠ 这个 URL 是手写的、没带 `&from=`（生产里详情页的转发链接总会带）→ 按 2026-10-17
@@ -5686,7 +5767,42 @@ test.describe("站内邮件（/mail）", () => {
       await gotoReady(page, "/mail/compose");
       await expect(page.locator("#mail-to")).toHaveValue("");
       await expect(page.locator("#mail-subject")).toHaveValue("");
-      await expect(page.locator("#mail-body")).toHaveValue("");
+      await expectBodyText(page, "");
+    });
+
+    /**
+     * 2026-10-29 用户定稿：「把草稿的自动保存规则改成只有主题或内容不为空的情况下才
+     * 保存，否则不保存」。
+     *
+     * 旧行为：`to/cc/bcc/subject/body` **全空**才不存 —— 于是在左栏点个联系人（只填了
+     * 收件人）就会在草稿箱里多出一封空壳，回过头还得手动清。
+     * 新契约：判空只看**主题与正文**；两者都没内容就不创建（已有草稿被清空则照旧删除）。
+     */
+    test("写邮件：只填收件人不产生草稿，主题或正文有内容才保存", async ({ page }) => {
+      const calls = {
+        flags: [],
+        send: [] as unknown[],
+        delete: [] as unknown[],
+        drafts: [] as unknown[],
+      };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail/compose");
+      // 只填收件人 + 失焦（触发一轮自动保存判定）：不该落盘
+      await page.locator("#mail-to").fill("only-to@example.org");
+      await page.locator("#mail-subject").click();
+      await page.waitForTimeout(1500); // 防抖 500ms，留两轮余量
+      expect(calls.drafts, "只填收件人时不该创建草稿").toHaveLength(0);
+
+      // 有主题 → 照常保存（收件人一起带上）
+      await page.locator("#mail-subject").fill("有主题了");
+      await expect.poll(() => calls.drafts.length).toBeGreaterThan(0);
+      expect(calls.drafts[0]).toMatchObject({
+        method: "POST",
+        body: expect.objectContaining({ subject: "有主题了", to: "only-to@example.org" }),
+      });
     });
 
     /**
@@ -5738,13 +5854,16 @@ test.describe("站内邮件（/mail）", () => {
       await gotoReady(page, "/mail/compose");
       await expect(page.locator("#mail-to")).toHaveValue("");
       await expect(page.locator("#mail-subject")).toHaveValue("");
-      await expect(page.locator("#mail-body")).toHaveValue("");
+      await expectBodyText(page, "");
 
       // 输入照常自动保存——用这次落盘当"挂载期早已过去"的时间界（500ms 防抖远晚于
       // 挂载时的找回请求），此后再断言"旧草稿没进来"就不会是抢先跑空的假绿。
       // ⚠ 判据是 POST **≥ 2 笔**（开头预置那封 + 本次自动保存），不是"有 POST"——
       //   预置那笔早就把后者变永真，那样后面的断言会在落盘之前就跑。
+      // ⚠ 2026-10-29 起草稿只在**主题或正文**有内容时保存：这里用正文触发，主题留空
+      //   （这正好也是下面「主题没被旧草稿填上」的断言所需）。
       await page.locator("#mail-to").fill("new@example.org");
+      await page.locator("#mail-body").fill("新的正文");
       await expect
         .poll(() => calls.drafts.filter((c) => (c as { method?: string }).method === "POST").length)
         .toBeGreaterThan(1);
@@ -5756,9 +5875,10 @@ test.describe("站内邮件（/mail）", () => {
         calls.draftQueries.filter((q) => q.includes("kind=new")),
         "裸写邮件不该问「最近的新建草稿」",
       ).toHaveLength(0);
-      // 旧逻辑下这两个会被旧草稿填上（主题「旧草稿主题」），我的输入只该有收件人
+      // 旧逻辑下这两个会被旧草稿填上（主题「旧草稿主题」、正文「旧草稿正文」），
+      // 我只写了收件人 + 一句新正文
       await expect(page.locator("#mail-subject")).toHaveValue("");
-      await expect(page.locator("#mail-body")).toHaveValue("");
+      await expectBodyText(page, "新的正文");
       // 还没选发件人 = 这封信还没有归属（2026-10-17 起入口不带账号就不预选）：草稿照存
       // （写一半不丢、能在「草稿」tab 里找到），只是 accountId 是空串——服务端镜像跳过它
       // （`draft-mirror` 的 !row.account_id 守卫），选好发件人后的下一次保存会带上归属。
@@ -5774,8 +5894,10 @@ test.describe("站内邮件（/mail）", () => {
       // 别把"不找回"做成"恢复整个失效"
       await gotoReady(page, `/mail/compose?draft=${presetId}`);
       await expect(page.locator("#mail-subject")).toHaveValue("旧草稿主题");
-      await expect(page.locator("#mail-to")).toHaveValue("old@example.org");
-      await expect(page.locator("#mail-body")).toHaveValue("旧草稿正文");
+      await expect(
+        page.locator("#mail-to").locator("..").locator('[data-slot="recipient-chip"]').first(),
+      ).toContainText("old@example.org");
+      await expectBodyText(page, "旧草稿正文");
     });
 
     /**
@@ -5811,7 +5933,7 @@ test.describe("站内邮件（/mail）", () => {
       // 离开写信页再回来（同一原信）→ 按归属键找回那一封
       await gotoReady(page, "/mail");
       await gotoReady(page, "/mail/compose?replyTo=mid%3Aw03%40test.local");
-      await expect(page.locator("#mail-body")).toHaveValue("半截回复");
+      await expectBodyText(page, "半截回复");
       expect(
         calls.draftQueries.some((q) => q.includes("kind=reply") && q.includes("kindRef=")),
         "回复要按归属键找回同一原信的那封",
@@ -5849,9 +5971,11 @@ test.describe("站内邮件（/mail）", () => {
       // 点击进入编辑：草稿内容恢复到写信表单
       await rows.first().locator("[data-mail-row]").click();
       await expect(page).toHaveURL(/\/mail\/compose\?draft=draft-1/);
-      await expect(page.locator("#mail-to")).toHaveValue("a@b.example");
+      await expect(
+        page.locator("#mail-to").locator("..").locator('[data-slot="recipient-chip"]').first(),
+      ).toContainText("a@b.example");
       await expect(page.locator("#mail-subject")).toHaveValue("草稿一");
-      await expect(page.locator("#mail-body")).toHaveValue("半截正文");
+      await expectBodyText(page, "半截正文");
 
       // 返回邮箱 → 草稿箱 → 行内删除（ConfirmDialog 确认；不用原生 confirm）
       await page.getByRole("link", { name: "返回邮箱" }).click();
@@ -5978,7 +6102,9 @@ test.describe("站内邮件（/mail）", () => {
       await expect
         .poll(() => calls.drafts?.some((c) => (c as { method?: string; id?: string }).method === "GET" && (c as { id?: string }).id === "srv-new"))
         .toBe(true);
-      await expect(page.locator("#mail-to")).toHaveValue("phone@example.com");
+      await expect(
+        page.locator("#mail-to").locator("..").locator('[data-slot="recipient-chip"]').first(),
+      ).toContainText("phone@example.com");
       await expect(page.locator("#mail-subject")).toHaveValue("手机上写了一半");
 
       // 从草稿发送：服务端删掉这封草稿，写信页广播 `mail:drafts-changed`——回到列表
@@ -7072,6 +7198,14 @@ test.describe("站内邮件（/mail）", () => {
       const knownRow = page.locator('[data-slot="contacts-pane-known"] li').first();
       await expect(knownRow).toContainText("张老师");
       await expect(knownRow.locator('[data-slot="contact-account-dots"] span')).toHaveCount(1);
+      // 点击行 = 加入收件人：2026-10-29 起带上备注名（不再只有裸地址）
+      await knownRow.click();
+      await expect(
+        page.locator("#mail-to").locator("..").locator('[data-slot="recipient-chip"]').first(),
+      ).toContainText("张老师");
+      await expect(
+        page.locator("#mail-to").locator("..").locator('[data-slot="recipient-chip"]').first(),
+      ).toContainText("zhang@example.com");
       // 底栏颜色图例：账号名 + 本地联系人（解释色点含义）
       const legend = page.locator('[data-slot="mail-contacts-legend"]');
       await expect(legend).toContainText("主账号");
@@ -7505,10 +7639,8 @@ test.describe("站内邮件（/mail）", () => {
       await loginWithCode(page, code);
 
       await gotoReady(page, "/mail/compose");
-      // ⚠ 正文框高度：`rows={14}` 会被 Textarea 基础类的 `field-sizing-content` 覆盖
-      //   （上游样式让高度随内容自适应，空内容时只剩 min-h-16 = 64px ≈ 2.5 行，用户反馈太小），
-      //   必须靠 compose-form 里的 `min-h-[25vh]` 撑住（≈ 桌面视口下正文框下方空白的 55%~60%）。
-      //   改 Textarea 或表单布局时别把它删掉。
+      // ⚠ 正文框高度（2026-10-29 起是 CodeMirror contenteditable）：靠 compose-body 的
+      //   `min-h-[25vh]` 撑住；改编辑器 / 表单布局时别把它删掉。
       const bodyBox = await page.locator("#mail-body").evaluate((el) => {
         const r = el.getBoundingClientRect();
         return { h: r.height, vh: window.innerHeight };
@@ -7519,7 +7651,8 @@ test.describe("站内邮件（/mail）", () => {
       ).toBeGreaterThanOrEqual(bodyBox.vh * 0.22);
       await page.locator("#mail-to").fill("someone@example.org");
       await page.locator("#mail-subject").fill("测试主题");
-      await page.locator("#mail-body").fill("正文内容");
+      // Markdown：粗体 + 链接 → 发送的 html 应已渲染，text 是渲染后的纯文本
+      await page.locator("#mail-body").fill("**粗体** 和 [链接](https://example.com)");
       // 发件人显式选（裸「写邮件」不预选，见下方「默认发件人」用例）——就是下面断言的 acc1
       await pickSender(page, "me@mail.example.cn");
       await page.getByRole("button", { name: "发送" }).click();
@@ -7530,11 +7663,15 @@ test.describe("站内邮件（/mail）", () => {
         to: string[];
         subject: string;
         text: string;
+        html?: string;
       };
       expect(sent.accountId).toBe("acc1");
       expect(sent.to).toEqual(["someone@example.org"]);
       expect(sent.subject).toBe("测试主题");
-      expect(sent.text).toBe("正文内容");
+      expect(sent.text).toContain("粗体");
+      expect(sent.text).not.toContain("**");
+      expect(sent.html).toContain("<strong>粗体</strong>");
+      expect(sent.html).toContain('href="https://example.com"');
       await expect(page).toHaveURL(/\/mail(\?[^/]*)?$/); // ⚠ tab 落进 URL 后可能带 ?view=…
     });
 
@@ -7603,6 +7740,66 @@ test.describe("站内邮件（/mail）", () => {
       // 点进去真的落在 acc2 上
       await actions.locator('a[href*="forward="]').click();
       await expect(page.locator("#mail-from")).toContainText("ysy@edu.example.cn");
+    });
+
+    /**
+     * 左栏联系人档跟随**发件人**（2026-10-29 用户要求）：
+     * 「当我选择好发件人账号时，左侧区的联系人只应该显示该账号下的联系人」。
+     * 与入口 `?from=`（只决定初值）分开：换发件人 → 广播 → 面板切档。
+     */
+    test("写邮件：左栏联系人档跟随发件人账号", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail/compose");
+      const accountLabel = page
+        .getByRole("button", { name: "按账号筛选" })
+        .locator('[data-slot="account-label"]');
+      // 没选发件人 → 全部联系人（张老师属于 acc1，此时可见）
+      await expect(accountLabel).toContainText("全部联系人");
+      await expect(page.locator('[data-slot="contacts-pane-known"]')).toContainText("张老师");
+
+      // 换成「学校」（acc2）→ 档位跟着换，acc1 的张老师不再出现
+      await pickSender(page, "ysy@edu.example.cn");
+      await expect(accountLabel).toContainText("学校的联系人");
+      await expect(page.locator('[data-slot="contacts-pane-known"]')).not.toContainText("张老师");
+
+      // 换回 acc1 → 切回来
+      await pickSender(page, "me@mail.example.cn");
+      await expect(accountLabel).toContainText("主账号的联系人");
+      await expect(page.locator('[data-slot="contacts-pane-known"]')).toContainText("张老师");
+    });
+
+    /**
+     * 切换 tab 与右栏详情的联动（2026-10-29 用户要求）：
+     * ① 正在看的邮件不属于新 tab → 右栏回到占位；
+     * ② Ctrl+Z 回到上一封看过的邮件，并把 tab 一起切回去。
+     */
+    test("切换 tab 关闭不属于该 tab 的详情；Ctrl+Z 连 tab 一起返回", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail?view=sent");
+      const rows = page.locator('[data-slot="mail-list"] > li');
+      await expect(rows.first()).toBeVisible();
+      await rows.first().locator("[data-mail-row]").click();
+      await expect(page).toHaveURL(/\/mail\/message\/.+\?view=sent$/);
+
+      // 切到「收件」：这封是发件，不属于新 tab → 详情关闭
+      await page.getByRole("tab", { name: "收件", exact: true }).click();
+      await expect(page).toHaveURL(/\/mail\?view=received$/);
+      await expect(page.getByText("选择一封邮件", { exact: true })).toBeVisible();
+
+      // Ctrl+Z：回到刚才那封，并切回「发件」
+      await page.keyboard.press("Control+z");
+      await expect(page).toHaveURL(/\/mail\/message\/.+\?view=sent$/);
+      await expect(
+        page.getByRole("tab", { name: "发件", exact: true }),
+      ).toHaveAttribute("aria-selected", "true");
     });
 
     /**
@@ -9664,7 +9861,11 @@ test.describe("站内邮件（/mail）", () => {
       // ?to= 预填
       await gotoReady(page, "/mail/compose?to=boss@example.com");
       const toInput = page.locator("#mail-to");
-      await expect(toInput).toHaveValue("boss@example.com");
+      // 2026-10-29 第二轮：预填的收件人直接渲染成 chip（不可局部编辑）
+      await expect(toInput).toHaveValue("");
+      await expect(toInput.locator("..").locator('[data-slot="recipient-chip"]').first()).toContainText(
+        "boss@example.com",
+      );
 
       // 自动补全：输入 zhang → 建议出现 → Enter 选中第一项
       await toInput.fill("zhang");
@@ -9673,8 +9874,51 @@ test.describe("站内邮件（/mail）", () => {
       await expect(suggestions.getByRole("option")).toHaveCount(1);
       await expect(suggestions).toContainText("张老师");
       await toInput.press("Enter");
-      await expect(toInput).toHaveValue("zhang@example.com, ");
+      // 2026-10-29 第二轮：补全选中后收件人变成一个**整体 chip**（备注名 + 地址），
+      // 输入框清空等下一个人（chip 不可局部编辑，见「不可拆开的 chip」用例）
+      const toChips = page.locator("#mail-to").locator("..").locator('[data-slot="recipient-chip"]');
+      // 预填的 boss@ + 刚选中的张老师 = 两条，后者排在最后
+      await expect(toChips).toHaveCount(2);
+      await expect(toChips.nth(1)).toContainText("张老师");
+      await expect(toChips.nth(1)).toContainText("zhang@example.com");
+      await expect(toInput).toHaveValue("");
       await expect(suggestions).toHaveCount(0);
+    });
+
+    test("写邮件：收件人是不可拆开的 chip（分隔符提交 / 退格整条删 / 只能整条移除）", async ({
+      page,
+    }) => {
+      const calls = { flags: [], send: [], delete: [] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail/compose");
+      const to = page.locator("#mail-to");
+      const chips = to.locator("..").locator('[data-slot="recipient-chip"]');
+
+      // 输入逗号 = 提交：分隔符之前的人全部变成 chip，输入框只留“下一个地址”
+      await to.click();
+      await to.pressSequentially("a@example.com, b@example.com, ");
+      await expect(chips).toHaveCount(2);
+      await expect(to).toHaveValue("");
+      // chip 是整块 DOM（名字 + 地址 + 移除按钮），里面没有任何可编辑/可选中改写的输入框
+      await expect(chips.first().locator("input, textarea, [contenteditable='true']")).toHaveCount(0);
+
+      // 输入框为空时退格 = 整条删掉最后一个 chip
+      await to.press("Backspace");
+      await expect(chips).toHaveCount(1);
+
+      // × 移除按钮：整条移除，不涉及改字
+      await page.getByRole("button", { name: "移除 a@example.com" }).click();
+      await expect(chips).toHaveCount(0);
+      await expect(to).toHaveValue("");
+
+      // 单个地址失焦即提交成 chip（否则又是一个能被光标插进去改一半的纯文本）
+      await to.fill("c@example.com");
+      await page.locator("#mail-subject").click();
+      await expect(chips).toHaveCount(1);
+      await expect(chips.first()).toContainText("c@example.com");
     });
 
     test("详情页：发件人一键存入通讯录，已存显示勾标", async ({ page }) => {

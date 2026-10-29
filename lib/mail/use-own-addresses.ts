@@ -39,6 +39,15 @@ function normalize(data: unknown, kind: MailOwnAddress["kind"]): MailOwnAddress[
 }
 
 /**
+ * mailagentd 不可达时的冷却截止时刻（2026-10-29，模块级、全局共享）。
+ *
+ * mailagentd 是**可选子系统**（本地开发通常没起）：以前每进入一个页面都会打一次
+ * `/agent/accounts`，没起时每次都是一条 502（用户报「后台一直在报错」）。
+ * 失败后 60 秒内不再问它——降级成「只有 webmail 账号」，与未读徽点的处理一致。
+ */
+let agentDownUntil = 0;
+
+/**
  * 站主自己的全部收发地址 = webmail 账号注册表 + agent 信箱（MAIL-AGENT.md 4.10）。
  * 通讯录「我的账号」与写信页的收件人补全共用。
  *
@@ -61,22 +70,36 @@ export function useOwnAddresses(): {
       fetch(path)
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null);
+    /** agent 单独走一套：失败进冷却，401（会话过期）不算 agent 挂了 */
+    const getAgent = async (): Promise<unknown> => {
+      if (Date.now() < agentDownUntil) return null;
+      try {
+        const r = await fetch("/api/mail/agent/accounts");
+        if (r.ok) {
+          agentDownUntil = 0;
+          return await r.json();
+        }
+        if (r.status !== 401) agentDownUntil = Date.now() + 60_000;
+        return null;
+      } catch {
+        agentDownUntil = Date.now() + 60_000;
+        return null;
+      }
+    };
     const load = () => {
-      void Promise.all([get("/api/mail/accounts"), get("/api/mail/agent/accounts")]).then(
-        ([mine, agent]) => {
-          if (cancelled) return;
-          const seen = new Set<string>();
-          const merged: MailOwnAddress[] = [];
-          for (const a of [...normalize(mine, "account"), ...normalize(agent, "agent")]) {
-            const key = a.email.toLowerCase();
-            if (seen.has(key)) continue;
-            seen.add(key);
-            merged.push(a);
-          }
-          setOwn(merged);
-          setReady(true);
-        },
-      );
+      void Promise.all([get("/api/mail/accounts"), getAgent()]).then(([mine, agent]) => {
+        if (cancelled) return;
+        const seen = new Set<string>();
+        const merged: MailOwnAddress[] = [];
+        for (const a of [...normalize(mine, "account"), ...normalize(agent, "agent")]) {
+          const key = a.email.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          merged.push(a);
+        }
+        setOwn(merged);
+        setReady(true);
+      });
     };
     load();
     // 账号增删/改地址后，各页面的「我的账号」判断（双向角标、回复全部剔自己）

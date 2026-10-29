@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { CircleAlertIcon } from "lucide-react";
 
@@ -85,8 +85,20 @@ export interface BackfillState {
   total: number;
 }
 
-/** 轮询间隔（2 秒）：底栏状态（含抓取进度）与「上次收到新邮件」的刷新节拍 */
+/** 轮询间隔（2 秒）：底栏状态（含抓取进度）与「上次收到新邮件」的刷新节拍。
+ *  ⚠ 新邮件提醒依赖这一拍（/health 的 lastNewMail 前进）；不要为了减少控制台 502
+ *    噪声把它调大——agent 后台未运行时浏览器本来就会记录失败请求，但提醒及时性
+ *    是用户能感知的功能。 */
 const POLL_MS = 2_000;
+/**
+ * mailagentd 连续失败后的最长退避（2026-10-29）。
+ * mailagentd 是**可选子系统**（本地开发通常没起）：以前每 2 秒打一次 `/agent/health`，
+ * 没起时就是每 2 秒一条 502，控制台一直被刷（用户报「刷新后还是一直报错」）。
+ * 退避后最差 1 分钟一条；线上 agent 重启后最多 1 分钟也能自己恢复。
+ */
+const AGENT_MAX_BACKOFF_MS = 60_000;
+/** webmaild 连续失败后的最长退避：比 agent 短——它是邮件本体，恢复要快 */
+const WEBMAIL_MAX_BACKOFF_MS = 15_000;
 /**
  * 陈旧阈值：距上次成功抓取超过该时长视为异常。
  * mailagentd 兜底轮询 3 分钟一轮、webmaild 5 秒一轮，15 分钟足够宽松（只抓真卡死）。
@@ -145,6 +157,17 @@ export function useSyncStatus(): {
    * 取不到（后台挂了）就退回 id，不影响告警本身。
    */
   const [names, setNames] = useState<Record<string, string>>({});
+  /**
+   * 两条链路的失败退避状态（2026-10-29）：
+   * `nextAt` = 下一次允许请求的时刻；跳过的那几拍沿用 `up` 里的旧结论，
+   * 免得底栏图标在「不可达 / 正常」之间抖。
+   */
+  const agentFailsRef = useRef(0);
+  const agentNextAtRef = useRef(0);
+  const agentUpRef = useRef(true);
+  const webmailFailsRef = useRef(0);
+  const webmailNextAtRef = useRef(0);
+  const webmailUpRef = useRef(true);
 
   const rel = useCallback(
     (iso: string): string => {
@@ -200,21 +223,55 @@ export function useSyncStatus(): {
     const isStale = (iso: string | null | undefined): boolean =>
       !hasTime(iso) || Date.now() - Date.parse(iso) > STALE_MS;
 
+    const now = Date.now();
+    const agentDue = now >= agentNextAtRef.current;
+    const webmailDue = now >= webmailNextAtRef.current;
     const [mailagentdRes, webmailRes] = await Promise.allSettled([
-      fetchWithTimeout("/api/mail/agent/health", { cache: "no-store" }),
-      fetchWithTimeout("/api/mail/health", { cache: "no-store" }),
+      agentDue
+        ? fetchWithTimeout("/api/mail/agent/health", { cache: "no-store" })
+        : Promise.resolve(null),
+      webmailDue
+        ? fetchWithTimeout("/api/mail/health", { cache: "no-store" })
+        : Promise.resolve(null),
     ]);
-    const mailagentdUp = mailagentdRes.status === "fulfilled" && mailagentdRes.value.ok;
-    const webmailUp = webmailRes.status === "fulfilled" && webmailRes.value.ok;
+    /** 被退避跳过的一拍拿到的是 null（不是失败，也不是正常） */
+    const agentRes = mailagentdRes.status === "fulfilled" ? mailagentdRes.value : null;
+    const webmailResValue = webmailRes.status === "fulfilled" ? webmailRes.value : null;
+    if (agentDue) {
+      if (agentRes?.ok) {
+        agentFailsRef.current = 0;
+        agentNextAtRef.current = 0;
+        agentUpRef.current = true;
+      } else {
+        agentFailsRef.current += 1;
+        agentNextAtRef.current =
+          Date.now() + Math.min(POLL_MS * 2 ** agentFailsRef.current, AGENT_MAX_BACKOFF_MS);
+        agentUpRef.current = false;
+      }
+    }
+    if (webmailDue) {
+      if (webmailResValue?.ok) {
+        webmailFailsRef.current = 0;
+        webmailNextAtRef.current = 0;
+        webmailUpRef.current = true;
+      } else if (webmailResValue?.status !== 401) {
+        // 401 = 会话过期，不是服务问题：不参与退避（登录后要立刻恢复 2 秒一拍）
+        webmailFailsRef.current += 1;
+        webmailNextAtRef.current =
+          Date.now() +
+          Math.min(POLL_MS * 2 ** webmailFailsRef.current, WEBMAIL_MAX_BACKOFF_MS);
+        webmailUpRef.current = false;
+      }
+    }
+    const mailagentdUp = agentDue ? !!agentRes?.ok : agentUpRef.current;
+    const webmailUp = webmailDue ? !!webmailResValue?.ok : webmailUpRef.current;
     /**
      * 会话过期（2026-10-10 第十二轮）：401 与「服务挂了」在界面上必须分开说——
      * 「稍后重试」对过期的会话毫无意义，要做的是重新登录。此前 401 被归进
      * `!webmailUp`，底栏显示的是「邮件服务不可达」（误导）。
      */
-    const webmailUnauthorized =
-      webmailRes.status === "fulfilled" && webmailRes.value.status === 401;
-    const agentUnauthorized =
-      mailagentdRes.status === "fulfilled" && mailagentdRes.value.status === 401;
+    const webmailUnauthorized = webmailResValue?.status === 401;
+    const agentUnauthorized = agentRes?.status === 401;
 
     if (!mailagentdUp && !webmailUp) {
       const unauthorized = webmailUnauthorized || agentUnauthorized;
@@ -246,9 +303,9 @@ export function useSyncStatus(): {
       });
     }
 
-    // ⚠ 重复写完整条件而非用 mailagentdUp：TS 无法从独立 boolean 反推 PromiseSettledResult 的收窄
-    if (mailagentdRes.status === "fulfilled" && mailagentdRes.value.ok) {
-      const h = (await mailagentdRes.value.json()) as MailagentdHealth;
+    // ⚠ 被退避跳过的那拍 agentRes 为 null：这里不发请求，也不再解析
+    if (agentRes?.ok) {
+      const h = (await agentRes.json()) as MailagentdHealth;
       for (const a of h.accounts) {
         if (a.alert) {
           problems.push({
@@ -279,8 +336,8 @@ export function useSyncStatus(): {
     let nextBackfill: BackfillState | null = null;
     /** 有账号的**首轮**同步还没跑完（`lastSync === null` 且没报错）——正在下载但数不出进度 */
     let nextFirstSync = false;
-    if (webmailRes.status === "fulfilled" && webmailRes.value.ok) {
-      const h = (await webmailRes.value.json()) as WebmailHealth;
+    if (webmailResValue?.ok) {
+      const h = (await webmailResValue.json()) as WebmailHealth;
       const pending: BackfillState["accounts"] = [];
       for (const a of h.accounts) {
         if (!a.enabled) continue;

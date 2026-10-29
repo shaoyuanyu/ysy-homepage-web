@@ -103,6 +103,12 @@ export function MailNewMailWatcher() {
     let lastSyncSeen: Map<string, string | null> | null = null;
     /** 页面不可见期间攒下的新邮件封数（回到页面再弹一次，见 onVisible） */
     let pendingDelta: number | null = null;
+    /**
+     * 连续失败退避（2026-10-29）：后台挂了的时候每 2 秒打两次接口，控制台就是每 2 秒
+     * 两条失败记录。失败后 2s→4s→…→最多 30s 一拍，成功立即恢复 2 秒。
+     */
+    let failures = 0;
+    let retryAt = 0;
 
     const clearTimer = () => {
       if (timer !== undefined) {
@@ -136,6 +142,7 @@ export function MailNewMailWatcher() {
       if (disposed) return;
       // 游客不发请求（见文件头 ⚠）：宁可不轮询，也不留 401 控制台错误
       if (!isKnownOwner()) return;
+      if (Date.now() < retryAt) return; // 退避中：这拍不发请求
       let data: unknown;
       let health: HealthResponse | null = null;
       try {
@@ -151,11 +158,19 @@ export function MailNewMailWatcher() {
           clearTimer();
           return;
         }
-        if (!accountsRes.ok) return; // 服务暂不可用：静默，下轮再试
+        if (!accountsRes.ok) {
+          failures += 1;
+          retryAt = Date.now() + Math.min(POLL_MS * 2 ** failures, 30_000);
+          return; // 服务暂不可用：退避后再试
+        }
         data = await accountsRes.json();
         if (healthRes?.ok) health = (await healthRes.json()) as HealthResponse;
+        failures = 0;
+        retryAt = 0;
       } catch {
-        return; // 网络失败：静默，下轮再试
+        failures += 1;
+        retryAt = Date.now() + Math.min(POLL_MS * 2 ** failures, 30_000);
+        return; // 网络失败：退避后再试
       }
       if (disposed) return;
       const total = (Array.isArray(data) ? data : [])
@@ -199,6 +214,8 @@ export function MailNewMailWatcher() {
     const start = () => {
       clearTimer();
       if (!isKnownOwner()) return; // 游客：连轮询都不启动（登录后由 auth 事件重启）
+      failures = 0;
+      retryAt = 0;
       void poll();
       timer = window.setInterval(() => void poll(), POLL_MS);
     };

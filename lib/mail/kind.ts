@@ -52,19 +52,33 @@ const JUNK_FOLDER_NAMES = new Set([
 const JUNK_USE = "\\Junk";
 
 /**
- * 这封邮件是不是「只躺在垃圾邮件夹里」——界面据此把整理动作从「标为垃圾」换成「移出垃圾」。
+ * 单个副本是否在垃圾邮件夹里（special-use 优先，名字回退）。
+ */
+export function isJunkCopy(c: MailCopyRef): boolean {
+  return c.specialUse ? c.specialUse === JUNK_USE : JUNK_FOLDER_NAMES.has(c.folder.trim().toLowerCase());
+}
+
+/**
+ * 这封邮件是否**含有**垃圾副本——界面据此把整理动作换成「移出垃圾」。
  *
- * 为什么按副本位置判而不看当前 tab：同一封邮件在「全部」「搜索」「垃圾」三个视图里都可能
- * 出现，而**动作取决于它现在在哪**，不取决于用户从哪个入口点进来。按 tab 判还会漏掉
- * 「在『全部』里打开一封只存在于垃圾夹的邮件」这种情形——那里显示「标为垃圾」是错的
- * （点了是空操作，服务端会回「它本来就在垃圾邮件里」）。
+ * 2026-10-29 用户报障：在「垃圾」tab 里，一封同时有收件箱副本的邮件仍然显示「标为垃圾」，
+ * 点击后服务端把收件箱那份也搬进垃圾（它本来就在垃圾里）→ 看起来毫无反应。
+ * 现在改为 **any**：只要有垃圾副本，动作就是「移出垃圾」。
  *
- * 注意是 **every 而不是 some**：同时有收件箱副本的邮件不算「在垃圾里」（它还在收件箱），
- * 此时该给的动作仍是「标为垃圾」。
+ * ⚠ 移出时**不能**把全部副本都搬去 INBOX（有收件箱副本时会造出重复）：调用方要按
+ *   `junkCopies = copies.filter(isJunkCopy)` 只处理垃圾副本；如果还有非垃圾副本，
+ *   就删掉垃圾副本而不是搬回 INBOX（见 mail-client / message-view 的 notJunk 实现）。
+ */
+export function hasJunkCopy(copies: MailCopyRef[] | undefined): boolean {
+  return !!copies?.length && copies.some(isJunkCopy);
+}
+
+/**
+ * 这封邮件是不是「只躺在垃圾邮件夹里」——仅用于需要区分「唯一副本」的场景。
+ *
+ * ⚠ 界面动作请用 `hasJunkCopy`（2026-10-29 起）：同一封邮件可能同时有收件箱与垃圾
+ *   副本，只躺在垃圾里只是其中一种。
  */
 export function isJunkOnly(copies: MailCopyRef[] | undefined): boolean {
-  if (!copies?.length) return false;
-  return copies.every((c) =>
-    c.specialUse ? c.specialUse === JUNK_USE : JUNK_FOLDER_NAMES.has(c.folder.trim().toLowerCase()),
-  );
+  return !!copies?.length && copies.every(isJunkCopy);
 }
