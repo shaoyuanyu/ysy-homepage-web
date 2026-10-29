@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-10-28",
+  "fetchedAt": "2026-10-29",
   "source": "ccfddl/ccf-deadlines (allconf.yml)",
   "conferences": [
     {
@@ -3338,7 +3338,7 @@
           "place": "Bruges, Belgium and Online",
           "timeline": [
             {
-              "t": "2026-11-18 23:59:59"
+              "t": "2026-11-19 03:59:59"
             }
           ]
         }
