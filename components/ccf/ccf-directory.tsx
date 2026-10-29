@@ -136,6 +136,8 @@ function EntryRow({ entry }: { entry: CcfEntry }) {
           两种错误做法都试过：留白 128px 像「这一行渲染丢了」；让刊名顶到最左
           （铺满整行）会让 47 行突然脱离全表的刊名左缘，长列表里更刺眼。
           表格里空值就该有条空值的写法——占位、对齐、不参与朗读。
+          ⚠ 占位符用**全强度** `text-muted-foreground`，不要 `/40`：那只有 1.73:1，
+            会被「正文对比度」E2E 判红（它把任何含文本的元素都算进去）。
           ⚠ 手机不显示「—」也不占位（那份空白会变成 8px 的多余缩进）。 */}
       {entry.a ? (
         <span className="min-w-0 max-w-full truncate font-mono text-base font-semibold sm:order-1 sm:w-32 sm:shrink-0">
@@ -144,7 +146,7 @@ function EntryRow({ entry }: { entry: CcfEntry }) {
       ) : (
         <span
           aria-hidden
-          className="hidden shrink-0 font-mono text-base text-muted-foreground/40 sm:order-1 sm:block sm:w-32"
+          className="hidden shrink-0 font-mono text-base text-muted-foreground sm:order-1 sm:block sm:w-32"
         >
           —
         </span>

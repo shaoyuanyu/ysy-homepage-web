@@ -183,7 +183,7 @@ export function ScholarNote({ children }: { children: ReactNode }) {
  * 无 hover。这里照搬：
  *
  * - 一条面板，`gap-px` + `bg-border` 画出 1px 网格线（不需要给每格算边框）；
- * - 数字 `text-lg font-semibold tabular-nums`，标签 `text-xs` 次要色；
+ * - 数字 `text-xl font-semibold tabular-nums`，标签 `text-xs` 次要色；
  * - 2 列（手机）/ 4 列（sm 起），行高固定，不随内容跳动。
  *
  * `hint` 用于统计口径的**例外说明**（如「共 446 会议」里的「其中 210 本双评级」），
