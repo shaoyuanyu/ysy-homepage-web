@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-10-29",
+  "fetchedAt": "2026-10-30",
   "source": "ccfddl/ccf-deadlines (allconf.yml)",
   "conferences": [
     {
@@ -3608,7 +3608,7 @@
           "place": "Mainz, Germany (hybrid)",
           "timeline": [
             {
-              "t": "2026-11-01 23:59:59",
+              "t": "2026-11-16 23:59:59",
               "c": "Full papers"
             }
           ]
@@ -3862,7 +3862,7 @@
           "place": "Mainz, Germany (hybrid)",
           "timeline": [
             {
-              "t": "2026-11-01 23:59:59",
+              "t": "2026-11-16 23:59:59",
               "c": "Full papers"
             }
           ]
@@ -3896,7 +3896,7 @@
           "place": "Mainz, Germany (hybrid)",
           "timeline": [
             {
-              "t": "2026-11-01 23:59:59",
+              "t": "2026-11-16 23:59:59",
               "c": "Full papers"
             }
           ]
@@ -3930,7 +3930,7 @@
           "place": "Mainz, Germany (hybrid)",
           "timeline": [
             {
-              "t": "2026-11-01 23:59:59",
+              "t": "2026-11-16 23:59:59",
               "c": "Full papers"
             }
           ]
@@ -9732,7 +9732,7 @@
           "timeline": [
             {
               "t": "2026-11-05 23:59:59",
-              "c": "Submission Deadline (Firm)"
+              "c": "Submission Deadline (Firm); Author notification date is tentative."
             }
           ]
         }
@@ -9969,7 +9969,7 @@
           "place": "London, United Kingdom",
           "timeline": [
             {
-              "t": "2026-10-01 23:59:59",
+              "t": "2026-11-01 23:59:59",
               "c": "Round 1"
             },
             {
