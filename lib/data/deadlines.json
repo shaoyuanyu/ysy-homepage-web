@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-11-01",
+  "fetchedAt": "2026-11-02",
   "source": "ccfddl/ccf-deadlines (allconf.yml)",
   "conferences": [
     {
@@ -1414,7 +1414,7 @@
           "place": "Cairns, Australia",
           "timeline": [
             {
-              "t": "2027-04-20 23:59:59",
+              "t": "2027-04-21 11:59:59",
               "c": "Regular conference papers (LNCS proceedings track)"
             }
           ]
@@ -6553,7 +6553,7 @@
           "place": "New Delhi, India",
           "timeline": [
             {
-              "t": "2026-10-10 23:59:59",
+              "t": "2026-10-25 23:59:59",
               "c": "Submission Deadline"
             }
           ]
@@ -6638,10 +6638,10 @@
           "timeline": [
             {
               "k": "abstract",
-              "t": "2027-01-04 23:59:00"
+              "t": "2027-01-04 23:59:59"
             },
             {
-              "t": "2027-01-11 23:59:00",
+              "t": "2027-01-11 23:59:59",
               "c": "Separate satellite event: August 15-17, 2027, Hengqin, China"
             }
           ]
@@ -7069,7 +7069,7 @@
           "y": 2027,
           "link": "https://2027.ieee-iros.org/",
           "tz": "Etc/GMT+12",
-          "date": "September 26 - October 1, 2027",
+          "date": "September 27 - October 1, 2027",
           "place": "Florence, Italy",
           "timeline": [
             {
@@ -7986,7 +7986,7 @@
           "place": "Bellevue, Washington, USA",
           "timeline": [
             {
-              "t": "2026-10-30 20:00:00"
+              "t": "2026-10-30 21:00:00"
             }
           ]
         }
@@ -8482,11 +8482,11 @@
           "timeline": [
             {
               "t": "2026-05-06 23:59:59",
-              "c": "Summer"
+              "c": "Summer; author rebuttal date tentative; decision is final major-revision"
             },
             {
               "t": "2026-08-19 23:59:59",
-              "c": "Fall"
+              "c": "Fall; decision is final major-revision notification"
             }
           ]
         }
@@ -8554,10 +8554,10 @@
           "timeline": [
             {
               "k": "abstract",
-              "t": "2026-05-05 11:59:00"
+              "t": "2026-05-05 11:59:59"
             },
             {
-              "t": "2026-05-07 11:59:00"
+              "t": "2026-05-07 11:59:59"
             }
           ]
         }
@@ -8578,7 +8578,8 @@
           "place": "Macau, China",
           "timeline": [
             {
-              "t": "2026-06-20 23:59:59"
+              "t": "2026-06-20 23:59:59",
+              "c": "Notification expected to be unchanged"
             }
           ]
         }
@@ -9926,7 +9927,7 @@
           "place": "Durham, England, United Kingdom",
           "timeline": [
             {
-              "t": "2026-10-30 23:59:59",
+              "t": "2026-11-04 23:59:59",
               "c": "First Cycle"
             },
             {
