@@ -254,7 +254,7 @@
           "timeline": [
             {
               "k": "abstract",
-              "t": "2026-03-25 23:59:59"
+              "t": "2026-03-25 23:59:00"
             },
             {
               "t": "2026-04-01 23:59:59"
@@ -5238,10 +5238,10 @@
             },
             {
               "k": "abstract",
-              "t": "2027-01-31 23:59:59"
+              "t": "2027-02-23 23:59:59"
             },
             {
-              "t": "2027-02-20 23:59:59",
+              "t": "2027-03-02 23:59:59",
               "c": "Conference track"
             }
           ]
@@ -7038,7 +7038,8 @@
           "place": "São Paulo, Brazil",
           "timeline": [
             {
-              "t": "2027-02-09 23:59:59"
+              "t": "2027-02-10 11:59:59",
+              "c": "Regular papers; rebuttal April 13-20. Date-only milestones use AoE"
             }
           ]
         }
@@ -10308,6 +10309,19 @@
             {
               "t": "2025-12-19 23:59:59",
               "c": "Submission deadline"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://ifipsec.org/",
+          "tz": "Etc/GMT+12",
+          "date": "June 14-16, 2027",
+          "place": "Linköping University, Linköping, Sweden",
+          "timeline": [
+            {
+              "t": "2026-12-15 23:59:59",
+              "c": "Full papers"
             }
           ]
         }
