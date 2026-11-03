@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-11-02",
+  "fetchedAt": "2026-11-03",
   "source": "ccfddl/ccf-deadlines (allconf.yml)",
   "conferences": [
     {
@@ -284,6 +284,23 @@
             {
               "t": "2026-01-22 22:00:00",
               "c": "Registration / full paper"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://s2027.siggraph.org/",
+          "tz": "UTC",
+          "date": "August 8 - 12, 2027",
+          "place": "Anaheim, California",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-01-21 22:00:00"
+            },
+            {
+              "t": "2027-01-28 22:00:00",
+              "c": "Submissions form & conflicts / paper deadline (upload deadline Jan"
             }
           ]
         }
@@ -5216,11 +5233,16 @@
           "place": "Kuala Lumpur, Malaysia",
           "timeline": [
             {
+              "t": "2026-11-15 23:59:59",
+              "c": "Journal track; initial decision Jan 15, revised submission Apr 1"
+            },
+            {
               "k": "abstract",
               "t": "2027-01-31 23:59:59"
             },
             {
-              "t": "2027-02-20 23:59:59"
+              "t": "2027-02-20 23:59:59",
+              "c": "Conference track"
             }
           ]
         }
