@@ -22,11 +22,32 @@ LOG="$ROOT/.next/dev-server.log"
 # 归属范围：本仓库目录**及其下**。这样恰好盖住 .dsh-worktrees 下的仓库副本，又不会碰到
 # 同族的 ysy-homepage-webmail（webmaild 是一直要跑的后端，cwd 在另一个仓库里）。
 DEV_RE='next dev|next-server|start-standalone'
+
+# 跨平台取进程信息：Linux 读 /proc，macOS 用 lsof / ps（macOS 没有 /proc、ss、setsid）
+pid_cwd() {
+  if [ -d /proc ] && [ -e "/proc/$1/cwd" ]; then
+    readlink "/proc/$1/cwd" 2>/dev/null
+  else
+    lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'
+  fi
+}
+
+pid_cmd() {
+  if [ -r "/proc/$1/cmdline" ]; then
+    tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null
+  else
+    ps -o command= -p "$1" 2>/dev/null
+  fi
+}
+
 port_owner() {
   local pid
-  pid="$(ss -ltnp "sport = :$PORT" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)"
-  if [ -z "$pid" ]; then
-    pid="$(fuser "$PORT/tcp" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$' | head -1)"
+  if command -v lsof >/dev/null 2>&1; then
+    pid="$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1)"
+  fi
+  if [ -z "$pid" ] && command -v ss >/dev/null 2>&1; then
+    # 不用 grep -P：macOS 的 BSD grep 不支持
+    pid="$(ss -ltnp "sport = :$PORT" 2>/dev/null | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -1)"
   fi
   printf '%s' "$pid"
 }
@@ -35,14 +56,15 @@ port_owner() {
 family_pids() {
   local p cwd
   for p in $(pgrep -f "$DEV_RE" 2>/dev/null); do
-    cwd="$(readlink "/proc/$p/cwd" 2>/dev/null)" || continue
+    cwd="$(pid_cwd "$p")"
+    [ -n "$cwd" ] || continue
     case "$cwd" in
     "$ROOT" | "$ROOT"/*) printf '%s\n' "$p" ;;
     esac
   done
 }
 
-cmd_line() { tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null | cut -c1-110; }
+cmd_line() { pid_cmd "$1" | cut -c1-110; }
 
 do_stop() {
   local pids p ppid line owner
@@ -61,11 +83,11 @@ $owner"
       #   这串，会把 next dev 自己误判成 pnpm 包装进程（实测误报）。
       #   ② 别用 `ps -o comm=` 判“是不是 node”——Node 起脚本时会把 comm 改成脚本名，
       #   pnpm 包装进程的 comm 是 **pnpm** 不是 node（实测踩到，导致父进程漏杀）。
-      #   ③ /proc/<pid>/cmdline 是 NUL 分隔的，直接 grep 时 `( |$)` 匹配不到参数分隔处，
-      #   必须先 tr 成空格。
+      #   ③ Linux 的 /proc/<pid>/cmdline 是 NUL 分隔的，直接 grep 时 `( |$)` 匹配不到
+      #   参数分隔处，必须先 tr 成空格（pid_cmd 已统一处理；macOS 走 ps）。
       ppid="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
       if [ -n "${ppid:-}" ] && [ "$ppid" != "1" ] \
-        && tr '\0' ' ' <"/proc/$ppid/cmdline" 2>/dev/null | grep -qE '(^|/)pnpm( |$)'; then
+        && pid_cmd "$ppid" | grep -qE '(^|/)pnpm( |$)'; then
         if kill "$ppid" 2>/dev/null; then echo "  ↑ 收掉父进程 pnpm pid=$ppid"; fi
       fi
       # cmdline 要在 kill 之前读（进程一死 /proc 就没了，会打印出空行）
@@ -110,9 +132,14 @@ do_start() {
 
   mkdir -p "$ROOT/.next"
   : >"$LOG"
-  # 脱离终端启动（setsid --fork 必须带 --fork，否则 ppid 仍挂在工具终端下，
-  # VS Code 会把 dev server 当成「工具返回后仍在跑的后台命令」持续监控并按输出唤醒 agent）
-  (cd "$ROOT" && setsid --fork nohup pnpm dev >"$LOG" 2>&1 </dev/null &)
+  # 脱离终端启动：Linux 用 setsid --fork（否则 ppid 仍挂在工具终端下，VS Code 会把
+  # dev server 当成「工具返回后仍在跑的后台命令」持续监控）；macOS 没有 setsid，
+  # 用 nohup + 独立子 shell 达到同样效果。
+  if command -v setsid >/dev/null 2>&1; then
+    (cd "$ROOT" && setsid --fork nohup pnpm dev >"$LOG" 2>&1 </dev/null &)
+  else
+    (cd "$ROOT" && nohup pnpm dev >"$LOG" 2>&1 </dev/null &)
+  fi
 
   # 就绪探测：让 curl 自己重试，不写 sleep 轮询。用 -fs（不带 -S）：重试期间的
   # "Failed to connect" 是预期噪声，失败时下面自己会给出结论与日志。
@@ -125,19 +152,19 @@ do_start() {
 
   local owner
   owner="$(port_owner)"
-  if [ -z "$owner" ] || [ "$(readlink "/proc/$owner/cwd" 2>/dev/null)" != "$ROOT" ]; then
+  if [ -z "$owner" ] || [ "$(pid_cwd "$owner")" != "$ROOT" ]; then
     echo "!! $PORT 的监听者（pid=${owner:-未知}）cwd 不是 $ROOT —— 你连上的不是本仓库的 dev" >&2
     echo "   $(cmd_line "${owner:-0}")" >&2
     return 1
   fi
   if grep -q 'using available port' "$LOG"; then
-    echo "!! 日志出现端口漂移告警（有别的东西占着 $PORT），本次启动不可信，见 $LOG" >&2
+    echo "!! 日志出现端口漂移告警（有别的东西占着 ${PORT}），本次启动不可信，见 ${LOG}" >&2
     return 1
   fi
 
   echo "$owner" >"$ROOT/.next/dev.pid"
-  echo "· dev 就绪：http://localhost:$PORT （监听 pid=$owner，日志 $LOG）"
-  ps -o pid=,ppid=,tty=,etime=,args= -p "$owner" | cut -c1-110
+  echo "· dev 就绪：http://localhost:${PORT} （监听 pid=${owner}，日志 ${LOG}）"
+  ps -o pid=,ppid=,tty=,etime=,command= -p "$owner" | cut -c1-110
 }
 
 do_status() {
@@ -154,8 +181,8 @@ do_status() {
   if [ -z "$owner" ]; then
     echo "  （空闲）"
   else
-    ps -o pid=,ppid=,tty=,etime=,args= -p "$owner" | cut -c1-110
-    echo "  cwd=$(readlink "/proc/$owner/cwd" 2>/dev/null)"
+    ps -o pid=,ppid=,tty=,etime=,command= -p "$owner" | cut -c1-110
+    echo "  cwd=$(pid_cwd "$owner")"
   fi
   echo "== HTTP =="
   curl -s -o /dev/null -w "  http://localhost:$PORT/login → %{http_code}\n" --max-time 5 \
