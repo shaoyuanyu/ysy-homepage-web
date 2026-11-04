@@ -25,11 +25,16 @@
 - **内容层**: Velite（MDX + YAML，Zod 类型安全校验）
 - **i18n**: next-intl
 - **搜索**: fuse.js
+- **运行时**: Node.js 26 · pnpm 10（`.nvmrc` 已提供）
 - **部署**: Docker · docker-compose · Caddy (HTTPS) · GitHub Actions
 
 ## 🚀 快速开始
 
+需要 Node.js 26（`.nvmrc` 已提供）。Node 26 起官方安装包不再内置 corepack，首次需自行安装 pnpm：
+
 ```bash
+nvm use
+npm install -g pnpm@10.33.0
 pnpm install
 pnpm dev          # http://localhost:3000
 pnpm build        # 生产构建

@@ -1,15 +1,16 @@
 # ---- 依赖阶段 ----
-FROM node:22-alpine AS deps
-RUN corepack enable
+FROM node:26-alpine AS deps
+# Node 26 起官方镜像不再内置 corepack，直接安装与 package.json packageManager 一致的 pnpm
+RUN npm install -g pnpm@10.33.0
 WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 # ---- 构建阶段 ----
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
-# builder 是独立镜像，需重新启用 corepack（pnpm 版本由 packageManager 字段决定）
-RUN corepack enable
+# builder 是独立镜像，需重新安装 pnpm（版本与 package.json 的 packageManager 一致）
+RUN npm install -g pnpm@10.33.0
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # 站点对外 URL（SSG 构建期内联到 sitemap/robots/metadata；HTTP 部署时由 compose 传入 http:// 值）
@@ -21,7 +22,7 @@ RUN pnpm fetch:favicons
 RUN pnpm build
 
 # ---- 运行阶段 ----
-FROM node:22-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
