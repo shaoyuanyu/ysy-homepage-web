@@ -3189,6 +3189,10 @@ const MAIL_DETAIL_HTML = `<p>newsletter body</p>
 <div style="background-color:#ffffff" data-probe="light-card">inherited text on light card <a href="https://example.com" data-probe="light-link">link</a></div>
 <font color="#333333" data-probe="font-tag">font tag text without background</font>
 <table><tbody><tr><td bgcolor="#ffffff" data-probe="bgcolor-cell">bgcolor cell</td></tr></tbody></table>
+<!-- 版式表格：HTML 邮件几乎每张布局表都写 border="0"。它**不该**长出框线——
+     2026-11-05 用户报「点了显示图片还是一堆框框」就是这条规则没排除 border="0"，
+     GitHub 通知信 29 个格子全部描边、连成线框网。 -->
+<table border="0" data-probe="layout-table"><tbody><tr><td data-probe="layout-cell">layout cell</td></tr></tbody></table>
 <!-- 2026-11-05 生产实测的两类「固定宽度」：营销邮件常写死 736px。
      正文区只有 548~610px，不处理就整封横向滚动 / 占位图被撑成 734×734 的空框。 -->
 <table width="736" data-probe="wide-table"><tbody><tr><td>fixed width table</td></tr></tbody></table>
@@ -8481,6 +8485,7 @@ test.describe("站内邮件（/mail）", () => {
         const p = body.querySelector("p")!;
         const h2 = body.querySelector("h2")!;
         const td = body.querySelector("td")!;
+        const layoutCell = body.querySelector('[data-probe="layout-cell"]') as HTMLElement;
         return {
           listStyle: getComputedStyle(li.parentElement!).listStyleType,
           listIndent: parseFloat(getComputedStyle(li.parentElement!).paddingInlineStart),
@@ -8493,6 +8498,8 @@ test.describe("站内邮件（/mail）", () => {
           // `<table border="1">` 是「presentational hint」，权重低于任何作者样式：
           // preflight 的 `* { border: 0 solid }` 会把框线整片清掉
           tdBorder: parseFloat(getComputedStyle(td).borderTopWidth),
+          // 反面：`border="0"` 的版式表格**不许**长出框线（2026-11-05 用户报的「一堆框框」）
+          layoutBorder: parseFloat(getComputedStyle(layoutCell).borderTopWidth),
         };
       });
       expect(shape.listStyle, "列表符号不能被 preflight 清成 none").not.toBe("none");
@@ -8501,6 +8508,7 @@ test.describe("站内邮件（/mail）", () => {
       expect(shape.h2Size, "邮件里的标题要比正文大").toBeGreaterThan(shape.pSize);
       expect(Number(shape.h2Weight), "标题要加粗").toBeGreaterThanOrEqual(600);
       expect(shape.tdBorder, "border=1 的数据表要有框线").toBeGreaterThan(0);
+      expect(shape.layoutBorder, 'border="0" 的版式表格不该长出框线').toBe(0);
     });
 
     /**

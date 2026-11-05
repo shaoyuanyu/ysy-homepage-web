@@ -688,8 +688,13 @@
   font-size: 0.9em;
 }
 /* 数据表：属性式边框（`<table border="1">`）在 preflight 下会整片消失，按本站描边色补回。
-   只在真的声明过 border 的表格上补——版式表格（border="0" / 无属性）不该长出框线 */
-.mail-body :where(table[border]) :where(td, th) {
+   只在真的声明过边框的表格上补——版式表格（`border="0"` / 无属性）不该长出框线。
+   ⚠ 必须显式排除 `border="0"`（2026-11-05 用户报「点了显示图片还是一堆框框」）：
+     `[border]` 只判断**属性存在**，而 HTML 邮件里几乎每张版式表都写 `border="0"`。
+     GitHub 通知信实测 24 张表 / 29 个格子因此全部长出 1px 描边，深色底上连成一张
+     线框网，比正文还抢眼（截图里那些「空框」根本不是图片占位）。
+     修正前后：带边框格子 29 → 1（只剩邮件自己画的那张卡片）。 */
+.mail-body :where(table[border]:not([border="0"])) :where(td, th) {
   border: 1px solid var(--border);
 }
 /* 首尾不留空：容器自己有内边距，再叠一段外边距会让上下看起来不对称 */
