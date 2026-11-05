@@ -726,6 +726,17 @@
 .mail-body :where(table) {
   max-width: 100% !important;
 }
+/* 单元格上的浮动声明一律清掉（2026-11-06 用户报「有些场景显示效果还是不好」）。
+   `td{float:left}` 是邮件写给旧客户端 / Outlook 的并排 hack，现代浏览器里它**不是**
+   "无效"——Chrome 会把 table-cell 直接 blockify（float 不适用于 table-cell，就按块级
+   盒子算），整行的列宽分配随之崩坏。阿里云登录提醒实测：本来是 40 / 720 / 40 三列，
+   崩坏后正文列只剩 244/524（约 1/2），右边空出一大块，文字挤成一条竖线；正文区放宽
+   到 604 时仍有损失（340，正常 369）。同一封邮件在宽容器下却完全正常——典型的
+   「有些场景」。
+   ⚠ 只清 td/th：`div{float:left}` 是有效的两列布局，不能动。 */
+.mail-body :where(td, th) {
+  float: none !important;
+}
 /* 被剥除的远程图片占位：给一个可见的虚线框，点击「显示图片」后换回原图 */
 .mail-body :where(img[data-remote-src]) {
   width: auto !important;

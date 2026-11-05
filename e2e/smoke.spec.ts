@@ -8479,6 +8479,17 @@ test.describe("站内邮件（/mail）", () => {
       //   （dev 下）路由首次编译——2026-10-10 实测过一次 `querySelector(".mail-body")`
       //   拿到 null 的偶发红（单跑必过）。等元素而不是等时间。
       await expect(page.locator(".mail-body")).toBeVisible();
+      // 2026-11-06「有些场景显示效果还是不好」：动态插一张带 `td{float:left}` 的版式表
+      // （阿里云登录提醒同款）。**不放进 MAIL_DETAIL_HTML**——那会让所有用例的正文都长
+      // 一截，把「会话折叠优先于正文滚动」里靠像素判定的「装得下」边界挤破（实测连红）。
+      await page.evaluate(() => {
+        const table = document.createElement("table");
+        table.innerHTML =
+          '<tbody><tr><td width="40" style="float:left" data-probe="float-cell">L</td>' +
+          '<td width="720" data-probe="main-cell">main column</td></tr></tbody>';
+        document.querySelector(".mail-body")!.append(table);
+      });
+      await expect(page.locator('.mail-body [data-probe="main-cell"]')).toBeVisible();
       const shape = await page.evaluate(() => {
         const body = document.querySelector(".mail-body")!;
         const li = body.querySelector("li")!;
@@ -8500,6 +8511,10 @@ test.describe("站内邮件（/mail）", () => {
           tdBorder: parseFloat(getComputedStyle(td).borderTopWidth),
           // 反面：`border="0"` 的版式表格**不许**长出框线（2026-11-05 用户报的「一堆框框」）
           layoutBorder: parseFloat(getComputedStyle(layoutCell).borderTopWidth),
+          // 2026-11-06：`td{float:left}` 不清掉的话 table-cell 被 blockify，列宽分配崩坏
+          floatCellFloat: getComputedStyle(body.querySelector('[data-probe="float-cell"]')!).float,
+          mainColWidth: body.querySelector('[data-probe="main-cell"]')!.getBoundingClientRect().width,
+          decoColWidth: body.querySelector('[data-probe="float-cell"]')!.getBoundingClientRect().width,
         };
       });
       expect(shape.listStyle, "列表符号不能被 preflight 清成 none").not.toBe("none");
@@ -8509,6 +8524,13 @@ test.describe("站内邮件（/mail）", () => {
       expect(Number(shape.h2Weight), "标题要加粗").toBeGreaterThanOrEqual(600);
       expect(shape.tdBorder, "border=1 的数据表要有框线").toBeGreaterThan(0);
       expect(shape.layoutBorder, 'border="0" 的版式表格不该长出框线').toBe(0);
+      // 2026-11-06「有些场景显示效果还是不好」：阿里云通知信正文列被 `td{float:left}`
+      // 压成 244/524，文字挤成一条竖线。浮动的单元格必须先被清掉，列宽才回得去。
+      expect(shape.floatCellFloat, "td 上的 float 必须被清掉（否则 table-cell 会被 blockify）").toBe("none");
+      expect(
+        shape.mainColWidth,
+        "float 清掉后 720 宽的正文列必须明显宽于 40 宽的装饰列",
+      ).toBeGreaterThan(shape.decoColWidth * 3);
     });
 
     /**
