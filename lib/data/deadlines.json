@@ -725,6 +725,21 @@
               "c": "second round"
             }
           ]
+        },
+        {
+          "y": 2027,
+          "link": "https://conferences.sigappfr.org/apweb2027/",
+          "tz": "Etc/GMT+12",
+          "date": "August 29-31, 2027",
+          "place": "Guiyang, China / Online",
+          "timeline": [
+            {
+              "t": "2027-03-07 23:59:59"
+            },
+            {
+              "t": "2027-05-14 23:59:59"
+            }
+          ]
         }
       ]
     },
@@ -1247,7 +1262,7 @@
           "y": 2027,
           "link": "https://conferences.i-cav.org/2027/",
           "tz": "Etc/GMT+12",
-          "date": "July 19-23, 2027",
+          "date": "July 21-23, 2027",
           "place": "KIT, Amsterdam, The Netherlands",
           "timeline": [
             {
@@ -7911,6 +7926,18 @@
             {
               "t": "2026-03-06 23:59:59",
               "c": "Research track regular and short papers; extended deadline"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://mdm2027.github.io/index.html",
+          "tz": "Etc/GMT+12",
+          "date": "June 28 - July 1, 2027",
+          "place": "Hamilton, New Zealand",
+          "timeline": [
+            {
+              "t": "2027-01-25 23:59:59"
             }
           ]
         }
