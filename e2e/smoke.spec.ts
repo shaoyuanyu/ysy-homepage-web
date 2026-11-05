@@ -3184,8 +3184,16 @@ const MAIL_DETAIL_HTML = `<p>newsletter body</p>
 <h2>newsletter heading</h2>
 <ul><li>first item</li><li>second item</li></ul>
 <table border="1"><tbody><tr><td>cell one</td><td>cell two</td></tr></tbody></table>
-<div style="background-color:#1a1a1a;color:#ffffff">dark band</div>
-<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/%3E" data-remote-src="https://tracker.example.com/pixel.png" />
+<div style="background-color:#1a1a1a;color:#ffffff" data-probe="dark-band">dark band</div>
+<p style="color:#333333" data-probe="dark-text">dark text without background</p>
+<div style="background-color:#ffffff" data-probe="light-card">inherited text on light card <a href="https://example.com" data-probe="light-link">link</a></div>
+<font color="#333333" data-probe="font-tag">font tag text without background</font>
+<table><tbody><tr><td bgcolor="#ffffff" data-probe="bgcolor-cell">bgcolor cell</td></tr></tbody></table>
+<!-- 2026-11-05 生产实测的两类「固定宽度」：营销邮件常写死 736px。
+     正文区只有 548~610px，不处理就整封横向滚动 / 占位图被撑成 734×734 的空框。 -->
+<table width="736" data-probe="wide-table"><tbody><tr><td>fixed width table</td></tr></tbody></table>
+<table width="100%" data-probe="pct-table"><tbody><tr><td>percent width table</td></tr></tbody></table>
+<img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/%3E" width="736" data-remote-src="https://tracker.example.com/hero.png" data-probe="wide-img" />
 <img src="https://pics.edu.cn/logo.png" />
 <img src="/api/mail/message/mid%3Aw03%40test.local/attachment/0" />`;
 
@@ -7249,7 +7257,7 @@ test.describe("站内邮件（/mail）", () => {
       ).toBeLessThanOrEqual(0.5);
       await showBtn.click();
       await expect(body.locator("img[data-remote-src]")).toHaveCount(0);
-      await expect(body.locator('img[src="https://tracker.example.com/pixel.png"]')).toHaveCount(1);
+      await expect(body.locator('img[src="https://tracker.example.com/hero.png"]')).toHaveCount(1);
       await expect(page.getByText(/已拦截 1 张外部图片/)).toHaveCount(0);
 
       // 「显示图片并加入白名单」（2026-10-14 用户要求；2026-10-15 收进 caret 菜单）：
@@ -7265,7 +7273,7 @@ test.describe("站内邮件（/mail）", () => {
       await expect(remoteMenu.getByRole("menuitem", { name: "显示图片并加入白名单" })).toBeVisible();
       await remoteMenu.getByRole("menuitem", { name: "显示图片并加入白名单" }).click();
       await expect(body.locator("img[data-remote-src]")).toHaveCount(0);
-      await expect(body.locator('img[src="https://tracker.example.com/pixel.png"]')).toHaveCount(1);
+      await expect(body.locator('img[src="https://tracker.example.com/hero.png"]')).toHaveCount(1);
       await expect.poll(() => calls.whitelist.length).toBe(1);
       expect(calls.whitelist[0]).toMatchObject({ domains: ["edu.cn", "tracker.example.com"] });
       // toast 里报出加了哪些域名——白名单是「记住」而不是「这一次」，用户据此知道记住了什么
@@ -8493,6 +8501,223 @@ test.describe("站内邮件（/mail）", () => {
       expect(shape.h2Size, "邮件里的标题要比正文大").toBeGreaterThan(shape.pSize);
       expect(Number(shape.h2Weight), "标题要加粗").toBeGreaterThanOrEqual(600);
       expect(shape.tdBorder, "border=1 的数据表要有框线").toBeGreaterThan(0);
+    });
+
+    /**
+     * 深色主题下的正文可读性（2026-11-05 用户报「很多邮件都根本看不见字」）。
+     *
+     * HTML 邮件是按**白纸**写的：发件人常写死深色文字（`color:#333` / `<font color>`）
+     * 却不画背景，深色主题下就是「黑底黑字」；反过来，邮件自己画白底、文字沿用
+     * 主题的近白前景色，又是「白底白字」。契约（实现见 `lib/mail/readable-colors.ts`）：
+     *  · 只修**会被背景吃掉**的文字：透明底深色字 → 提亮；白底继承来的近白字 → 压暗；
+     *  · 发件人自己画的深底浅字（本来就看得见）原样保留；
+     *  · 切回浅色主题时内联覆盖逐条还原，不改写发件人原色；
+     *  · 打印前还原（白纸浅字会消失），打印结束后（仍是深色）自动补回。
+     */
+    test("深色主题：正文「深色字 + 透明底」自动提亮，发件人的底色保持原样", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      await page.locator('[data-slot="mail-list"] > li').nth(0).locator("[data-mail-row]").click();
+      await expect(page.locator(".mail-body")).toBeVisible();
+      await expect(page.locator('.mail-body [data-probe="dark-text"]')).toBeVisible();
+
+      /**
+       * 量四处：探针（深色字 + 透明底）/ 白底块（继承主题前景色）/ 白底块里的链接 /
+       * 深色块（发件人自画）。前景色与祖先背景链一律交给 canvas 解析（computed color
+       * 可能是 oklch/lab），背景按 alpha 逐层合成——与「正文对比度达 WCAG AA」用例
+       * 同一套算法。
+       */
+      const sample = () =>
+        page.evaluate(() => {
+          const canvas = document.createElement("canvas");
+          canvas.width = canvas.height = 1;
+          const ctx = canvas.getContext("2d")!;
+          const parse = (value: string) => {
+            ctx.clearRect(0, 0, 1, 1);
+            ctx.fillStyle = "rgb(1 2 3)"; // 哨兵：非法颜色会保持它
+            ctx.fillStyle = value;
+            ctx.fillRect(0, 0, 1, 1);
+            const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+            return [r, g, b, a / 255] as [number, number, number, number];
+          };
+          const over = (top: number[], bottom: number[]) => {
+            const a = top[3] + bottom[3] * (1 - top[3]);
+            return [0, 1, 2].map(
+              (i) => (top[i] * top[3] + bottom[i] * bottom[3] * (1 - top[3])) / a,
+            );
+          };
+          const lum = (c: number[]) => {
+            const ch = (v: number) => {
+              v /= 255;
+              return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+            };
+            return 0.2126 * ch(c[0]) + 0.7152 * ch(c[1]) + 0.0722 * ch(c[2]);
+          };
+          const probe = (el: Element) => {
+            const layers: number[][] = [];
+            let node: Element | null = el;
+            while (node) {
+              const c = parse(getComputedStyle(node).backgroundColor);
+              if (c[3] > 0) {
+                layers.push(c);
+                if (c[3] >= 0.99) break;
+              }
+              node = node.parentElement;
+            }
+            let bg = [0, 0, 0, 1] as number[];
+            for (let i = layers.length - 1; i >= 0; i--) bg = over(layers[i], bg);
+            const fg = parse(getComputedStyle(el).color);
+            const shown = fg[3] < 1 ? over(fg, bg) : fg;
+            const [a, b] = [lum(shown), lum(bg)];
+            return {
+              contrast: (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05),
+              fgLum: a,
+              bgLum: b,
+              inline: (el as HTMLElement).style.getPropertyValue("color"),
+            };
+          };
+          const body = document.querySelector(".mail-body")!;
+          return {
+            probe: probe(body.querySelector('[data-probe="dark-text"]')!),
+            card: probe(body.querySelector('[data-probe="light-card"]')!),
+            link: probe(body.querySelector('[data-probe="light-link"]')!),
+            band: probe(body.querySelector('[data-probe="dark-band"]')!),
+            // 老式模板的两条路径：`<font color>` 与 `bgcolor` 属性——
+            // 它们不是内联 style，必须经 computed style 才看得见（真实邮件里极常见）
+            font: probe(body.querySelector('[data-probe="font-tag"]')!),
+            cell: probe(body.querySelector('[data-probe="bgcolor-cell"]')!),
+          };
+        });
+
+      // 浅色主题（默认跟随系统 = 浅色）：发件人的深色文字本来就看得见，不做任何改写
+      const light = await sample();
+      expect(light.probe.fgLum, "浅色主题下发件人的 #333 应保持深色").toBeLessThan(0.4);
+      expect(light.probe.inline, "浅色主题下不应有归一产生的内联覆盖").toBe("rgb(51, 51, 51)");
+      expect(light.font.inline, "浅色主题下 <font color> 不该被写入内联覆盖").toBe("");
+      expect(light.font.fgLum, "浅色主题下 <font color> 保持原色").toBeLessThan(0.4);
+      expect(light.cell.bgLum, "bgcolor 白底在浅色主题下照旧").toBeGreaterThan(0.9);
+
+      // 切到深色（走真实主题开关，与用户路径一致）
+      await page.getByRole("button", { name: "切换主题" }).click();
+      await page.getByRole("menuitem", { name: "深色" }).click();
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+        .toBe(true);
+      await expect.poll(async () => (await sample()).probe.contrast).toBeGreaterThanOrEqual(4.5);
+
+      const dark = await sample();
+      expect(dark.probe.inline, "深色主题下的提亮必须落到内联样式").not.toBe("rgb(51, 51, 51)");
+      expect(dark.probe.contrast, "提亮后必须达到 WCAG AA").toBeGreaterThanOrEqual(4.5);
+      expect(dark.card.bgLum, "白底块自己的底色不能被改").toBeGreaterThan(0.9);
+      expect(dark.card.fgLum, "白底块里继承来的近白文字必须被压暗").toBeLessThan(0.35);
+      // 链接颜色来自本站的 `a { color: var(--primary) }`（深色主题下近白），压在邮件
+      // 自己的白底块上同样是白底白字——必须一起压暗
+      expect(dark.link.contrast, "白底块里的链接也必须可读").toBeGreaterThanOrEqual(4.5);
+      expect(dark.card.contrast, "白底块里的文字同样要达标").toBeGreaterThanOrEqual(4.5);
+      expect(dark.band.fgLum, "发件人画的深底浅字保持原样").toBeGreaterThan(0.9);
+      expect(dark.band.contrast, "深底浅字本来就是可读的").toBeGreaterThanOrEqual(4.5);
+      // 老式模板：`<font color="#333">` 与 `<td bgcolor="#fff">` 都不是内联 style，
+      // 归一必须按 computed style 读，否则真实邮件里这两类会漏掉
+      expect(dark.font.inline, "<font color> 的提亮必须落到内联样式").not.toBe("");
+      expect(dark.font.contrast, "<font color> 深色字同样要提亮到达标").toBeGreaterThanOrEqual(4.5);
+      expect(dark.cell.bgLum, "bgcolor 白底不能被改").toBeGreaterThan(0.9);
+      expect(dark.cell.contrast, "bgcolor 白底上继承来的文字同样要达标").toBeGreaterThanOrEqual(4.5);
+
+      // 打印：深色提亮必须撤回（白纸浅字会消失）；打印结束后（仍是深色）再补回来
+      await page.evaluate(() => {
+        (window as unknown as { __printSnap?: unknown }).__printSnap = undefined;
+        window.print = () => {
+          const el = document.querySelector<HTMLElement>('[data-probe="dark-text"]');
+          (window as unknown as { __printSnap?: unknown }).__printSnap = {
+            dark: document.documentElement.classList.contains("dark"),
+            color: el ? getComputedStyle(el).color : null,
+          };
+        };
+      });
+      await page.getByRole("button", { name: "更多" }).click();
+      await page.getByRole("menuitem", { name: "打印" }).click();
+      const printSnap = await page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __printSnap?: { dark: boolean; color: string | null };
+            }
+          ).__printSnap,
+      );
+      expect(printSnap?.dark, "打印快照必须已摘掉 dark 标记类").toBe(false);
+      const printLum = await page.evaluate((color) => {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 1;
+        const ctx = canvas.getContext("2d")!;
+        ctx.fillStyle = color!;
+        ctx.fillRect(0, 0, 1, 1);
+        const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+        return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+      }, printSnap?.color);
+      expect(printLum, "打印时正文必须还原成发件人的深色字（白纸浅字会消失）").toBeLessThan(0.35);
+      // window.print 被桩掉后浏览器不会派发 afterprint；手动补一次，验证「打印后补回」
+      await page.evaluate(() => window.dispatchEvent(new Event("afterprint")));
+      await expect.poll(async () => (await sample()).probe.contrast).toBeGreaterThanOrEqual(4.5);
+
+      // 切回浅色：内联覆盖还原成发件人原色（#333），不把浅色主题也改坏
+      await page.getByRole("button", { name: "切换主题" }).click();
+      await page.getByRole("menuitem", { name: "浅色" }).click();
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+        .toBe(false);
+      await expect.poll(async () => (await sample()).probe.inline).toBe("rgb(51, 51, 51)");
+      expect((await sample()).probe.fgLum, "浅色主题下探针恢复发件人原色").toBeLessThan(0.4);
+    });
+
+    /**
+     * 固定宽度邮件与「被拦截的大图」占位（2026-11-05 生产实测）。
+     *
+     * 营销邮件普遍按 736px 写死 `table width` / `img width`，而详情栏正文只有
+     * 548~610px——
+     *  · 不处理：整封信横向滚动（生产实测 Apple 836px、华为 958px），右侧内容要拖着看；
+     *  · `img width="736"` 被剥成 1×1 占位图后仍按**属性宽度**铺开：734×734 的空虚线框，
+     *    整封信被撑长一倍（Apple 那封 2721px → 封顶后 1395px），正文被推到很下面。
+     * 契约：绝对宽度的表格按容器折行（**不做整体缩放**，字号不能变小）、占位图封顶 6rem，
+     * 正文不再横向溢出；`width="100%"` 这类相对宽度必须保持原样（否则整块背景会缩水）。
+     */
+    test("正文：固定宽度邮件不横向溢出；被拦截的大图占位不撑成巨框", async ({ page }) => {
+      const calls = { flags: [] as unknown[], send: [], delete: [] };
+      await stubMailApi(page, calls);
+      const code = new TOTP({ secret: totpSecret! }).generate();
+      await loginWithCode(page, code);
+
+      await gotoReady(page, "/mail");
+      await page.locator('[data-slot="mail-list"] > li').nth(0).locator("[data-mail-row]").click();
+      await expect(page.locator(".mail-body")).toBeVisible();
+
+      const shape = await page.evaluate(() => {
+        const body = document.querySelector<HTMLElement>(".mail-body")!;
+        const rect = (el: Element) => el.getBoundingClientRect();
+        const wide = body.querySelector<HTMLElement>('[data-probe="wide-table"]')!;
+        const pct = body.querySelector<HTMLElement>('[data-probe="pct-table"]')!;
+        const img = body.querySelector<HTMLImageElement>('[data-probe="wide-img"]')!;
+        return {
+          bodyW: body.clientWidth,
+          overflowX: body.scrollWidth - body.clientWidth,
+          wideW: rect(wide).width,
+          pctW: rect(pct).width,
+          imgW: rect(img).width,
+          imgH: rect(img).height,
+          imgAttrW: img.getAttribute("width"),
+          imgMaxW: getComputedStyle(img).maxWidth,
+        };
+      });
+      expect(shape.imgAttrW, "发件人的 width 属性要保留（只改渲染，不改 DOM 语义）").toBe("736");
+      expect(shape.imgW, "占位图必须封顶（734px 的空框会把整封信撑长一倍）").toBeLessThanOrEqual(96);
+      expect(shape.imgH, "占位图高度同样封顶").toBeLessThanOrEqual(96);
+      expect(shape.imgW, "封顶后仍要有可见的虚线框").toBeGreaterThan(0);
+      expect(shape.wideW, "固定宽度表格要按容器折行").toBeLessThanOrEqual(shape.bodyW);
+      expect(shape.pctW, "width=100% 的相对宽度表格要保持相对宽度").toBeGreaterThan(shape.bodyW * 0.8);
+      expect(shape.overflowX, "正文不能横向滚动").toBeLessThanOrEqual(1);
     });
 
     /**

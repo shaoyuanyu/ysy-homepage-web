@@ -699,8 +699,34 @@
 .mail-body > :where(:last-child) {
   margin-block-end: 0;
 }
+/* ---- 固定宽度邮件「流动化」+ 被剥除的远程图片占位（2026-11-05 生产实测）----
+   营销邮件普遍按 600~736px 写死表格宽度，而详情栏正文只有 548~610px：
+   · `table width="736"` → 整封信横向滚动（生产实测 Apple 邮件 836px、华为 958px，
+     右侧内容要拖着看）；
+   · `img width="736"` 的首屏大图被剥成 1×1 占位图后，浏览器仍按**属性宽度**铺开 →
+     一个 734×734 的空虚线框，整封信被撑长一倍（Apple 2721px → 封顶后 1395px），
+     正文被推到很下面（用户报「看不见字」的观感一半来自这里）。
+   ⚠ 不整体缩放（zoom / transform）：736→548 要缩到 0.75，14px 正文变 10.5px，
+     正好违背「读得清」这个目标。改让表格按容器折行，字号不变。
+   ⚠ **只放开绝对宽度**（`width="736"` / `width="600px"`）：`width="100%"` 这类相对
+     宽度必须原样保留，否则整块深色背景会缩水。属性是 presentational hint，且发件人
+     可能同时写在 style 里，故必须 `!important`。
+   ⚠ 占位图的 `width/height` 属性要**压掉**（1×1 追踪像素靠下面的 min-* 保持 2rem，
+     不会缩成看不见的点）；点「显示图片」换回原图时按原尺寸展开——那是一次用户主动
+     触发的重排，可以接受。 */
+.mail-body :where(table[width]:not([width$="%"])) {
+  width: auto !important;
+  max-width: 100% !important;
+}
+.mail-body :where(table) {
+  max-width: 100% !important;
+}
 /* 被剥除的远程图片占位：给一个可见的虚线框，点击「显示图片」后换回原图 */
 .mail-body :where(img[data-remote-src]) {
+  width: auto !important;
+  height: auto !important;
+  max-width: 6rem;
+  max-height: 6rem;
   min-width: 2rem;
   min-height: 2rem;
   border: 1px dashed var(--border);

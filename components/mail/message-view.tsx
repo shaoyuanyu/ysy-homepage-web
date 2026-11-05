@@ -42,6 +42,7 @@ import {
   isPreviewText,
 } from "@/lib/mail/attachment";
 import { formatSize } from "@/lib/mail/format";
+import { normalizeMailBodyColors } from "@/lib/mail/readable-colors";
 import { attachmentUrl, AttachmentPreview } from "@/components/mail/attachment-preview";
 import { CalendarInviteSection } from "@/components/mail/calendar-invite";
 import { JunkIcon, NotJunkIcon } from "@/components/mail/junk-icons";
@@ -279,6 +280,27 @@ export function MessageView({ messageId }: { messageId: string }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [acting, setActing] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  /**
+   * 深色主题下的正文可读性归一（2026-11-05）。
+   *
+   * 邮件 HTML 是按**白纸**写的：发件人常写死深色文字（`color:#333`）却不画背景，
+   * 深色主题下就成了「黑底黑字」；反过来，邮件自画白底时又会继承主题的近白前景色。
+   * 归一规则与取舍见 `lib/mail/readable-colors.ts`。这里只负责生命周期：
+   *   · 正文渲染后（layout effect，绘制前）应用，避免闪一帧不可读的正文；
+   *   · 主题切回浅色 / 换邮件 / 组件卸载时逐条还原；
+   *   · **打印前必须还原**（见 preparePrint——深色下被提亮的文字会在白纸上消失）。
+   */
+  const bodyColorRestoreRef = useRef<null | (() => void)>(null);
+  const applyBodyColors = useCallback(() => {
+    bodyColorRestoreRef.current?.();
+    bodyColorRestoreRef.current = null;
+    const host = bodyRef.current;
+    if (!host || !document.documentElement.classList.contains("dark")) return;
+    bodyColorRestoreRef.current = normalizeMailBodyColors(host);
+  }, []);
+  // 打印结束后要"重新应用"：那时是同步流程、拿不到最新渲染的闭包，用 ref 兜
+  const applyBodyColorsRef = useRef(applyBodyColors);
+  applyBodyColorsRef.current = applyBodyColors;
   /**
    * 我的全部收发地址（webmail 账号 + agent 信箱）：「方向箭头贴到我的地址旁」的
    * 判定源（2026-10-15 头部重排第三轮）。⚠ 必须无条件调用（在 `if (!detail)` 早退
@@ -617,6 +639,27 @@ export function MessageView({ messageId }: { messageId: string }) {
     () => (detail?.html ? { __html: detail.html } : undefined),
     [detail?.html],
   );
+
+  /**
+   * 深色主题正文配色归一的应用点（见 `applyBodyColors` 的说明）。
+   * ⚠ 必须是 layout effect：正文已经挂进 DOM、浏览器还没绘制，用户不会先看到
+   *   「黑底黑字」再被改成可读色。
+   * ⚠ 还要监听 `<html class>`：next-themes 把主题标记类落在**它自己的 effect** 里，
+   *   比子组件的 layout effect 晚——切换主题时这一趟拿到的可能还是旧主题。等标记类
+   *   真正换好再归一 / 还原（打印时临时摘掉 `dark`、结束后补回，也走这条路）。
+   * ⚠ 依赖 `detail?.html` 而不是 detail：详情对象会被「打开即标已读」等操作替换，
+   *   正文没变就不该重跑（重跑会先把颜色还原再算一遍，纯属浪费）。
+   */
+  useLayoutEffect(() => {
+    applyBodyColorsRef.current();
+    const observer = new MutationObserver(() => applyBodyColorsRef.current());
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => {
+      observer.disconnect();
+      bodyColorRestoreRef.current?.();
+      bodyColorRestoreRef.current = null;
+    };
+  }, [detail?.html]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1085,6 +1128,15 @@ export function MessageView({ messageId }: { messageId: string }) {
     const root = document.documentElement;
     const wasDark = root.classList.contains("dark");
     const prevTitle = document.title;
+    /**
+     * 深色归一把「深色字 + 透明底」提亮成了近白（见 applyBodyColors）——
+     * 纸面是白的，这些内联颜色必须在打印前撤回，否则又变成白纸白字。
+     * ⚠ 顺序：先还原正文，再跑 normalizePrintColors 与摘 `html.dark`。
+     */
+    if (wasDark) {
+      bodyColorRestoreRef.current?.();
+      bodyColorRestoreRef.current = null;
+    }
     const restoreColors = normalizePrintColors();
     if (wasDark) root.classList.remove("dark");
     document.title = detail.subject || t("noSubject");
@@ -1092,7 +1144,12 @@ export function MessageView({ messageId }: { messageId: string }) {
       gen: ++printGenRef.current,
       restore: () => {
         restoreColors();
-        if (wasDark) root.classList.add("dark");
+        if (wasDark) {
+          root.classList.add("dark");
+          // 打印期间摘掉过 `dark` 类，React 侧 resolvedTheme 没变、效果不会重跑，
+          // 这里手动把深色正文归一补回来（否则关掉打印对话框后正文又变得不可读）。
+          applyBodyColorsRef.current();
+        }
         document.title = prevTitle;
       },
     };
