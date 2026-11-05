@@ -8723,6 +8723,17 @@ test.describe("站内邮件（/mail）", () => {
       await gotoReady(page, "/mail");
       await page.locator('[data-slot="mail-list"] > li').nth(0).locator("[data-mail-row]").click();
       await expect(page.locator(".mail-body")).toBeVisible();
+      // 2026-11-06「有些场景显示效果还是不好」：除了 table[width]，邮件还会用**内联样式**
+      // 写死块级容器的像素宽（MacKed 验证码信 `min-width:820px` → 正文横向滚出 852px）。
+      // 动态插入，不放进 MAIL_DETAIL_HTML（避免影响其它用例的正文高度）。
+      await page.evaluate(() => {
+        const box = document.createElement("div");
+        box.setAttribute("data-probe", "fixed-card");
+        box.setAttribute("style", "background:#ecf1f3;padding-top:20px;min-width:820px");
+        box.textContent = "fixed width card";
+        document.querySelector(".mail-body")!.append(box);
+      });
+      await expect(page.locator('.mail-body [data-probe="fixed-card"]')).toBeVisible();
 
       const shape = await page.evaluate(() => {
         const body = document.querySelector<HTMLElement>(".mail-body")!;
@@ -8730,6 +8741,7 @@ test.describe("站内邮件（/mail）", () => {
         const wide = body.querySelector<HTMLElement>('[data-probe="wide-table"]')!;
         const pct = body.querySelector<HTMLElement>('[data-probe="pct-table"]')!;
         const img = body.querySelector<HTMLImageElement>('[data-probe="wide-img"]')!;
+        const card = body.querySelector<HTMLElement>('[data-probe="fixed-card"]')!;
         return {
           bodyW: body.clientWidth,
           overflowX: body.scrollWidth - body.clientWidth,
@@ -8739,6 +8751,7 @@ test.describe("站内邮件（/mail）", () => {
           imgH: rect(img).height,
           imgAttrW: img.getAttribute("width"),
           imgMaxW: getComputedStyle(img).maxWidth,
+          cardW: rect(card).width,
         };
       });
       expect(shape.imgAttrW, "发件人的 width 属性要保留（只改渲染，不改 DOM 语义）").toBe("736");
@@ -8747,6 +8760,7 @@ test.describe("站内邮件（/mail）", () => {
       expect(shape.imgW, "封顶后仍要有可见的虚线框").toBeGreaterThan(0);
       expect(shape.wideW, "固定宽度表格要按容器折行").toBeLessThanOrEqual(shape.bodyW);
       expect(shape.pctW, "width=100% 的相对宽度表格要保持相对宽度").toBeGreaterThan(shape.bodyW * 0.8);
+      expect(shape.cardW, "写死 min-width 的块级容器也要跟随容器宽度").toBeLessThanOrEqual(shape.bodyW);
       expect(shape.overflowX, "正文不能横向滚动").toBeLessThanOrEqual(1);
     });
 

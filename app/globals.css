@@ -737,6 +737,15 @@
 .mail-body :where(td, th) {
   float: none !important;
 }
+/* 写死像素宽的**块级容器**同样会把正文撑出容器（2026-11-06，MacKed 验证码信实测：
+   `min-width:820px` 的 div 让正文横向滚出 852px，容器只有 620px）。这些 div 只是
+   邮件的"版心"，让它跟随容器即可。
+   ⚠ `min-width` 必须一起压掉：只写 max-width 对 `min-width:820px` 无效（min 总是赢）。
+   ⚠ 只动 div：table/td 的宽度由上面的表格规则管，img 的占位另有 min-* 兜底。 */
+.mail-body :where(div) {
+  max-width: 100% !important;
+  min-width: 0 !important;
+}
 /* 被剥除的远程图片占位：给一个可见的虚线框，点击「显示图片」后换回原图 */
 .mail-body :where(img[data-remote-src]) {
   width: auto !important;
