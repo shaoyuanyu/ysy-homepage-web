@@ -1236,6 +1236,18 @@
               "t": "2026-02-10 23:59:59"
             }
           ]
+        },
+        {
+          "y": 2027,
+          "link": "https://www.cgs-network.org/casaxr27/",
+          "tz": "UTC",
+          "date": "June 4-6, 2027",
+          "place": "Xi'an, China",
+          "timeline": [
+            {
+              "t": "2027-02-04 23:59:59"
+            }
+          ]
         }
       ]
     },
@@ -4328,6 +4340,22 @@
               "t": "2026-01-30 23:59:59"
             }
           ]
+        },
+        {
+          "y": 2027,
+          "link": "https://fscd-cade.science.ru.nl/",
+          "tz": "Etc/GMT+12",
+          "date": "August 23-26, 2027",
+          "place": "Nijmegen, Netherlands",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-04-19 23:59:59"
+            },
+            {
+              "t": "2027-04-26 23:59:59"
+            }
+          ]
         }
       ]
     },
@@ -6772,7 +6800,7 @@
           "y": 2026,
           "link": "https://2026.aaclnet.org/",
           "tz": "Etc/GMT+12",
-          "date": "Nov 6-10, 2026",
+          "date": "Nov 6-8, 2026",
           "place": "Hengqin, Zhuhai, China (Hybrid)",
           "timeline": [
             {
