@@ -121,7 +121,12 @@
               "t": "2026-10-01 23:59:59"
             },
             {
-              "t": "2026-10-08 23:59:59"
+              "t": "2026-10-08 23:59:59",
+              "c": "Main track"
+            },
+            {
+              "t": "2026-12-11 23:59:59",
+              "c": "AAAI fast track; eligible AAAI-27 Main Technical Track resubmissions"
             }
           ]
         }
@@ -227,7 +232,7 @@
           "y": 2027,
           "link": "https://2027.aclweb.org/",
           "tz": "Etc/GMT+12",
-          "date": "August 17-22, 2027",
+          "date": "August 20-22, 2027",
           "place": "Kyoto, Japan",
           "timeline": [
             {
@@ -2503,7 +2508,7 @@
           "y": 2027,
           "link": "https://cvpr.thecvf.com/Conferences/2027",
           "tz": "Etc/GMT+12",
-          "date": "June 20-25, 2027",
+          "date": "June 22-25, 2027",
           "place": "Seattle, WA, United States",
           "timeline": [
             {
