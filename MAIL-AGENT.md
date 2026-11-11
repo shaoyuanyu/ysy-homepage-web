@@ -202,7 +202,7 @@ agent 对外部数据源与 `me@` 一律只读，落实为：
 
 聚合方式：**默认合并，保留账号视角，需要时可展开。**
 
-- 列表默认是所有账号的合并视图，按时间排。
+- 列表默认是所有账号的合并视图，按时间排。**搜索结果也是同一个顺序**（`date DESC, message_id DESC`，2026-11-11 修：旧实现原样吐 FTS 的扫描序 = 入库序，用户报「搜索时不是按日期排序」）。
 - 每一行、每一封邮件都带账号标识（账号色点 + 账号简称）。**账号归属任何时候都可见，不藏起来。**
 - 工具栏提供账号筛选：全部 / 单个账号。
 - 展开单封邮件时，显示这封信出现在哪几个账号里。
@@ -313,7 +313,7 @@ API 形状（均 JSON，下划线端点为站内代理的转发对象）：
 | `GET /accounts` | 账号列表（注册表字段，不含凭据；每项带 `unread` = INBOX 未读数、`localMessages` = 本地副本总数） |
 | `POST /accounts` | 新增账号：校验 → IMAP 登录 + SMTP verify 连接测试 → 落盘 → 进 ctx（见 4.11） |
 | `DELETE /accounts/:id` | 删除账号：移出注册表与凭据 + 清理本地同步副本/孤儿邮件（服务器邮件不动） |
-| `GET /messages?account=&q=&before=&filter=&direction=` | 合并视图（跨账号按时间倒序，游标分页；`filter` = `unseen`（**收件箱未读**，随 `account` 收窄）/ `flagged` 逗号多值取交集，`direction` = `received` / `sent`，缺省全部；**不带 `folder` 时排除只躺在垃圾文件夹里的邮件**，见 4.2 未读口径） |
+| `GET /messages?account=&q=&before=&filter=&direction=` | 合并视图（跨账号按时间倒序，游标分页；**搜索结果同样按时间倒序**（`date DESC, message_id DESC`，无游标、`limit` = 命中上限，见 4.19）；`filter` = `unseen`（**收件箱未读**，随 `account` 收窄）/ `flagged` 逗号多值取交集，`direction` = `received` / `sent`，缺省全部；**不带 `folder` 时排除只躺在垃圾文件夹里的邮件**，见 4.2 未读口径） |
 | `GET /messages/count?<同 /messages 的参数>` | 「全选」的范围数字（2026-10-11）：与 `/messages` **同一份口径**（`parseListQuery` / `listWhere`）但**不分页**。见 4.19 |
 | `GET /message/:id` | 完整邮件（正文 sanitize + 远程资源占位，见 4.4） |
 | `GET /message/:id/thread` | 同一会话的邮件元数据列表（按时间升序，组装规则见 4.7） |
@@ -968,7 +968,7 @@ API 形状（均 JSON，下划线端点为站内代理的转发对象）：
 
 **已知边界（故意保留，不是待办）：**
 
-- **搜索（`q`）路径的范围上限就是搜索本身的上限**：`/messages` 的搜索视图**没有游标**（`next: null`），FTS 命中数（默认 50）就是它能看到的上限。「搜索里的全部匹配」因此只到那一页为止 —— 两边一致，绝不偷偷动更多。
+- **搜索（`q`）路径的范围上限就是搜索本身的上限**：`/messages` 的搜索视图**没有游标**（`next: null`），FTS 命中数（默认 50，**按日期倒序取最近的 50 封**）就是它能看到的上限。「搜索里的全部匹配」因此只到那一页为止 —— 两边一致，绝不偷偷动更多。
 - **「全部」= 本地索引里的全部，不是服务器上的全部**：索引靠倒序回填逐块补齐（4.17）。新加账号或回填没跑完时，范围只覆盖已同步的部分。要覆盖服务器全集只能走 IMAP 侧 `UID SEARCH`，但那样就拿不到 `readCopiesOf`（收件箱优先）那套已读判据了——两者不可兼得，选了前者。
 - 前端 `allMatching` 是**模态标志**（不是 `count === total`）：逐行选满一页时两者相等，但按钮若显示成「已全部选中」，再点一下的含义（改成动全部匹配）就和图标（☒ 取消）矛盾。退出多选（✕）时模态一并清空——E2E 抓到过「退出再进来按钮已经写着取消全选」。
 
@@ -1177,7 +1177,7 @@ create_event
 | 工具面 | MCP（由 mailagentd 提供） | 任何 harness 都能接 |
 | agent worker 池 | 薄自写（TS + Vercel AI SDK） | 与站点同一语言，直接读 SQLite |
 
-全文索引用 FTS5 的 **trigram 分词器**：中文按字切组，原生支持子串模糊搜索——输入任意连续片段都能命中（如「试通知」命中「面试通知」）。查询 3 个字符以上走索引；1~2 个字符的查询走 `LIKE` 兜底（低频，邮件量级下可接受）。验收条件：实测 better-sqlite3 预编译二进制可用 trigram（能建 `tokenize='trigram'` 的虚拟表并查询）；不可用则改为自行构建 SQLite。索引体积约为文本的 2~3 倍，计入容量预估（见第十节）。
+全文索引用 FTS5 的 **trigram 分词器**：中文按字切组，原生支持子串模糊搜索——输入任意连续片段都能命中（如「试通知」命中「面试通知」）。查询 3 个字符以上走索引；1~2 个字符的查询走 `LIKE` 兜底（低频，邮件量级下可接受）。结果与列表同一排序列 `date DESC, message_id DESC`（`ORDER BY` 与 `LIMIT` 必须在**同一条 SQL** 里：`LIMIT` 是「取最近的 N 封」，拆成「先取 N 封再排」会把最近的信挡在外面）。验收条件：实测 better-sqlite3 预编译二进制可用 trigram（能建 `tokenize='trigram'` 的虚拟表并查询）；不可用则改为自行构建 SQLite。索引体积约为文本的 2~3 倍，计入容量预估（见第十节）。
 
 模型调用经 **Vercel AI SDK**（`ai` 包 + provider 插件）作为统一适配层：OpenAI 兼容家族（DeepSeek / Kimi / GLM / 通义兼容模式）与 Anthropic / Google 走同一套调用接口，换厂家只改配置（base_url / key / model），不逐家接 SDK。`generateObject` + zod schema 直接产出结构化判定，形状即 `judgment` 表；对推理输出（DeepSeek R1 的 `reasoning_content`、Claude 的 thinking）有统一抽象，与 5.2 的「真实推理」衔接。**适配层只解决「调哪家模型」，不是 harness**：不带 shell、不带工具生态、不接管流程，5.3 的边界不受影响。harness 解决的是多 agent 编排，引入时机维持 5.4。
 
@@ -1349,6 +1349,7 @@ IMAP 的规矩是：用不带 PEEK 的取法读正文，服务端会**顺手把�
   · 垃圾 tab 底栏「未读 N」仍是收件箱未读（开关数字已刻意隐藏，底栏这条未收口）
   · 「全选全部匹配」下 `allSeen/allUnseen` 恒 false（未知范围下保守可点）。
 - **追加（2026-10-28，新邮件提醒点得动）**：用户报「收到新邮件时会有弹窗提示，但是点击弹窗似乎并没有反应（不会跳转）（至少在移动端是这样）」。**根因**：`announce()` 只 `toast.add({ title, type })`——这条提醒从来没有点击处理，气泡正文是死的（只有右上角 ✕ 能关）。修法两条路径都去 `/mail`（默认列表视图；宽屏走 `mailNavOptions()`，不整页滚动）：① `data: { onActivate }` 让**整条** toast 可点（`components/ui/toast.tsx` 的 `ToastData` + `ToastList` 统一处理，触摸 / 鼠标），点后 `close(id)`；② `actionProps: { children: t("newMailToastOpen"), onClick }` 渲染可聚焦的「查看」按钮——键盘与读屏只有这一条路（整条 `div` 不可聚焦，只加 ① 等于键盘用户永远点不到）。⚠ 三条防误伤：点 `[data-slot="toast-close"]` 不触发动作（它自己会关）；点 `[data-slot="toast-action"]` 只补关闭、不重复执行（按钮自己已经执行）；**位移超过 10px 一律当滑动**——Base UI 的 swipe 关闭之后浏览器仍会补一个 `click`，不加这条判据就会「滑走一条提醒，顺手跳了页」。i18n 新增 `mail.newMailToastOpen`（查看 / Open）。E2E +1「新邮件提醒：点击 toast 跳到邮箱（移动端）」：390×844 视口、在**首页**触发（邮箱页里跳 `/mail` 看不出 URL 变化），先点 ✕ 断言不跳转且 toast 退场，再点气泡正文断言落到 `/mail`；用 `addInitScript` 数 `mail:unread` 事件等首轮基线建立，避免「改数据时基线还没建好 → 永远不弹」的竞态。后端零改动。
+- **追加（2026-11-11，搜索结果按日期排序）**：用户报「『邮箱』页面里的邮件在搜索时似乎不是按日期排序的」。**根因**：`mail/src/search.ts` 把 `messages_fts` 的扫描结果原样返回（= 入库序），而列表走 `listMessages` 的 `ORDER BY m.date DESC, m.message_id DESC`——两条路顺序不同；搜索视图又没有游标，用户看到的就是一屏乱序。修法：搜索 SQL 与 `messages` 做 JOIN，`ORDER BY m.date DESC, m.message_id DESC LIMIT ?`——**排序与截断必须同一条 SQL**（`limit` 是搜索上限：先取 N 条再排会漏掉最近的信、把更老的拉进来）；trigram 与 1~2 字符 LIKE 两条路径都改。测试：`mail/test/search.test.ts` +1（造库：入库序与日期序刻意相反；两条路径都锁、`limit=1` 必须是最近那封）、`webmail/test/api.test.ts` +1（`q=project` 命中 w05/w06，FTS 扫描序正好是旧→新，旧实现必红）。⚠ **E2E 抓不到这类缺陷**：`stubMailApi` 的列表桩本来就是日期倒序、且由前端原样渲染，症状只存在于真实后端的顺序——回归必须落在 `mail/` + `webmail/` 的单测上。文档：4.2 / 4.6 API 表 / 4.19 / 6.1 同步写明「搜索与列表同口径倒序」。
 - 聚合视图：默认合并、保留账号视角 + 账号筛选（见 4.2）
 
 ### 3. 受限工具面（MCP）
