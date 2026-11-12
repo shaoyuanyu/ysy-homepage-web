@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-11-11",
+  "fetchedAt": "2026-11-12",
   "source": "ccfddl/ccf-deadlines (allconf.yml)",
   "conferences": [
     {
@@ -2199,11 +2199,7 @@
           "place": "Tokyo, Japan",
           "timeline": [
             {
-              "k": "abstract",
-              "t": "2026-11-13 23:59:59"
-            },
-            {
-              "t": "2026-11-25 23:59:59"
+              "t": "2026-12-05 23:59:59"
             }
           ]
         }
