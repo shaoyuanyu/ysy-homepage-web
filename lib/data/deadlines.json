@@ -6110,9 +6110,9 @@
         },
         {
           "y": 2027,
-          "link": "https://ics-conference.org/index.html",
+          "link": "https://klab-ai3.github.io/ics2027/",
           "tz": "Etc/GMT+12",
-          "date": "TBD",
+          "date": "June 5-11, 2027",
           "place": "Atlanta, Georgia, USA",
           "timeline": [
             {
@@ -7021,6 +7021,32 @@
             {
               "t": "2026-05-08 23:59:59",
               "c": "1st Round"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "a": "IntelliSys",
+      "n": "Intelligent Systems Conference",
+      "l": "",
+      "f": "人工智能",
+      "d": "https://dblp.org/db/conf/intellisys/",
+      "years": [
+        {
+          "y": 2027,
+          "link": "https://saiconference.com/IntelliSys",
+          "tz": "Etc/GMT+12",
+          "date": "September 2-3, 2027",
+          "place": "Amsterdam, Netherlands",
+          "timeline": [
+            {
+              "t": "2026-11-15 23:59:59",
+              "c": "Round 1"
+            },
+            {
+              "t": "2026-12-01 23:59:59",
+              "c": "Round 2"
             }
           ]
         }
