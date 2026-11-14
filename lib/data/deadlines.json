@@ -1290,6 +1290,31 @@
       ]
     },
     {
+      "a": "CC",
+      "n": "International Conference on Compiler Construction",
+      "l": "B",
+      "f": "软件工程/系统软件/程序设计语言",
+      "d": "https://dblp.org/db/conf/cc/",
+      "years": [
+        {
+          "y": 2027,
+          "link": "https://conf.researchr.org/home/CC-2027",
+          "tz": "Etc/GMT+12",
+          "date": "March 20-21, 2027",
+          "place": "Salt Lake City, Utah, USA",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2026-12-01 23:59:59"
+            },
+            {
+              "t": "2026-12-03 23:59:59"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "a": "CCC",
       "n": "Computational Complexity Conference",
       "l": "B",
@@ -1898,6 +1923,10 @@
           "timeline": [
             {
               "t": "2026-10-12 23:59:59"
+            },
+            {
+              "t": "2026-12-23 23:59:59",
+              "c": "Commitment deadline for long and short research papers reviewed by"
             }
           ]
         }
