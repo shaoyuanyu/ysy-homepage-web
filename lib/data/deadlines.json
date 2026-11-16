@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-11-15",
+  "fetchedAt": "2026-11-16",
   "source": "ccfddl/ccf-deadlines (allconf.yml)",
   "conferences": [
     {
@@ -1926,7 +1926,7 @@
             },
             {
               "t": "2026-12-23 23:59:59",
-              "c": "Commitment deadline for long and short research papers reviewed by"
+              "c": "Commitment deadline for long research papers reviewed by ARR"
             }
           ]
         }
@@ -5827,6 +5827,22 @@
             {
               "t": "2026-01-29 11:59:59",
               "c": "Paper Submissions Open on OpenReview Jan 08 2026 12:00AM UTC-0"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://icml.cc/Conferences/2027",
+          "tz": "Etc/GMT+12",
+          "date": "August 2-4, 2027",
+          "place": "Riocentro, Rio de Janeiro, Brazil",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-01-14 23:59:59"
+            },
+            {
+              "t": "2027-01-22 23:59:59"
             }
           ]
         }
