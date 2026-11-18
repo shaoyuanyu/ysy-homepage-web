@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-11-17",
+  "fetchedAt": "2026-11-18",
   "source": "ccfddl/ccf-deadlines (allconf.yml)",
   "conferences": [
     {
@@ -11083,6 +11083,18 @@
           "timeline": [
             {
               "t": "2026-06-11 11:59:59"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://atc.sigops.org/2027/",
+          "tz": "Etc/GMT+12",
+          "date": "June 28-July 1, 2027",
+          "place": "Rennes, France",
+          "timeline": [
+            {
+              "t": "2027-01-19 23:59:59"
             }
           ]
         }
