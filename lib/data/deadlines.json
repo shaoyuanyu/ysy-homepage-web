@@ -1852,10 +1852,10 @@
           "timeline": [
             {
               "k": "abstract",
-              "t": "2026-11-16 23:59:59"
+              "t": "2026-11-30 23:59:59"
             },
             {
-              "t": "2026-11-23 23:59:59"
+              "t": "2026-12-07 23:59:59"
             }
           ]
         }
@@ -6223,6 +6223,43 @@
       ]
     },
     {
+      "a": "ICSE-CHASE",
+      "n": "International Conference on Cooperative and Human Aspects of Software",
+      "l": "",
+      "f": "软件工程/系统软件/程序设计语言",
+      "d": "https://dblp.org/db/conf/icse-chase/",
+      "years": [
+        {
+          "y": 2026,
+          "link": "https://conf.researchr.org/home/chase-2026",
+          "tz": "Etc/GMT+12",
+          "date": "April 13-14, 2026",
+          "place": "Rio De Janeiro, Brazil",
+          "timeline": [
+            {
+              "t": "2025-10-23 23:59:59"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://conf.researchr.org/home/chase-2027",
+          "tz": "Etc/GMT+12",
+          "date": "April 26-27, 2027",
+          "place": "Dublin, Ireland",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2026-10-23 23:59:59"
+            },
+            {
+              "t": "2026-10-30 23:59:59"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "a": "ICSME",
       "n": "International Conference on Software Maintenance and Evolution",
       "l": "B",
@@ -8153,6 +8190,31 @@
               "c": "Round 2"
             }
           ]
+        },
+        {
+          "y": 2027,
+          "link": "https://middleware-conf.github.io/2027/",
+          "tz": "Etc/GMT+12",
+          "date": "December 13-17, 2027",
+          "place": "Kyoto, Japan",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2026-11-27 00:00:00"
+            },
+            {
+              "t": "2026-12-04 00:00:00",
+              "c": "Winter cycle"
+            },
+            {
+              "k": "abstract",
+              "t": "2027-05-28 23:59:59"
+            },
+            {
+              "t": "2027-06-04 23:59:59",
+              "c": "Summer cycle"
+            }
+          ]
         }
       ]
     },
@@ -8293,7 +8355,7 @@
             },
             {
               "k": "abstract",
-              "t": "2026-11-12 23:59:59"
+              "t": "2026-11-19 23:59:59"
             },
             {
               "t": "2026-11-19 23:59:59",
@@ -9124,7 +9186,7 @@
           "place": "Wellington, New Zealand",
           "timeline": [
             {
-              "t": "2026-11-20 23:59:59"
+              "t": "2026-12-04 23:59:59"
             }
           ]
         }
