@@ -1453,6 +1453,22 @@
               "t": "2026-02-01 23:59:59"
             }
           ]
+        },
+        {
+          "y": 2027,
+          "link": "https://www.computingfrontiers.org/2027/",
+          "tz": "Etc/GMT+12",
+          "date": "May 25-27, 2027",
+          "place": "Trento, Italy",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-01-18 23:59:59"
+            },
+            {
+              "t": "2027-01-25 23:59:59"
+            }
+          ]
         }
       ]
     },
@@ -4940,6 +4956,22 @@
               "t": "2026-02-05 23:59:59"
             }
           ]
+        },
+        {
+          "y": 2027,
+          "link": "https://hpdc.sci.utah.edu/2027/",
+          "tz": "Etc/GMT+12",
+          "date": "June 7-9, 2027",
+          "place": "Atlanta, GA, USA",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-01-11 23:59:59"
+            },
+            {
+              "t": "2027-01-18 23:59:59"
+            }
+          ]
         }
       ]
     },
@@ -5380,6 +5412,22 @@
             },
             {
               "t": "2026-01-21 23:59:59"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://icdcs2027.icdcs.org/",
+          "tz": "Etc/GMT+12",
+          "date": "July 5-8, 2027",
+          "place": "Melbourne, Australia",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-01-06 23:59:59"
+            },
+            {
+              "t": "2027-01-13 23:59:59"
             }
           ]
         }
@@ -6312,7 +6360,11 @@
           "place": "Toronto, Canada",
           "timeline": [
             {
-              "t": "2027-03-05 23:59:59",
+              "k": "abstract",
+              "t": "2027-02-19 23:59:59"
+            },
+            {
+              "t": "2027-02-26 23:59:59",
               "c": "Research Papers Track"
             }
           ]
@@ -7626,6 +7678,22 @@
               "t": "2025-12-15 17:00:00"
             }
           ]
+        },
+        {
+          "y": 2027,
+          "link": "https://ispass.org/2027/",
+          "tz": "Etc/GMT+12",
+          "date": "May 9-11, 2027",
+          "place": "New York City, USA",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2026-12-11 23:59:59"
+            },
+            {
+              "t": "2026-12-18 23:59:59"
+            }
+          ]
         }
       ]
     },
@@ -8067,6 +8135,22 @@
             },
             {
               "t": "2026-01-22 23:59:59"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://lics.siglog.org/lics27/",
+          "tz": "Etc/GMT+12",
+          "date": "June 21-24, 2027",
+          "place": "Montréal, Canada",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-01-14 23:59:59"
+            },
+            {
+              "t": "2027-01-21 23:59:59"
             }
           ]
         }
@@ -8789,6 +8873,22 @@
           "timeline": [
             {
               "t": "2026-02-28 23:59:59"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://networking.ifip.org/2027/",
+          "tz": "Etc/GMT+12",
+          "date": "June 13-16, 2027",
+          "place": "Dublin, Ireland",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-01-15 23:59:59"
+            },
+            {
+              "t": "2027-01-22 23:59:59"
             }
           ]
         }
@@ -10894,7 +10994,7 @@
           "y": 2027,
           "link": "https://sigir2027.org/",
           "tz": "Etc/GMT+12",
-          "date": "July 18-24, 2027",
+          "date": "July 20-22, 2027",
           "place": "San Jose, California, USA",
           "timeline": [
             {
