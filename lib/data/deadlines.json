@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-11-18",
+  "fetchedAt": "2026-11-19",
   "source": "ccfddl/ccf-deadlines (allconf.yml)",
   "conferences": [
     {
@@ -2999,6 +2999,28 @@
             {
               "t": "2027-01-22 23:59:59",
               "c": "Research Papers"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "a": "ECAF",
+      "n": "European Conference on Algorithmic Fairness",
+      "l": "",
+      "f": "人工智能",
+      "d": "https://dblp.org/db/conf/ewaf/",
+      "years": [
+        {
+          "y": 2027,
+          "link": "https://2027.ecafconference.org/",
+          "tz": "Etc/GMT+12",
+          "date": "August 25-27, 2027",
+          "place": "Vilnius, Lithuania",
+          "timeline": [
+            {
+              "t": "2027-03-25 23:59:59",
+              "c": "Regular full research papers. The 5 May 2027 notification publishes"
             }
           ]
         }
