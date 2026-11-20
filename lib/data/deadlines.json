@@ -938,7 +938,7 @@
           "link": "https://www.asplos-conference.org/asplos2027/cfp/",
           "tz": "Etc/GMT+12",
           "date": "April 11-15, 2027",
-          "place": "Crete, Greece",
+          "place": "Heraklion, Crete, Greece",
           "timeline": [
             {
               "t": "2026-04-15 23:59:59",
@@ -3069,7 +3069,7 @@
           "y": 2027,
           "link": "https://ecai2027.org/",
           "tz": "Etc/GMT+12",
-          "date": "October 2-7, 2027",
+          "date": "October 4-7, 2027",
           "place": "Athens, Greece",
           "timeline": [
             {
@@ -5145,7 +5145,7 @@
           "y": 2027,
           "link": "https://icaps27.icaps-conference.org/",
           "tz": "Etc/GMT+12",
-          "date": "June 27 - July 2, 2027",
+          "date": "June 30 - July 2, 2027",
           "place": "Columbia, SC, USA",
           "timeline": [
             {
@@ -8644,6 +8644,22 @@
               "t": "2026-03-27 23:59:59"
             }
           ]
+        },
+        {
+          "y": 2027,
+          "link": "https://conf.researchr.org/home/models-2027",
+          "tz": "Etc/GMT+12",
+          "date": "TBD",
+          "place": "Budapest, Hungary",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-03-12 23:59:59"
+            },
+            {
+              "t": "2027-03-19 23:59:59"
+            }
+          ]
         }
       ]
     },
@@ -11129,7 +11145,7 @@
           "y": 2027,
           "link": "https://www.sigmetrics.org/sigmetrics2027/",
           "tz": "Etc/GMT+12",
-          "date": "June 7-11, 2027",
+          "date": "June 7-10, 2027",
           "place": "Atlanta, Georgia, USA",
           "timeline": [
             {
@@ -11862,6 +11878,22 @@
               "t": "2026-03-31 23:59:59"
             }
           ]
+        },
+        {
+          "y": 2027,
+          "link": "https://uist.acm.org/2027/",
+          "tz": "Etc/GMT+12",
+          "date": "October 27-29, 2027",
+          "place": "VIECON - Vienna Congress & Convention Center, Vienna, Austria",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-03-31 23:59:59"
+            },
+            {
+              "t": "2027-04-07 23:59:59"
+            }
+          ]
         }
       ]
     },
@@ -12255,11 +12287,15 @@
           "y": 2027,
           "link": "https://2027.worldhaptics.org/",
           "tz": "Etc/GMT+12",
-          "date": "July 12-15, 2027",
+          "date": "July 13-16, 2027",
           "place": "Boston, Massachusetts, USA",
           "timeline": [
             {
+              "k": "abstract",
               "t": "2027-01-29 23:59:59"
+            },
+            {
+              "t": "2027-02-05 23:59:59"
             }
           ]
         }
@@ -12444,7 +12480,7 @@
           "y": 2027,
           "link": "https://wsdm-conference.org/2027/",
           "tz": "Etc/GMT+12",
-          "date": "February 15 - 19, 2027",
+          "date": "February 16 - 18, 2027",
           "place": "Cordis, Hong Kong SAR, China",
           "timeline": [
             {
