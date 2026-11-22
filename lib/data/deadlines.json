@@ -2124,10 +2124,10 @@
           "timeline": [
             {
               "k": "abstract",
-              "t": "2026-11-27 23:59:59"
+              "t": "2026-11-27 23:59:00"
             },
             {
-              "t": "2026-12-04 23:59:59",
+              "t": "2026-12-04 23:59:00",
               "c": "December Cycle"
             },
             {
@@ -6224,7 +6224,7 @@
           "y": 2027,
           "link": "https://klab-ai3.github.io/ics2027/",
           "tz": "Etc/GMT+12",
-          "date": "June 5-11, 2027",
+          "date": "June 5-8, 2027",
           "place": "Atlanta, Georgia, USA",
           "timeline": [
             {
@@ -8613,7 +8613,8 @@
               "t": "2026-11-27 23:59:59"
             },
             {
-              "t": "2026-12-04 23:59:59"
+              "t": "2026-12-04 23:59:59",
+              "c": "Acceptance is conditional on shepherding. March 6 is date-only; clock"
             }
           ]
         }
@@ -10712,7 +10713,8 @@
           "place": "Lisbon, Portugal",
           "timeline": [
             {
-              "t": "2026-11-30 23:59:59"
+              "t": "2026-11-30 23:59:59",
+              "c": "'Acceptance results: February 15 (date-only; AoE end-of-day default"
             }
           ]
         }
