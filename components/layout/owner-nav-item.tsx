@@ -195,16 +195,6 @@ export function OwnerNavItem({ className }: { className?: string }) {
           display:none 不占宽，登录态由 html.owner-logged-in 控制） */}
       <span className={`owner-only ${className ?? ""}`}>
         <Link
-          href="/library"
-          data-slot="button"
-          aria-label={t("library")}
-          className={buttonVariants({ variant: "ghost", size: "sm" })}
-        >
-          <BookOpenIcon data-icon="default" />
-          {t("library")}
-        </Link>
-
-        <Link
           href="/ideas"
           data-slot="button"
           aria-label={t("ideas")}
@@ -241,7 +231,21 @@ export function OwnerNavItem({ className }: { className?: string }) {
         {t("nav")}
       </Link>
 
-      {/* 「邮箱」：主人专属（owner-only），位于「导航」右边、nav 最右端。
+      {/* 「文献库」：主人专属（owner-only），位置固定为「导航」与「邮箱」
+          之间；游客不可见，直接访问 /library 由 requireOwner 守卫。 */}
+      <span className={`owner-only ${className ?? ""}`}>
+        <Link
+          href="/library"
+          data-slot="button"
+          aria-label={t("library")}
+          className={buttonVariants({ variant: "ghost", size: "sm" })}
+        >
+          <BookOpenIcon data-icon="default" />
+          {t("library")}
+        </Link>
+      </span>
+
+      {/* 「邮箱」：主人专属（owner-only），位于「文献库」右边、nav 最右端。
           带 MailIcon（与导航的 CompassIcon 同为图标标识的特殊入口）；
           图标右上角是未读圆点（4.8，绝对定位不占宽度），tooltip 计数挂在
           整个入口链接上（MailEntry 内部） */}
