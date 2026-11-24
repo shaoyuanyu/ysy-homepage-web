@@ -17,7 +17,13 @@ import { cn } from "@/lib/utils";
 
 const statuses: ReadingStatus[] = ["unread", "queued", "reading", "read", "reviewed", "archived"];
 
-export function PaperActions({ paper }: { paper: PaperDetail }) {
+export function PaperActions({
+  paper,
+  collections,
+}: {
+  paper: PaperDetail;
+  collections: { id: string; name: string }[];
+}) {
   const t = useTranslations("library");
   const router = useRouter();
   const fileInput = useRef<HTMLInputElement>(null);
@@ -25,6 +31,7 @@ export function PaperActions({ paper }: { paper: PaperDetail }) {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tag, setTag] = useState("");
+  const [collectionId, setCollectionId] = useState("");
 
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -53,6 +60,17 @@ export function PaperActions({ paper }: { paper: PaperDetail }) {
         body: JSON.stringify({ paths: [tag.trim()] }),
       });
       setTag("");
+    });
+
+  const addToCollection = () =>
+    run(async () => {
+      if (!collectionId) return;
+      await libraryApi(`/papers/${paper.id}/collections`, {
+        method: "POST",
+        body: JSON.stringify({ collectionIds: [collectionId] }),
+      });
+      setCollectionId("");
+      setMessage(t("collectionAdded"));
     });
 
   const upload = (file: File) =>
@@ -106,6 +124,21 @@ export function PaperActions({ paper }: { paper: PaperDetail }) {
         </button>
 
         <div className="ml-auto flex items-center gap-2">
+          <select
+            value={collectionId}
+            disabled={busy}
+            onChange={(event) => setCollectionId(event.target.value)}
+            className="h-8 max-w-40 rounded-md border bg-background px-2 text-xs"
+            aria-label={t("addToCollection")}
+          >
+            <option value="">{t("addToCollection")}</option>
+            {collections.map((collection) => (
+              <option key={collection.id} value={collection.id}>{collection.name}</option>
+            ))}
+          </select>
+          <button type="button" disabled={busy || !collectionId} onClick={() => void addToCollection()} className="h-8 rounded-md border px-2 text-xs disabled:opacity-40">
+            {t("add")}
+          </button>
           <input
             value={tag}
             onChange={(event) => setTag(event.target.value)}
