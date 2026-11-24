@@ -61,7 +61,7 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
         year: year ? Number(year) : undefined,
         cursor,
       });
-      if (unfiled) heading = t("inbox");
+      if (unfiled) heading = t("unfiled");
       else if (starred) heading = t("starred");
       else if (tag) heading = `#${tag}`;
       else if (q) heading = `${t("searchResults")}: ${q}`;

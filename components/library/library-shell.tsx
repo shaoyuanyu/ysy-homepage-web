@@ -6,9 +6,9 @@ import {
   BookOpen,
   ChevronDown,
   ChevronRight,
+  FolderOpen,
   FolderTree,
   Import,
-  Inbox,
   Library,
   Plus,
   Settings2,
@@ -108,7 +108,7 @@ function Sidebar({ collections, views, projects, tags }: Omit<LibraryShellProps,
           href="/library?unfiled=1"
           className="flex items-center gap-2 rounded-md px-2 py-1.5 font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
         >
-          <Inbox className="size-4" /> {t("inbox")}
+          <FolderOpen className="size-4" /> {t("unfiled")}
         </Link>
         <Link
           href="/library?starred=1"
