@@ -48,10 +48,9 @@ async function proxy(req: NextRequest, { params }: { params: Promise<{ path: str
           ? { "If-None-Match": req.headers.get("if-none-match") as string }
           : {}),
       },
-      body:
-        req.method === "GET" || req.method === "HEAD"
-          ? undefined
-          : await req.arrayBuffer(),
+      body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
+      // @ts-expect-error Node fetch 需要 duplex 才能带流式 body
+      duplex: "half",
       cache: "no-store",
       signal: AbortSignal.timeout(300_000),
     });
