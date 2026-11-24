@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import {
   ChevronDownIcon,
+  BookOpenIcon,
   CompassIcon,
   LogInIcon,
   LogOutIcon,
@@ -193,6 +194,16 @@ export function OwnerNavItem({ className }: { className?: string }) {
       {/* 速记/日历：主人专属单列入口（owner-only，SSR 渲染；游客时
           display:none 不占宽，登录态由 html.owner-logged-in 控制） */}
       <span className={`owner-only ${className ?? ""}`}>
+        <Link
+          href="/library"
+          data-slot="button"
+          aria-label={t("library")}
+          className={buttonVariants({ variant: "ghost", size: "sm" })}
+        >
+          <BookOpenIcon data-icon="default" />
+          {t("library")}
+        </Link>
+
         <Link
           href="/ideas"
           data-slot="button"
