@@ -282,7 +282,10 @@
       "references": "参考文献",
       "citations": "被引",
       "noReferences": "暂无参考文献（未同步）",
-      "noCitations": "暂无引用（未同步）"
+      "noCitations": "暂无引用（未同步）",
+      "addToCollection": "加入集合",
+      "add": "加入",
+      "collectionAdded": "已加入集合"
     },
   "navPage": {
     "title": "学术导航",

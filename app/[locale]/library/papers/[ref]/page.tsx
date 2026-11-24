@@ -59,7 +59,8 @@ export default async function PaperPage({ params }: { params: Promise<{ ref: str
     getReferences(paper.id).catch(() => ({ items: [], hasMore: false })),
     getCitations(paper.id).catch(() => ({ items: [], hasMore: false })),
   ]);
-  const collectionNames = flatten(collections);
+  const collectionMap = flatten(collections);
+  const collectionNames = collectionMap;
 
   return (
     <div className="min-w-0 space-y-4">
@@ -102,7 +103,10 @@ export default async function PaperPage({ params }: { params: Promise<{ ref: str
         </div>
       </header>
 
-      <PaperActions paper={paper} />
+      <PaperActions
+        paper={paper}
+        collections={[...collectionMap.entries()].map(([id, name]) => ({ id, name }))}
+      />
 
       <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
         <div className="space-y-4">

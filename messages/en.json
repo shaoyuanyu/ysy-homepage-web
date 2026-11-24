@@ -282,7 +282,10 @@
       "references": "References",
       "citations": "Cited by",
       "noReferences": "No references (not synced)",
-      "noCitations": "No citations (not synced)"
+      "noCitations": "No citations (not synced)",
+      "addToCollection": "Add to collection",
+      "add": "Add",
+      "collectionAdded": "Added to collection"
     },
   "navPage": {
     "title": "Academic Links",
