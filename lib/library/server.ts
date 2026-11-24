@@ -3,6 +3,7 @@ import "server-only";
 import { PAPERDB_URL, paperdbToken } from "@/lib/library/config";
 import type {
   Annotation,
+  CitationPage,
   CollectionNode,
   FulltextSearch,
   ImportItem,
@@ -165,4 +166,13 @@ export function listTokens(): Promise<Token[]> {
 
 export function listExportTokens(): Promise<ExportToken[]> {
   return request<ExportToken[]>("/export-tokens");
+}
+
+
+export function getReferences(paperId: string): Promise<CitationPage> {
+  return request<CitationPage>(`/papers/${paperId}/references`);
+}
+
+export function getCitations(paperId: string): Promise<CitationPage> {
+  return request<CitationPage>(`/papers/${paperId}/citations`);
 }

@@ -6,9 +6,11 @@ import { Link } from "@/lib/i18n/navigation";
 import {
   PaperdbError,
   getAnnotations,
+  getCitations,
   getCollectionTree,
   getPaper,
   getPaperFiles,
+  getReferences,
 } from "@/lib/library/server";
 import {
   authorLine,
@@ -50,10 +52,12 @@ export default async function PaperPage({ params }: { params: Promise<{ ref: str
     );
   }
 
-  const [files, annotations, collections] = await Promise.all([
+  const [files, annotations, collections, references, citations] = await Promise.all([
     getPaperFiles(paper.id).catch(() => []),
     getAnnotations(paper.id).catch(() => []),
     getCollectionTree().catch(() => [] as CollectionNode[]),
+    getReferences(paper.id).catch(() => ({ items: [], hasMore: false })),
+    getCitations(paper.id).catch(() => ({ items: [], hasMore: false })),
   ]);
   const collectionNames = flatten(collections);
 
@@ -165,6 +169,60 @@ export default async function PaperPage({ params }: { params: Promise<{ ref: str
                   </div>
                 ))}
               </div>
+            )}
+          </section>
+
+          <section className="rounded-xl border p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">{t("references")}</h3>
+              <span className="text-xs text-muted-foreground">{references.items.length}</span>
+            </div>
+            {references.items.length === 0 ? (
+              <p className="text-xs text-muted-foreground">{t("noReferences")}</p>
+            ) : (
+              <ul className="space-y-1.5 text-xs">
+                {references.items.map((item) => (
+                  <li key={item.paper?.id ?? item.external?.id} className="flex gap-2">
+                    <span className="text-muted-foreground">{item.paper?.year ?? item.external?.year ?? "—"}</span>
+                    {item.paper ? (
+                      <Link href={`/library/papers/${item.paper.id}`} className="hover:underline">{item.paper.title}</Link>
+                    ) : item.external?.doi ? (
+                      <a href={`https://doi.org/${item.external.doi}`} target="_blank" rel="noreferrer" className="hover:underline">
+                        {item.external.title}
+                      </a>
+                    ) : (
+                      <span>{item.external?.title}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="rounded-xl border p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">{t("citations")}</h3>
+              <span className="text-xs text-muted-foreground">{citations.items.length}</span>
+            </div>
+            {citations.items.length === 0 ? (
+              <p className="text-xs text-muted-foreground">{t("noCitations")}</p>
+            ) : (
+              <ul className="space-y-1.5 text-xs">
+                {citations.items.map((item) => (
+                  <li key={item.paper?.id ?? item.external?.id} className="flex gap-2">
+                    <span className="text-muted-foreground">{item.paper?.year ?? item.external?.year ?? "—"}</span>
+                    {item.paper ? (
+                      <Link href={`/library/papers/${item.paper.id}`} className="hover:underline">{item.paper.title}</Link>
+                    ) : item.external?.doi ? (
+                      <a href={`https://doi.org/${item.external.doi}`} target="_blank" rel="noreferrer" className="hover:underline">
+                        {item.external.title}
+                      </a>
+                    ) : (
+                      <span>{item.external?.title}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
             )}
           </section>
         </div>

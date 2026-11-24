@@ -269,7 +269,11 @@
       "noSearchResults": "没有匹配结果",
       "read": "阅读",
       "inbox": "收件箱",
-      "downloadBibtex": "下载 BibTeX"
+      "downloadBibtex": "下载 BibTeX",
+      "references": "参考文献",
+      "citations": "被引",
+      "noReferences": "暂无参考文献（未同步）",
+      "noCitations": "暂无引用（未同步）"
     },
   "navPage": {
     "title": "学术导航",
