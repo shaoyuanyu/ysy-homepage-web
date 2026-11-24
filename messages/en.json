@@ -269,7 +269,11 @@
       "noSearchResults": "No matches",
       "read": "Read",
       "inbox": "Inbox",
-      "downloadBibtex": "Download BibTeX"
+      "downloadBibtex": "Download BibTeX",
+      "references": "References",
+      "citations": "Cited by",
+      "noReferences": "No references (not synced)",
+      "noCitations": "No citations (not synced)"
     },
   "navPage": {
     "title": "Academic Links",

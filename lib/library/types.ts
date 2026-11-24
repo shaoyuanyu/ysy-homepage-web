@@ -317,3 +317,33 @@ export interface ExportTokenCreated {
   url: string;
   createdAt: string;
 }
+
+
+export interface CitationPaper {
+  id: string;
+  title: string;
+  year: number;
+  citekey: string;
+}
+
+export interface ExternalWork {
+  id: string;
+  title: string;
+  year: number | null;
+  doi: string | null;
+  openalexId: string | null;
+  citedByCount: number | null;
+  resolvedPaperId: string | null;
+}
+
+export interface CitationItem {
+  inLibrary: boolean;
+  paper: CitationPaper | null;
+  external: ExternalWork | null;
+  source: string;
+}
+
+export interface CitationPage {
+  items: CitationItem[];
+  hasMore: boolean;
+}
