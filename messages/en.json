@@ -286,7 +286,12 @@
       "noCitations": "No citations (not synced)",
       "addToCollection": "Add to collection",
       "add": "Add",
-      "collectionAdded": "Added to collection"
+      "collectionAdded": "Added to collection",
+      "importPdf": "Auto-import PDF",
+      "pdfLabel": "PDF file",
+      "pdfHint": "Reads title, authors, DOI/arXiv/ACL ID from PDF metadata/first page; external metadata wins when a DOI is found.",
+      "choosePdf": "Choose a PDF file",
+      "pdfImported": "PDF imported and text extracted"
     },
   "navPage": {
     "title": "Academic Links",
