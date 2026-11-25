@@ -23,6 +23,8 @@ const eslintConfig = [
       // 跑一次本地验收，lint 就会多出 37 条来自 venv 内第三方 JS 的 warning，
       // 把「既有 2 个 warning」的基线淹掉、真问题被噪声盖住。
       ".cache/**",
+      // pdf.js worker 是压缩后的第三方产物，不参与源码 lint。
+      "public/pdf.worker.min.mjs",
     ],
   },
 ];
