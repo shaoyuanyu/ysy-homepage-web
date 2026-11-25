@@ -208,6 +208,7 @@
       "open": "Open",
       "importTitle": "Import papers",
       "importHint": "DOI / arXiv / ACL / OpenReview / DBLP / title; BibTeX keeps citekeys.",
+      "bibtexPasteHint": "Pasted BibTeX is imported as BibTeX automatically; it is not split into identifiers.",
       "importIdentifiers": "Identifiers",
       "importBibtex": "BibTeX file",
       "identifiersLabel": "One identifier per line",
