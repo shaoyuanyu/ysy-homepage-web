@@ -286,7 +286,12 @@
       "noCitations": "暂无引用（未同步）",
       "addToCollection": "加入集合",
       "add": "加入",
-      "collectionAdded": "已加入集合"
+      "collectionAdded": "已加入集合",
+      "importPdf": "PDF 自动导入",
+      "pdfLabel": "PDF 文件",
+      "pdfHint": "从 PDF 元数据/首页自动识别标题、作者、DOI/arXiv/ACL ID；识别到 DOI 时优先使用外部元数据。",
+      "choosePdf": "请选择 PDF 文件",
+      "pdfImported": "PDF 已导入，全文抽取完成"
     },
   "navPage": {
     "title": "学术导航",

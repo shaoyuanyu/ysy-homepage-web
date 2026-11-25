@@ -78,3 +78,10 @@ export async function waitForJob(
   }
   throw new LibraryApiError("任务超时，请稍后在导入记录中查看", 408, "timeout");
 }
+
+
+export function importPdf(file: File): Promise<import("@/lib/library/types").PdfImportCreated> {
+  const form = new FormData();
+  form.append("file", file);
+  return request("/imports/pdf", { method: "POST", body: form });
+}

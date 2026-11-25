@@ -5,10 +5,20 @@ import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { CheckCircle2, CircleAlert, Loader2, Upload } from "lucide-react";
 
-import { LibraryApiError, libraryApi } from "@/lib/library/client";
-import type { ImportCreated, ImportItem, ImportJob } from "@/lib/library/types";
+import {
+  LibraryApiError,
+  importPdf,
+  libraryApi,
+  waitForJob,
+} from "@/lib/library/client";
+import type {
+  ImportCreated,
+  ImportItem,
+  ImportJob,
+  PdfImportCreated,
+} from "@/lib/library/types";
 
-type Mode = "identifiers" | "bibtex";
+type Mode = "identifiers" | "bibtex" | "pdf";
 
 function terminal(status: string): boolean {
   return status === "succeeded" || status === "failed" || status === "cancelled";
@@ -20,6 +30,8 @@ export function ImportForm() {
   const [mode, setMode] = useState<Mode>("identifiers");
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfResult, setPdfResult] = useState<PdfImportCreated | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<ImportJob | null>(null);
@@ -64,7 +76,16 @@ export function ImportForm() {
     setError(null);
     setJob(null);
     setItems([]);
+    setPdfResult(null);
     try {
+      if (mode === "pdf") {
+        if (!pdfFile) throw new LibraryApiError(t("choosePdf"), 400);
+        const result = await importPdf(pdfFile);
+        setPdfResult(result);
+        if (result.jobId) await waitForJob(result.jobId);
+        router.refresh();
+        return;
+      }
       let created: ImportCreated;
       if (mode === "bibtex") {
         if (!file) throw new LibraryApiError(t("chooseBibtex"), 400);
@@ -117,6 +138,13 @@ export function ImportForm() {
         >
           {t("importBibtex")}
         </button>
+        <button
+          type="button"
+          onClick={() => setMode("pdf")}
+          className={`flex-1 rounded-md px-3 py-1.5 ${mode === "pdf" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"}`}
+        >
+          {t("importPdf")}
+        </button>
       </div>
 
       {mode === "identifiers" ? (
@@ -145,6 +173,19 @@ export function ImportForm() {
         </div>
       )}
 
+      {mode === "pdf" && (
+        <div>
+          <label className="mb-1 block text-xs font-medium">{t("pdfLabel")}</label>
+          <input
+            type="file"
+            accept="application/pdf"
+            onChange={(event) => setPdfFile(event.target.files?.[0] ?? null)}
+            className="block w-full rounded-md border bg-background p-2 text-xs"
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">{t("pdfHint")}</p>
+        </div>
+      )}
+
       <button
         type="button"
         onClick={() => void submit()}
@@ -156,6 +197,18 @@ export function ImportForm() {
       </button>
 
       {error && <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div>}
+
+      {pdfResult && (
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs">
+          <p className="font-medium">{t("pdfImported")}</p>
+          <a href={`/library/papers/${pdfResult.paperId}`} className="mt-1 block underline underline-offset-4">
+            {pdfResult.title}
+          </a>
+          {pdfResult.warnings.length > 0 && (
+            <p className="mt-1 text-muted-foreground">{pdfResult.warnings.join("；")}</p>
+          )}
+        </div>
+      )}
 
       {job && (
         <div className="rounded-xl border p-3">

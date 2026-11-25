@@ -347,3 +347,13 @@ export interface CitationPage {
   items: CitationItem[];
   hasMore: boolean;
 }
+
+
+export interface PdfImportCreated {
+  paperId: string;
+  fileId: string;
+  jobId: string | null;
+  created: boolean;
+  title: string;
+  warnings: string[];
+}
