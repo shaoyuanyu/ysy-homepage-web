@@ -23,10 +23,25 @@ async function proxy(req: NextRequest, { params }: { params: Promise<{ path: str
   }
   // CSRF：带 Origin 的非安全请求必须是同源；无 Origin 的 CLI 请求仍由
   // TOTP 会话 + 服务端 cookie 保护。
+  //
+  // ⚠ 生产环境前面有 Nginx：Next 看到的请求可能是 http://127.0.0.1:3000，
+  // 而浏览器的 Origin 是 https://shaoyuanyu.cn。只比较 host（优先取反代
+  // 注入的 x-forwarded-host），不要在协议/内部端口上做严格比较，否则所有
+  // 浏览器写操作都会被误判为 cross_origin。
   if (UNSAFE.has(req.method)) {
     const origin = req.headers.get("origin");
-    if (origin && origin !== req.nextUrl.origin) {
-      return NextResponse.json({ error: "cross_origin" }, { status: 403 });
+    if (origin) {
+      let originHost: string;
+      try {
+        originHost = new URL(origin).host;
+      } catch {
+        return NextResponse.json({ error: "cross_origin" }, { status: 403 });
+      }
+      const forwardedHost = req.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+      const requestHost = forwardedHost || req.headers.get("host") || req.nextUrl.host;
+      if (originHost !== requestHost) {
+        return NextResponse.json({ error: "cross_origin" }, { status: 403 });
+      }
     }
   }
 
