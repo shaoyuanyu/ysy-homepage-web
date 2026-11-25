@@ -33,6 +33,10 @@ services:
       # 与后端共享的内部密钥：代理转发时以 x-internal-key 注入（两侧同值，见 .env.example）
       - WEBMAIL_INTERNAL_KEY=${WEBMAIL_INTERNAL_KEY}
       - MAIL_AGENT_INTERNAL_KEY=${MAIL_AGENT_INTERNAL_KEY}
+      # 文献库后端（paperdb）：服务端到服务端访问，token 只注入 web 容器，
+      # 绝不加 NEXT_PUBLIC_ 前缀；paperdb 必须与 web 同在 personal-homepage_web 网络。
+      - PAPERDB_URL=${PAPERDB_URL:-http://paperdb-api:9720}
+      - PAPERDB_SERVICE_TOKEN=${PAPERDB_SERVICE_TOKEN}
     volumes:
       # 主人私有数据（想法速记等），挂载宿主机目录便于直接查看/备份
       - ./data:/app/data

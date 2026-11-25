@@ -136,6 +136,7 @@ function MailEntry({ className }: { className?: string }) {
 export function OwnerNavItem({ className }: { className?: string }) {
   const t = useTranslations("nav");
   const pathname = usePathname();
+  const inMobileSheet = className?.includes("sheet-stack") ?? false;
 
   // 挂载/路径变化时：恢复缓存登录态 → 后台校验 → 订阅登录/登出事件
   useEffect(() => {
@@ -238,10 +239,15 @@ export function OwnerNavItem({ className }: { className?: string }) {
           href="/library"
           data-slot="button"
           aria-label={t("library")}
+          title={t("library")}
           className={buttonVariants({ variant: "ghost", size: "sm" })}
         >
           <BookOpenIcon data-icon="default" />
-          {t("library")}
+          {/* 1024–1279 的英文登录态顶栏已接近宽度上限：桌面只留图标，
+              1280 起恢复文字；移动端 Sheet 内始终显示文字。 */}
+          <span className={inMobileSheet ? "inline" : "hidden xl:inline"}>
+            {t("library")}
+          </span>
         </Link>
       </span>
 
