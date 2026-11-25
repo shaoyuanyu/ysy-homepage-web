@@ -208,6 +208,7 @@
       "open": "打开",
       "importTitle": "导入文献",
       "importHint": "支持 DOI / arXiv / ACL / OpenReview / DBLP / 标题；BibTeX 会保留 citekey。",
+      "bibtexPasteHint": "检测到 BibTeX 会自动按 BibTeX 导入；不要把它拆成多行标识符。",
       "importIdentifiers": "标识符",
       "importBibtex": "BibTeX 文件",
       "identifiersLabel": "每行一个标识符",

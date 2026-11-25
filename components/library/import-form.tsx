@@ -41,6 +41,24 @@ export function ImportForm() {
     setError(t("importTimeout"));
   };
 
+  const submitBibtexFile = async (bibFile: File): Promise<ImportCreated> => {
+    const form = new FormData();
+    form.append("file", bibFile);
+    const response = await fetch("/api/library/imports/bibtex", {
+      method: "POST",
+      body: form,
+      credentials: "same-origin",
+    });
+    if (!response.ok) {
+      const problem = await response.json().catch(() => ({}));
+      throw new LibraryApiError(
+        problem.detail ?? problem.title ?? t("importFailed"),
+        response.status,
+      );
+    }
+    return (await response.json()) as ImportCreated;
+  };
+
   const submit = async () => {
     setBusy(true);
     setError(null);
@@ -50,18 +68,16 @@ export function ImportForm() {
       let created: ImportCreated;
       if (mode === "bibtex") {
         if (!file) throw new LibraryApiError(t("chooseBibtex"), 400);
-        const form = new FormData();
-        form.append("file", file);
-        const response = await fetch("/api/library/imports/bibtex", {
-          method: "POST",
-          body: form,
-          credentials: "same-origin",
+        created = await submitBibtexFile(file);
+      } else if (
+        // 防止把整段 BibTeX 粘进「标识符」框：那会按行拆成几十个标题检索。
+        // 识别到 BibTeX 头后自动走 BibTeX 端点，而不是逐行 resolve。
+        /^\s*@[A-Za-z]+\s*[{(]/m.test(text)
+      ) {
+        const pasted = new File([text], "pasted.bib", {
+          type: "application/x-bibtex",
         });
-        if (!response.ok) {
-          const problem = await response.json().catch(() => ({}));
-          throw new LibraryApiError(problem.detail ?? problem.title ?? t("importFailed"), response.status);
-        }
-        created = (await response.json()) as ImportCreated;
+        created = await submitBibtexFile(pasted);
       } else {
         const values = text
           .split(/\r?\n/)
@@ -114,6 +130,7 @@ export function ImportForm() {
             className="w-full rounded-md border bg-background p-2 font-mono text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
           <p className="mt-1 text-[11px] text-muted-foreground">{t("identifiersHint")}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">{t("bibtexPasteHint")}</p>
         </div>
       ) : (
         <div>
