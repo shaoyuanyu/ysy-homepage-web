@@ -160,7 +160,7 @@ export function ImportForm() {
           <p className="mt-1 text-[11px] text-muted-foreground">{t("identifiersHint")}</p>
           <p className="mt-1 text-[11px] text-muted-foreground">{t("bibtexPasteHint")}</p>
         </div>
-      ) : (
+      ) : mode === "bibtex" ? (
         <div>
           <label className="mb-1 block text-xs font-medium">{t("bibtexLabel")}</label>
           <input
@@ -171,7 +171,7 @@ export function ImportForm() {
           />
           <p className="mt-1 text-[11px] text-muted-foreground">{t("bibtexHint")}</p>
         </div>
-      )}
+      ) : null}
 
       {mode === "pdf" && (
         <div>
