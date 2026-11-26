@@ -3,12 +3,12 @@
 import { useMemo, useState } from "react";
 import Fuse from "fuse.js";
 import { useLocale, useTranslations } from "next-intl";
-import { SearchIcon } from "lucide-react";
+import { ArrowUpRightIcon, SearchIcon } from "lucide-react";
 
 import { SearchInput } from "@/components/ui/search-input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Link } from "@/lib/i18n/navigation";
 import { formatDate } from "@/lib/utils/format";
@@ -78,33 +78,41 @@ export function BlogSearch({ posts }: { posts: PostMeta[] }) {
 
       {/* 结果 */}
       {results.length === 0 && (
-        <Empty>
+        <Empty className="mx-auto my-auto min-h-56 w-full max-w-sm flex-none rounded-2xl border border-dashed border-border/80 px-6 py-10">
           <EmptyMedia variant="icon">
             <SearchIcon aria-hidden />
           </EmptyMedia>
           <EmptyHeader>
             <EmptyTitle>{t("noResults")}</EmptyTitle>
+            <EmptyDescription>{t("noResultsHint")}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       )}
       <div className="flex flex-col gap-3">
         {results.map((post) => (
-          <Card key={post.slug}>
-            <CardHeader>
-              <CardTitle className="text-base">
-                <Link href={`/blog/${post.slug}`} className="hover:underline">
-                  {post.title}
-                </Link>
-              </CardTitle>
-              <CardDescription className="flex flex-wrap items-center gap-2 text-xs">
-                <time className="font-mono">{formatDate(post.date, locale)}</time>
-                {post.tags.map((tag) => (
-                  <Badge key={tag} variant="outline">{tag}</Badge>
-                ))}
-              </CardDescription>
-              {post.summary && <p className="text-sm text-muted-foreground">{post.summary}</p>}
-            </CardHeader>
-          </Card>
+          <Link key={post.slug} href={`/blog/${post.slug}`} className="group block">
+            <Card className="transition-all duration-200 group-hover:-translate-y-0.5 group-hover:border-foreground/20 group-hover:shadow-sm">
+              <CardHeader>
+                <CardTitle className="flex items-start justify-between gap-3 text-lg">
+                  <span className="line-clamp-2 underline-offset-4 group-hover:underline">
+                    {post.title}
+                  </span>
+                  <ArrowUpRightIcon className="mt-1.5 size-4 shrink-0 text-muted-foreground/50 transition-all group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-foreground" />
+                </CardTitle>
+                {post.summary && (
+                  <p className="line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+                    {post.summary}
+                  </p>
+                )}
+                <CardDescription className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                  <time className="font-mono tabular-nums">{formatDate(post.date, locale)}</time>
+                  {post.tags.map((tag) => (
+                    <Badge key={tag} variant="outline">{tag}</Badge>
+                  ))}
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          </Link>
         ))}
       </div>
     </div>

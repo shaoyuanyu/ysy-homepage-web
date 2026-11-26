@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Loader2, Star, Upload } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import {
   LibraryApiError,
   libraryApi,
@@ -12,17 +13,23 @@ import {
   uploadPdf,
   waitForJob,
 } from "@/lib/library/client";
-import type { PaperDetail, ReadingStatus } from "@/lib/library/types";
+import { READING_STATUSES } from "@/lib/library/constants";
+import type { PaperDetail } from "@/lib/library/types";
 import { cn } from "@/lib/utils";
 
-const statuses: ReadingStatus[] = ["unread", "queued", "reading", "read", "reviewed", "archived"];
+/** 属性选择器（状态/评分/集合）用无边框的 muted chip 风格：与列表筛选栏一致，
+ *  文本框（标签路径）保留 2px 描边——「选择」和「输入」用两种视觉语言区分。 */
+const controlClass =
+  "h-8 max-w-full rounded-lg bg-muted/60 px-2.5 pr-7 text-sm text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/40";
 
 export function PaperActions({
   paper,
   collections,
+  hasFile,
 }: {
   paper: PaperDetail;
   collections: { id: string; name: string }[];
+  hasFile: boolean;
 }) {
   const t = useTranslations("library");
   const router = useRouter();
@@ -62,12 +69,12 @@ export function PaperActions({
       setTag("");
     });
 
-  const addToCollection = () =>
+  const addToCollection = (id: string) =>
     run(async () => {
-      if (!collectionId) return;
+      if (!id) return;
       await libraryApi(`/papers/${paper.id}/collections`, {
         method: "POST",
-        body: JSON.stringify({ collectionIds: [collectionId] }),
+        body: JSON.stringify({ collectionIds: [id] }),
       });
       setCollectionId("");
       setMessage(t("collectionAdded"));
@@ -85,60 +92,72 @@ export function PaperActions({
     });
 
   return (
-    <div className="rounded-xl border bg-card/40 p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <select
-          value={paper.state.status}
-          disabled={busy}
-          onChange={(event) => void updateState({ status: event.target.value })}
-          className="h-8 rounded-md border bg-background px-2 text-xs"
-          aria-label={t("status")}
-        >
-          {statuses.map((status) => (
-            <option key={status} value={status}>{t(`status_${status}`)}</option>
-          ))}
-        </select>
-        <select
-          value={paper.state.rating ?? ""}
-          disabled={busy}
-          onChange={(event) => void updateState({ rating: event.target.value ? Number(event.target.value) : null })}
-          className="h-8 rounded-md border bg-background px-2 text-xs"
-          aria-label={t("rating")}
-        >
-          <option value="">{t("noRating")}</option>
-          {[1, 2, 3, 4, 5].map((value) => (
-            <option key={value} value={value}>{"★".repeat(value)}</option>
-          ))}
-        </select>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void updateState({ starred: !paper.state.starred })}
-          className={cn(
-            "inline-flex h-8 items-center gap-1 rounded-md border px-2 text-xs",
-            paper.state.starred && "border-amber-400/50 bg-amber-400/10 text-amber-700 dark:text-amber-300",
-          )}
-        >
-          <Star className={cn("size-3.5", paper.state.starred && "fill-current")} />
-          {t("starred")}
-        </button>
+    <div className="rounded-xl border bg-card/40 px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-0.5 hidden text-xs text-muted-foreground sm:inline">{t("readingGroup")}</span>
+          <select
+            value={paper.state.status}
+            disabled={busy}
+            onChange={(event) => void updateState({ status: event.target.value })}
+            className={controlClass}
+            aria-label={t("status")}
+          >
+            {READING_STATUSES.map((status) => (
+              <option key={status} value={status}>{t(`status_${status}`)}</option>
+            ))}
+          </select>
+          <select
+            value={paper.state.rating ?? ""}
+            disabled={busy}
+            onChange={(event) =>
+              void updateState({ rating: event.target.value ? Number(event.target.value) : null })
+            }
+            className={controlClass}
+            aria-label={t("rating")}
+          >
+            <option value="">{t("noRating")}</option>
+            {[1, 2, 3, 4, 5].map((value) => (
+              <option key={value} value={value}>{"★".repeat(value)}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            disabled={busy}
+            aria-pressed={paper.state.starred}
+            onClick={() => void updateState({ starred: !paper.state.starred })}
+            className={cn(
+              "inline-flex h-8 items-center gap-1.5 rounded-lg border-2 border-input px-2.5 text-sm transition-colors hover:bg-accent disabled:opacity-50",
+              paper.state.starred &&
+                "border-amber-400/50 bg-amber-400/10 text-amber-700 dark:text-amber-300",
+            )}
+          >
+            <Star className={cn("size-4", paper.state.starred && "fill-current")} />
+            {t("starred")}
+          </button>
+        </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <span aria-hidden className="hidden h-5 w-px bg-border sm:block" />
+
+        <div className="flex flex-wrap items-center gap-1.5 sm:ml-auto">
+          <span className="mr-0.5 hidden text-xs text-muted-foreground sm:inline">{t("organizeGroup")}</span>
           <select
             value={collectionId}
             disabled={busy}
-            onChange={(event) => setCollectionId(event.target.value)}
-            className="h-8 max-w-40 rounded-md border bg-background px-2 text-xs"
+            onChange={(event) => {
+              const id = event.target.value;
+              setCollectionId(id);
+              if (id) void addToCollection(id);
+            }}
+            className={cn(controlClass, "w-32")}
             aria-label={t("addToCollection")}
+            title={t("addToCollection")}
           >
             <option value="">{t("addToCollection")}</option>
             {collections.map((collection) => (
               <option key={collection.id} value={collection.id}>{collection.name}</option>
             ))}
           </select>
-          <button type="button" disabled={busy || !collectionId} onClick={() => void addToCollection()} className="h-8 rounded-md border px-2 text-xs disabled:opacity-40">
-            {t("add")}
-          </button>
           <input
             value={tag}
             onChange={(event) => setTag(event.target.value)}
@@ -146,11 +165,12 @@ export function PaperActions({
               if (event.key === "Enter") void addTag();
             }}
             placeholder={t("addTagPlaceholder")}
-            className="h-8 w-40 rounded-md border bg-background px-2 text-xs"
+            aria-label={t("addTagPlaceholder")}
+            className="h-8 w-28 rounded-lg border-2 border-input bg-transparent px-2 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 dark:bg-input/30"
           />
-          <button type="button" disabled={busy} onClick={() => void addTag()} className="h-8 rounded-md border px-2 text-xs disabled:opacity-40">
+          <Button type="button" variant="outline" size="default" disabled={busy} onClick={() => void addTag()}>
             {t("addTag")}
-          </button>
+          </Button>
           <input
             ref={fileInput}
             type="file"
@@ -162,15 +182,17 @@ export function PaperActions({
               event.target.value = "";
             }}
           />
-          <button
+          <Button
             type="button"
+            size="default"
+            variant={hasFile ? "outline" : "default"}
             disabled={busy}
             onClick={() => fileInput.current?.click()}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
+            className="w-full sm:w-auto"
           >
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
+            {busy ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
             {t("uploadPdf")}
-          </button>
+          </Button>
         </div>
       </div>
       {message && <p className="mt-2 text-xs text-muted-foreground">{message}</p>}

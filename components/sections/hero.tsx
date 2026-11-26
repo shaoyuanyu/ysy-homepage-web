@@ -30,20 +30,23 @@ export function Hero() {
   return (
     <section
       data-display-serif
-      className="flex flex-col-reverse items-center gap-8 py-12 sm:py-16 md:flex-row md:items-start md:gap-12"
+      className="flex flex-col-reverse items-center gap-8 py-10 sm:py-14 md:flex-row md:items-start md:gap-12"
     >
-      {/* 头像 */}
-      <div className="shrink-0">
-        {/* unoptimized：GIF 为动画头像，跳过图片优化以保留动画帧 */}
-        <Image
-          src={profile.avatar}
-          alt={profile.name}
-          width={168}
-          height={168}
-          priority
-          unoptimized
-          className="size-36 rounded-full border object-cover ring-1 ring-border md:size-42"
-        />
+      {/* 头像：外圈留一层很浅的渐变描边，让头像与纯白背景之间有过渡，
+          而不是一条生硬的 1px 边框 */}
+      <div className="relative shrink-0">
+        <div className="rounded-full bg-gradient-to-br from-muted-foreground/25 via-border to-transparent p-1.5">
+          {/* unoptimized：GIF 为动画头像，跳过图片优化以保留动画帧 */}
+          <Image
+            src={profile.avatar}
+            alt={profile.name}
+            width={176}
+            height={176}
+            priority
+            unoptimized
+            className="size-36 rounded-full border border-background bg-muted object-cover md:size-44"
+          />
+        </div>
       </div>
 
       {/* 文字信息 */}
@@ -58,12 +61,16 @@ export function Hero() {
           <h1 className="font-serif text-5xl font-medium sm:text-6xl">
             {profile.name}
           </h1>
-          <p className="font-serif text-lg text-muted-foreground">
-            {profile.title[lang]} · {profile.institution[lang]}
+          {/* 机构名在窄屏单独成行：`硕士生 · 南方科技大学 · 计算机科学与工程系`
+              在 390px 下会把「系」单独挤到第三行（孤儿字），两行反而更好读 */}
+          <p className="font-serif text-lg text-balance text-muted-foreground">
+            {profile.title[lang]}
+            <span aria-hidden className="hidden sm:inline"> · </span>
+            <span className="block sm:inline">{profile.institution[lang]}</span>
           </p>
         </div>
 
-        <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
+        <p className="max-w-xl text-balance text-sm leading-relaxed text-muted-foreground">
           {profile.bio[lang]}
         </p>
 
@@ -78,7 +85,7 @@ export function Hero() {
           </div>
         )}
 
-        {/* 社交链接 */}
+        {/* 社交链接 + 主行动（邮件联系） */}
         <div className="mt-1 flex flex-wrap items-center justify-center gap-1 md:justify-start">
           {socials.map((social) => (
             <a
@@ -100,6 +107,14 @@ export function Hero() {
             className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
           >
             <MailIcon data-icon="default" className="text-base" />
+          </a>
+          <a
+            href={`mailto:${profile.email}`}
+            data-slot="button"
+            className={buttonVariants({ variant: "outline", size: "sm", className: "ml-1.5" })}
+          >
+            <MailIcon data-icon="inline-start" />
+            {t("contact")}
           </a>
         </div>
       </div>

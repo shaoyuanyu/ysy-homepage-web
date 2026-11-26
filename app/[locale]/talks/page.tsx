@@ -3,7 +3,7 @@ import { CalendarIcon, DownloadIcon, ExternalLinkIcon, MapPinIcon, PresentationI
 
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
 import { pageMetadata } from "@/lib/i18n/metadata";
 import { formatDate } from "@/lib/utils/format";
@@ -24,22 +24,23 @@ export default function TalksPage() {
   const sorted = [...talks].sort((a, b) => b.date.localeCompare(a.date));
 
   return (
-    <div className="w-full mx-auto max-w-6xl px-4 py-12 sm:px-6">
-      <div className="mb-8 flex flex-col gap-2">
+    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 py-12 sm:px-6">
+      <header className="mb-8 flex flex-col gap-2">
         <h1 className="text-3xl font-bold">{t("title")}</h1>
         <p className="text-muted-foreground">{t("description")}</p>
-      </div>
+      </header>
 
-{sorted.length === 0 && (
-              <Empty>
-                <EmptyMedia variant="icon">
-                  <PresentationIcon aria-hidden />
-                </EmptyMedia>
-                <EmptyHeader>
-                  <EmptyTitle>{t("empty")}</EmptyTitle>
-                </EmptyHeader>
-              </Empty>
-            )}
+      {sorted.length === 0 && (
+        <Empty className="mx-auto my-auto min-h-60 w-full max-w-sm flex-none rounded-2xl border border-dashed border-border/80 px-6 py-12">
+          <EmptyMedia variant="icon">
+            <PresentationIcon aria-hidden />
+          </EmptyMedia>
+          <EmptyHeader>
+            <EmptyTitle>{t("empty")}</EmptyTitle>
+            <EmptyDescription>{t("emptyHint")}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
 
       <div className="flex flex-col gap-6">
         {sorted.map((talk) => (
@@ -98,11 +99,15 @@ export default function TalksPage() {
           </Card>
         ))}
       </div>
-      <Separator className="my-2" aria-hidden />
-      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <CalendarIcon className="size-3.5" />
-        {sorted.length} talks
-      </p>
+      {sorted.length > 0 && (
+        <>
+          <Separator className="my-2" aria-hidden />
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <CalendarIcon className="size-3.5" />
+            {t("count", { count: sorted.length })}
+          </p>
+        </>
+      )}
     </div>
   );
 }

@@ -79,6 +79,8 @@ groups:
         desc:
           zh: 论文检索智能体
           en: AI paper search agent
+        # 该站点未提供可用 favicon（抓取返回 HTML 兜底页），用通用机器人图标代替
+        icon: lucide:bot
       - name:
           zh: Hugging Face Papers
           en: Hugging Face Papers

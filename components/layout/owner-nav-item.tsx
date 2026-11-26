@@ -133,10 +133,17 @@ function MailEntry({ className }: { className?: string }) {
   );
 }
 
+/** 当前路径是否命中某个入口（与左上导航同一判定规则） */
+function isActivePath(pathname: string, href: string) {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
 export function OwnerNavItem({ className }: { className?: string }) {
   const t = useTranslations("nav");
   const pathname = usePathname();
   const inMobileSheet = className?.includes("sheet-stack") ?? false;
+  const activeItem = (href: string) =>
+    cn(isActivePath(pathname, href) && "bg-muted font-medium text-foreground");
 
   // 挂载/路径变化时：恢复缓存登录态 → 后台校验 → 订阅登录/登出事件
   useEffect(() => {
@@ -199,7 +206,8 @@ export function OwnerNavItem({ className }: { className?: string }) {
           href="/ideas"
           data-slot="button"
           aria-label={t("ideas")}
-          className={buttonVariants({ variant: "ghost", size: "sm" })}
+          aria-current={isActivePath(pathname, "/ideas") ? "page" : undefined}
+          className={buttonVariants({ variant: "ghost", size: "sm", className: activeItem("/ideas") })}
         >
           {t("ideas")}
         </Link>
@@ -208,7 +216,8 @@ export function OwnerNavItem({ className }: { className?: string }) {
           href="/calendar"
           data-slot="button"
           aria-label={t("calendar")}
-          className={buttonVariants({ variant: "ghost", size: "sm" })}
+          aria-current={isActivePath(pathname, "/calendar") ? "page" : undefined}
+          className={buttonVariants({ variant: "ghost", size: "sm", className: activeItem("/calendar") })}
         >
           {t("calendar")}
         </Link>
@@ -222,10 +231,11 @@ export function OwnerNavItem({ className }: { className?: string }) {
         href="/nav"
         data-slot="button"
         aria-label={t("nav")}
+        aria-current={isActivePath(pathname, "/nav") ? "page" : undefined}
         className={buttonVariants({
           variant: "ghost",
           size: "sm",
-          className: className ?? undefined,
+          className: cn(className, activeItem("/nav")),
         })}
       >
         <CompassIcon data-icon="default" />
@@ -240,7 +250,8 @@ export function OwnerNavItem({ className }: { className?: string }) {
           data-slot="button"
           aria-label={t("library")}
           title={t("library")}
-          className={buttonVariants({ variant: "ghost", size: "sm" })}
+          aria-current={isActivePath(pathname, "/library") ? "page" : undefined}
+          className={buttonVariants({ variant: "ghost", size: "sm", className: activeItem("/library") })}
         >
           <BookOpenIcon data-icon="default" />
           {/* 1024–1279 的英文登录态顶栏已接近宽度上限：桌面只留图标，

@@ -9,7 +9,7 @@ export type PaperKind =
   | "dataset"
   | "other";
 
-export type ReadingStatus = "unread" | "queued" | "reading" | "read" | "reviewed" | "archived";
+export type ReadingStatus = "unread" | "queued" | "reading" | "read" | "skimmed";
 
 export interface VenueRef {
   id: string;

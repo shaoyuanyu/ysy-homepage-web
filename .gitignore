@@ -29,8 +29,9 @@
 /build
 /dist
 
-# 构建时生成的导航页站点图标（由 scripts/fetch-favicons.mjs 生成）
-/public/favicons/
+# 导航页站点图标由 scripts/fetch-favicons.mjs 生成，但**随仓库提交**：
+# 镜像构建环境（ACR）访问 Google/iconify 不稳定，若只在构建期抓取，线上会
+# 全部退化成地球图标（2026-11 实测 17 个图标 404）。需要刷新时本地重跑脚本即可。
 
 # CalDAV（Radicale）私有数据：用户文件与日历集合（VPS 生成，不入库）
 /radicale/users

@@ -25,8 +25,14 @@ const TIMEOUT_MS = 15_000;
 
 const GOOGLE_FAVICON = (hostname) =>
   `https://www.google.com/s2/favicons?domain=${hostname}&sz=64`;
-const ICONIFY_SVG = (icon) => `https://api.iconify.design/${icon}.svg`;
-/** Google 未收录时回退：直接抓取站点根路径的 favicon.ico（浏览器按内容解码，扩展名不影响） */
+/** ⚠ iconify 的 API 路径是 `{prefix}/{name}.svg`（斜杠），写成 `{prefix}:{name}` 会全部 404 */
+const ICONIFY_SVG = (icon) => {
+  const [prefix, name] = icon.split(":");
+  return `https://api.iconify.design/${prefix}/${name}.svg`;
+};
+/** Google 未收录时回退：DuckDuckGo 图标服务（覆盖率高、无重定向） */
+const DDG_FAVICON = (hostname) => `https://icons.duckduckgo.com/ip3/${hostname}.ico`;
+/** 最后一档回退：直接抓取站点根路径的 favicon.ico（浏览器按内容解码，扩展名不影响） */
 const SITE_FAVICON = (hostname) => `https://${hostname}/favicon.ico`;
 
 // ---- 极简 YAML 解析：按条目块提取 url / icon（文件结构固定，不引入依赖）----
@@ -103,10 +109,15 @@ async function download(target) {
     try {
       buf = await fetchImage(primary);
     } catch (primaryErr) {
-      // 未配置 icon 时允许回退到站点自身 /favicon.ico
+      // 未配置 icon：Google → DuckDuckGo → 站点自身 /favicon.ico 逐级回退
       if (target.icon) throw primaryErr;
-      console.warn(`  ! ${target.hostname}: ${primaryErr.message}，尝试站点 favicon.ico`);
-      buf = await fetchImage(SITE_FAVICON(target.hostname));
+      console.warn(`  ! ${target.hostname}: ${primaryErr.message}，尝试 DuckDuckGo`);
+      try {
+        buf = await fetchImage(DDG_FAVICON(target.hostname));
+      } catch {
+        console.warn(`  ! ${target.hostname}: DuckDuckGo 也失败，尝试站点 favicon.ico`);
+        buf = await fetchImage(SITE_FAVICON(target.hostname));
+      }
     }
     if (!looksLikeImage(buf, ext)) {
       throw new Error("下载内容不是有效图片（可能是 HTML 兜底页）");

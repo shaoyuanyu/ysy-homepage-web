@@ -75,7 +75,7 @@ export function PublicationsList({
   }, [filtered]);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-1 flex-col gap-6">
       {/* 筛选档位由 PUBLICATION_TYPES 生成（与 schema 单一来源，勿手写档位 ——
           历史上 schema 有 thesis 而 UI 缺这一档，数据合法却筛不出来） */}
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -119,7 +119,7 @@ export function PublicationsList({
       {/* 列表：按年份倒序分组；**同一年内保持数据文件里的先后顺序**（想突出代表作就写在同年前面） */}
       {/* ⚠ 空态文案必须写成 EmptyTitle / EmptyDescription 子元素；写成 <Empty title="…"> 只会落成 DOM 的 title 属性（悬浮提示），用户在页面上看不到任何文字 */}
       {groups.length === 0 && (
-        <Empty>
+        <Empty className="mx-auto my-auto min-h-60 w-full max-w-sm flex-none rounded-2xl border border-dashed border-border/80 px-6 py-12">
           <EmptyMedia variant="icon">
             <BookOpenIcon aria-hidden />
           </EmptyMedia>

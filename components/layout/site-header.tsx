@@ -2,7 +2,8 @@ import { useTranslations } from "next-intl";
 import { MenuIcon } from "lucide-react";
 
 import { Link } from "@/lib/i18n/navigation";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { HeaderNavLink } from "@/components/layout/header-nav-link";
+import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { LocaleSwitcher } from "@/components/layout/locale-switcher";
@@ -62,14 +63,7 @@ export function SiteHeader() {
             ≥1024 才内联展开；中宽度带另有紧凑规格，见 globals.css。 */}
         <nav className="hidden items-center gap-1 lg:flex">
           {navItems.map((item) => (
-            <Link
-              key={item.key}
-              href={item.href}
-              data-slot="button"
-              className={buttonVariants({ variant: "ghost", size: "sm" })}
-            >
-              {t(item.key)}
-            </Link>
+            <HeaderNavLink key={item.key} href={item.href} label={t(item.key)} />
           ))}
           <OwnerNavItem />
         </nav>
@@ -97,15 +91,14 @@ export function SiteHeader() {
               {/* sheet-nav：移动端触控适配（字号放大、全宽行），见 globals.css */}
               <nav className="sheet-nav flex flex-col gap-1 pt-4">
                 {navItems.map((item) => (
-                  <Link
+                  <HeaderNavLink
                     key={item.key}
                     href={item.href}
-                    data-slot="button"
-                    className={buttonVariants({ variant: "ghost", size: "sm", className: "justify-start" })}
-                  >
-                    {t(item.key)}
-                  </Link>
+                    label={t(item.key)}
+                    className="justify-start"
+                  />
                 ))}
+                <div aria-hidden className="my-2 h-px bg-border" />
                 {/* sheet-stack：双布局 span 在 Sheet 内改为纵向堆叠全宽；
                     mobile：移动端「我的」点击后内联展开子项（如退出登录），
                     不用下拉气泡 */}

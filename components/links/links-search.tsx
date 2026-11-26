@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { GlobeIcon, CompassIcon } from "lucide-react";
+import { CompassIcon } from "lucide-react";
 
 import { SearchInput } from "@/components/ui/search-input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Link } from "@/lib/i18n/navigation";
 import type { NavLinkGroup } from "@/lib/data";
@@ -18,14 +18,17 @@ function isInternal(url: string) {
 }
 
 /**
- * 外部链接图标：构建期已由 scripts/fetch-favicons.mjs 缓存到本站
- * /favicons/{hostname}.{svg|png}，运行时不再依赖 Google/iconify 境外服务；
- * 加载失败时兜底为地球图标。
+ * 外部链接图标：已由 scripts/fetch-favicons.mjs 抓取并存放在本站
+ * /favicons/{hostname}.{svg|png}（图标随仓库提交，构建环境不需要联网），
+ * 运行时不再依赖 Google/iconify 境外服务。
+ *
+ * 加载失败时退化为「首字母标记」——比清一色的地球图标更有辨识度，
+ * 也不会让整页看起来像图片全部加载失败。
  *
  * 注意：SSR 输出的 <img> 若在 React hydration 绑定 onError 之前就 404，
  * error 事件会被错过，因此 mount 后还需主动检查一次破图状态。
  */
-function LinkIcon({ link }: { link: NavLink }) {
+function LinkIcon({ link, label }: { link: NavLink; label: string }) {
   const [failed, setFailed] = useState(false);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
@@ -37,30 +40,42 @@ function LinkIcon({ link }: { link: NavLink }) {
   }, []);
 
   if (isInternal(link.url)) {
-    return <CompassIcon className="size-4 shrink-0 text-muted-foreground" />;
+    return (
+      <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border bg-muted/50 text-muted-foreground">
+        <CompassIcon className="size-4" />
+      </span>
+    );
   }
 
-  if (failed) {
-    return <GlobeIcon className="size-4 shrink-0 text-muted-foreground" />;
-  }
-
-  const hostname = new URL(link.url).hostname;
-  const src = link.icon
-    ? `/favicons/${hostname}.svg`
-    : `/favicons/${hostname}.png`;
-
+  // 站点图标位置固定为 28px 方块：有缓存图标显示图标，缺图标时退化为
+  // 「首字母标记」而不是清一色的地球——17 个地球图标会让整页失去辨识度。
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      ref={imgRef}
-      src={src}
-      alt=""
-      width={16}
-      height={16}
-      referrerPolicy="no-referrer"
-      onError={() => setFailed(true)}
-      className="size-4 shrink-0 opacity-80 grayscale transition-all duration-200 group-hover:opacity-100 group-hover:grayscale-0 dark:brightness-0 dark:invert"
-    />
+    // 深色下用白色小方块垫底：缓存图标既有纯黑单色的 simple-icons，也有带白底的
+    // PNG（如 Paper Digest）。统一垫白底是唯一能让两类图标都保持原色的方案；
+    // 若在深色里直接 invert，带白底的图标会变成实心色块；不加处理则黑图标看不见。
+    <span className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted/30 dark:border-white/10 dark:bg-white/90">
+      {failed ? (
+        <span aria-hidden className="text-xs font-semibold uppercase text-muted-foreground">
+          {label.trim().charAt(0)}
+        </span>
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          ref={imgRef}
+          src={
+            link.icon
+              ? `/favicons/${new URL(link.url).hostname}.svg`
+              : `/favicons/${new URL(link.url).hostname}.png`
+          }
+          alt=""
+          width={16}
+          height={16}
+          referrerPolicy="no-referrer"
+          onError={() => setFailed(true)}
+          className="size-4 object-contain"
+        />
+      )}
+    </span>
   );
 }
 
@@ -87,7 +102,7 @@ export function LinksSearch({ groups }: { groups: NavLinkGroup[] }) {
   }, [groups, query, lang]);
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-7">
       <SearchInput
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -109,9 +124,9 @@ export function LinksSearch({ groups }: { groups: NavLinkGroup[] }) {
             )}
 
       {filtered.map((group) => (
-        <section key={group.group[lang]} className="flex flex-col gap-4">
+        <section key={group.group[lang]} className="flex flex-col gap-3">
           <h2 className="text-lg font-semibold tracking-tight">{group.group[lang]}</h2>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
             {group.links.map((link) => {
               /*
                * 整卡即链接（用户预期）：卡片有 hover:border-primary/40 的悬停反馈，
@@ -121,22 +136,23 @@ export function LinksSearch({ groups }: { groups: NavLinkGroup[] }) {
                * 触摸目标。
                */
               const card = (
-                <Card className="h-full transition-colors group-hover:border-primary/40 group-hover:shadow-sm">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                      <LinkIcon link={link} />
-                      <span className="truncate underline-offset-4 group-hover:underline">
+                <Card
+                  size="sm"
+                  className="h-full transition-all duration-200 group-hover:-translate-y-0.5 group-hover:border-foreground/20 group-hover:shadow-sm"
+                >
+                  <div className="flex items-start gap-3 px-3">
+                    <LinkIcon link={link} label={link.name[lang]} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium underline-offset-4 group-hover:underline">
                         {link.name[lang]}
-                      </span>
-                    </CardTitle>
-                  </CardHeader>
-                  {link.desc && (
-                    <CardContent>
-                      <p className="line-clamp-2 text-xs text-muted-foreground">
-                        {link.desc[lang]}
                       </p>
-                    </CardContent>
-                  )}
+                      {link.desc && (
+                        <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                          {link.desc[lang]}
+                        </p>
+                      )}
+                    </div>
+                  </div>
                 </Card>
               );
               return isInternal(link.url) ? (

@@ -27,8 +27,7 @@ export function statusLabel(status: string): string {
       queued: "待读",
       reading: "在读",
       read: "已读",
-      reviewed: "已精读",
-      archived: "归档",
+      skimmed: "已略读",
     }[status] ?? status
   );
 }
