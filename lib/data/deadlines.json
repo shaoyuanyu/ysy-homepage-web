@@ -1,5 +1,5 @@
 {
-  "fetchedAt": "2026-11-24",
+  "fetchedAt": "2026-11-26",
   "source": "ccfddl/ccf-deadlines (allconf.yml)",
   "conferences": [
     {
@@ -1385,10 +1385,10 @@
           "timeline": [
             {
               "k": "abstract",
-              "t": "2026-11-24 23:59:59"
+              "t": "2026-12-01 23:59:59"
             },
             {
-              "t": "2026-12-01 23:59:59"
+              "t": "2026-12-08 23:59:59"
             }
           ]
         }
@@ -8303,10 +8303,10 @@
           "timeline": [
             {
               "k": "abstract",
-              "t": "2026-11-27 00:00:00"
+              "t": "2026-11-27 23:59:00"
             },
             {
-              "t": "2026-12-04 00:00:00",
+              "t": "2026-12-04 23:59:00",
               "c": "Winter cycle"
             },
             {
@@ -9155,7 +9155,7 @@
           "y": 2027,
           "link": "https://2027.splashcon.org/track/splashoopsla2027",
           "tz": "Etc/GMT+12",
-          "date": "October 10-15, 2027",
+          "date": "October 13-15, 2027",
           "place": "Prague, Czechia",
           "timeline": [
             {
@@ -9736,7 +9736,7 @@
           "y": 2027,
           "link": "https://popl27.sigplan.org/",
           "tz": "Etc/GMT+12",
-          "date": "January 10-16, 2027",
+          "date": "January 13-15, 2027",
           "place": "Mexico City",
           "timeline": [
             {
@@ -10424,7 +10424,7 @@
           "y": 2027,
           "link": "https://conf.researchr.org/home/saner-2027",
           "tz": "Etc/GMT+12",
-          "date": "March 9-12, 2027",
+          "date": "March 10-12, 2027",
           "place": "Richmond, Virginia, United States",
           "timeline": [
             {
@@ -10512,7 +10512,7 @@
           "y": 2027,
           "link": "https://satml.org/",
           "tz": "Etc/GMT+12",
-          "date": "May 2027 (exact dates TBD)",
+          "date": "May 4-6, 2027",
           "place": "Reykjavik, Iceland",
           "timeline": [
             {
@@ -11639,6 +11639,23 @@
             },
             {
               "t": "2026-02-15 23:59:59"
+            }
+          ]
+        },
+        {
+          "y": 2027,
+          "link": "https://spmconf2027.github.io/",
+          "tz": "Etc/GMT+12",
+          "date": "June 21-25, 2027",
+          "place": "Singapore",
+          "timeline": [
+            {
+              "k": "abstract",
+              "t": "2027-01-31 23:59:59"
+            },
+            {
+              "t": "2027-02-07 23:59:59",
+              "c": "'First review notification: Mar 26, 2027; revised paper due: Apr 23,"
             }
           ]
         }
