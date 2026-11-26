@@ -161,9 +161,13 @@
     "paper": "论文",
     "venue": "期刊/会议",
     "venueColumn": "发表",
+    "addedColumn": "添加",
     "ccf": "CCF",
     "cas": "中科院",
     "files": "文件",
+    "staged": "调研中",
+    "stagedHint": "在调研工作区中，尚未转入文献库",
+    "stagedCount": "{count} 篇在调研区",
     "selected": "已选 {count} 篇",
     "bulkStatus": "批量改状态",
     "bulkTagPlaceholder": "标签路径",
@@ -386,7 +390,8 @@
     "workspaceNotFound": "调研工作区不存在",
     "workspaceNotFoundHint": "它可能已被关闭或删除。",
     "workspaceLoadFailed": "调研工作区加载失败",
-    "close": "关闭"
+    "close": "关闭",
+    "workspaceActions": "操作"
   },
   "navPage": {
     "title": "学术导航",

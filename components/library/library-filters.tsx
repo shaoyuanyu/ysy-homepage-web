@@ -2,50 +2,51 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { ChevronDown, Search, X } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Search, X } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { READING_STATUSES } from "@/lib/library/constants";
 
 const kinds = ["journal", "conference", "preprint", "book", "book_chapter", "thesis", "tech_report"];
 
 /** 筛选菜单：无边框、纯文字 + chevron，悬停才浮出底色。
  *  筛选栏里「选择」和「输入」用两种语言：搜索是唯一的填入式控件，两个筛选是
- *  轻量菜单——不再是一排描边输入框，避免把工具栏变成表单。 */
-const selectClass =
-  "h-8 appearance-none rounded-lg bg-transparent pl-2 pr-6 text-sm text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50";
+ *  轻量菜单——不再是一排描边输入框，避免把工具栏变成表单。
+ *  弹层用 shadcn Select（Base UI），不再用系统原生下拉。 */
+const selectTriggerClass =
+  "h-8 gap-0.5 rounded-lg border-0 bg-transparent py-0 pl-2 pr-1 text-sm text-muted-foreground shadow-none hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 dark:bg-transparent dark:hover:bg-accent [&_svg]:!size-3.5 [&_svg]:text-muted-foreground/60";
 
-/** 两个筛选项共用同一形态：原生 select 保留平台菜单/键盘行为，
- *  只去掉浏览器默认的边框与箭头，换成统一的 chevron。 */
+const ALL = "all";
+
 function FilterSelect({
   label,
-  allLabel,
+  items,
   value,
   onChange,
-  children,
 }: {
   label: string;
-  allLabel: string;
+  items: { value: string; label: string }[];
   value: string;
   onChange: (value: string) => void;
-  children: ReactNode;
 }) {
   return (
-    <span className="relative inline-flex items-center">
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className={selectClass}
-        aria-label={label}
-      >
-        <option value="">{allLabel}</option>
-        {children}
-      </select>
-      <ChevronDown
-        aria-hidden
-        className="pointer-events-none absolute right-1.5 size-3.5 text-muted-foreground/60"
-      />
-    </span>
+    <Select
+      items={items}
+      value={value || ALL}
+      onValueChange={(next) => onChange(next === ALL ? "" : (next ?? ""))}
+    >
+      <SelectTrigger aria-label={label} className={selectTriggerClass}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent align="start" className="min-w-36">
+        {items.map((item) => (
+          <SelectItem key={item.value} value={item.value} label={item.label}>
+            {item.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -67,7 +68,7 @@ export function LibraryFilters() {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
-      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (target?.closest("input, textarea, select, [data-slot='select-trigger'], [contenteditable='true']")) return;
       event.preventDefault();
       inputRef.current?.focus();
       inputRef.current?.select();
@@ -167,28 +168,25 @@ export function LibraryFilters() {
         <div className="flex flex-wrap items-center gap-1">
           <FilterSelect
             label={t("status")}
-            allLabel={t("statusAll")}
             value={searchParams.get("status") ?? ""}
+            items={[
+              { value: ALL, label: t("statusAll") },
+              ...READING_STATUSES.map((status) => ({
+                value: status,
+                label: t(`status_${status}`),
+              })),
+            ]}
             onChange={(value) => setParam("status", value)}
-          >
-            {READING_STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {t(`status_${status}`)}
-              </option>
-            ))}
-          </FilterSelect>
+          />
           <FilterSelect
             label={t("kind")}
-            allLabel={t("kindAll")}
             value={searchParams.get("kind") ?? ""}
+            items={[
+              { value: ALL, label: t("kindAll") },
+              ...kinds.map((kind) => ({ value: kind, label: t(`kind_${kind}`) })),
+            ]}
             onChange={(value) => setParam("kind", value)}
-          >
-            {kinds.map((kind) => (
-              <option key={kind} value={kind}>
-                {t(`kind_${kind}`)}
-              </option>
-            ))}
-          </FilterSelect>
+          />
           {searchParams.size > 0 && (
             <button
               type="button"

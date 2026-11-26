@@ -7,6 +7,7 @@ import { FolderPlus, FolderTree } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DeleteDialog } from "@/components/library/delete-dialog";
 import { RenameDialog } from "@/components/library/rename-dialog";
 import { Link } from "@/lib/i18n/navigation";
@@ -74,6 +75,12 @@ export function CollectionsPanel({ tree }: { tree: CollectionNode[] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const options = flatten(tree);
+  // Base UI Select 不接受「空字符串 = 未选」的语义，用 root 作为哨兵值
+  const root = "root";
+  const parentItems = [
+    { value: root, label: t("rootCollection") },
+    ...options.map((item) => ({ value: item.id, label: item.label })),
+  ];
 
   const create = async () => {
     if (!name.trim()) return;
@@ -117,15 +124,22 @@ export function CollectionsPanel({ tree }: { tree: CollectionNode[] }) {
             placeholder={t("collectionName")}
             aria-label={t("collectionName")}
           />
-          <select
-            value={parent}
-            onChange={(event) => setParent(event.target.value)}
-            aria-label={t("rootCollection")}
-            className="h-8 w-full rounded-lg border-2 border-input bg-transparent px-2 pr-6 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 dark:bg-input/30"
+          <Select
+            items={parentItems}
+            value={parent || root}
+            onValueChange={(next) => setParent(next === root ? "" : (next ?? ""))}
           >
-            <option value="">{t("rootCollection")}</option>
-            {options.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
+            <SelectTrigger aria-label={t("rootCollection")} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start">
+              {parentItems.map((item) => (
+                <SelectItem key={item.value} value={item.value} label={item.label}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button
             type="button"
             variant={name.trim() ? "default" : "outline"}

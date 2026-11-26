@@ -83,7 +83,17 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
     } else if (view) {
       const data = await getView(view);
       heading = data.name;
-      page = await listPapers({ view, q, status, kind, starred: starred || undefined, unfiled: unfiled || undefined, year: year ? Number(year) : undefined, cursor });
+      page = await listPapers({
+        view,
+        q,
+        status,
+        kind,
+        starred: starred || undefined,
+        unfiled: unfiled || undefined,
+        year: year ? Number(year) : undefined,
+        cursor,
+        includeStaged: true,
+      });
     } else {
       page = await listPapers({
         q,
@@ -95,6 +105,7 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
         unfiled: unfiled || undefined,
         year: year ? Number(year) : undefined,
         cursor,
+        includeStaged: true,
       });
       if (unfiled) heading = t("unfiled");
       else if (starred) heading = t("starred");

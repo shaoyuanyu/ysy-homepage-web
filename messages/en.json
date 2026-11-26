@@ -161,9 +161,13 @@
     "paper": "Paper",
     "venue": "Venue",
     "venueColumn": "Venue",
+    "addedColumn": "Added",
     "ccf": "CCF",
     "cas": "CAS",
     "files": "Files",
+    "staged": "In workspace",
+    "stagedHint": "Staged in a research workspace; not in the library yet",
+    "stagedCount": "{count, plural, one {# in workspace} other {# in workspaces}}",
     "selected": "{count} selected",
     "bulkStatus": "Set status",
     "bulkTagPlaceholder": "tag path",
@@ -386,7 +390,8 @@
     "workspaceNotFound": "Research workspace not found",
     "workspaceNotFoundHint": "It may have been closed or deleted.",
     "workspaceLoadFailed": "Failed to load the research workspace",
-    "close": "Close"
+    "close": "Close",
+    "workspaceActions": "Actions"
   },
   "navPage": {
     "title": "Academic Links",

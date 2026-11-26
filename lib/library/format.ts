@@ -12,6 +12,16 @@ export function venueLine(venue: VenueRef | null): string {
   return venue.edition ? `${name} ${venue.edition.year}` : name;
 }
 
+/** 列表里的发表信息：`CCS '24`。优先用 venue 缩写；年份取届次年份，
+ *  没有届次时退回论文年份，统一成两位（`'24`）——列表里 venue 全名和
+ *  「ICML 2024」两种写法混排会让这一列高度不齐、也看不出会议缩写。 */
+export function venueShort(venue: VenueRef | null, fallbackYear?: number): string | null {
+  if (!venue) return null;
+  const year = venue.edition?.year ?? fallbackYear;
+  const name = (venue.abbrev ?? venue.fullName).replace(/\s+(19|20)\d{2}\s*$/, "");
+  return year ? `${name} '${String(year).slice(-2)}` : name;
+}
+
 export function ccfLevel(paper: PaperSummary): string | null {
   return paper.evaluation.ccf?.level ?? null;
 }
@@ -63,6 +73,19 @@ export function shortDate(value: string | null | undefined): string {
     month: "2-digit",
     day: "2-digit",
   }).format(date);
+}
+
+/** 列表里的添加日期：`2026-11-20`。固定 ISO 形态而非 locale 变体，
+ *  让中英两种语言下的列宽与对齐一致（表格列不适合按语言变宽）。
+ *  按 UTC 取日：容器是 UTC，浏览器可能是 UTC+8；若按本地时区格式化，
+ *  SSR 与水合会算出不同的日期（React 文本不匹配），也让列表与详情页的
+ *  服务端日期（`shortDate`）口径不一致。 */
+export function compactDate(value: string | null | undefined): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
 }
 
 export function tagLabel(path: string): string {

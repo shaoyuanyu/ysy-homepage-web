@@ -82,6 +82,7 @@ function query(params: Record<string, string | number | boolean | null | undefin
 export function listPapers(params: {
   q?: string;
   view?: string;
+  workspace?: string;
   collection?: string;
   tag?: string;
   status?: string;
@@ -90,6 +91,7 @@ export function listPapers(params: {
   venueId?: string;
   starred?: boolean;
   unfiled?: boolean;
+  includeStaged?: boolean;
   filter?: string;
   limit?: number;
   cursor?: string;

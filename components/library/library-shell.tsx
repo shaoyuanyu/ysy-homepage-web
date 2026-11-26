@@ -321,6 +321,9 @@ export function LibraryShell({ collections, views, projects, workspaces, tags, m
   }));
   const [mobileOpen, setMobileOpen] = useState(false);
   const searchParams = useSearchParams();
+  // meta.counts.papers 把调研区论文也算进「N 篇文献」；页头给出「N 篇在调研区」，
+  // 既可一键进入各工作区，也说明列表行尾那些「调研中」从哪来。
+  const stagedTotal = workspaces.reduce((sum, workspace) => sum + workspace.pendingCount, 0);
 
   // 移动端「目录」面板在选中集合/标签/视图/项目后应自动收起：
   // 它渲染在内容上方，导航后仍展开会把新页面挤到下面看不见
@@ -348,6 +351,18 @@ export function LibraryShell({ collections, views, projects, workspaces, tags, m
                     pdfs: meta.storage.files ?? 0,
                   })
                 : t("backendOffline")}
+              {meta && stagedTotal > 0 && (
+                <>
+                  <span aria-hidden className="mx-1.5 text-muted-foreground/35">·</span>
+                  <Link
+                    href="/library/workspaces"
+                    title={t("stagedHint")}
+                    className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground hover:decoration-foreground/40"
+                  >
+                    {t("stagedCount", { count: stagedTotal })}
+                  </Link>
+                </>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-1">

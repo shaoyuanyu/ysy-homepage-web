@@ -5,8 +5,8 @@ import { ArrowLeft, FileQuestion } from "lucide-react";
 import { WorkspaceDetail } from "@/components/library/workspace-detail";
 import { buttonVariants } from "@/components/ui/button";
 import { Link } from "@/lib/i18n/navigation";
-import { PaperdbError, getWorkspace } from "@/lib/library/server";
-import type { ResearchWorkspaceDetail } from "@/lib/library/types";
+import { PaperdbError, getWorkspace, listPapers } from "@/lib/library/server";
+import type { PaperSummary, ResearchWorkspaceDetail } from "@/lib/library/types";
 
 export const dynamic = "force-dynamic";
 
@@ -30,8 +30,16 @@ export default async function WorkspacePage({ params }: { params: Promise<{ id: 
   const { id } = await params;
   const t = await getTranslations("library");
   let workspace: ResearchWorkspaceDetail;
+  let papers: PaperSummary[] = [];
   try {
-    workspace = await getWorkspace(id);
+    // 工作区接口只带 title/year/citekey；列表页需要的作者、venue、标签、日期
+    // 都来自 paperdb 的 paper summary。workspace 过滤会把 pending（staged）也算进来。
+    const [detail, page] = await Promise.all([
+      getWorkspace(id),
+      listPapers({ workspace: id, includeStaged: true, limit: 100 }),
+    ]);
+    workspace = detail;
+    papers = page.items;
   } catch (caught) {
     const notFound = caught instanceof PaperdbError && caught.status === 404;
     return (
@@ -63,5 +71,5 @@ export default async function WorkspacePage({ params }: { params: Promise<{ id: 
     );
   }
 
-  return <WorkspaceDetail workspace={workspace} />;
+  return <WorkspaceDetail workspace={workspace} papers={papers} />;
 }

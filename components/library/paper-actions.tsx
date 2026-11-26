@@ -1,11 +1,12 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Loader2, Star, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   LibraryApiError,
   libraryApi,
@@ -18,9 +19,10 @@ import type { PaperDetail } from "@/lib/library/types";
 import { cn } from "@/lib/utils";
 
 /** 属性选择器（状态/评分/集合）用无边框的 muted chip 风格：与列表筛选栏一致，
- *  文本框（标签路径）保留 2px 描边——「选择」和「输入」用两种视觉语言区分。 */
+ *  文本框（标签路径）保留 2px 描边——「选择」和「输入」用两种视觉语言区分。
+ *  弹层用 shadcn Select（Base UI），不再用系统原生下拉。 */
 const controlClass =
-  "h-8 max-w-full rounded-lg bg-muted/60 px-2.5 pr-7 text-sm text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/40";
+  "h-8 max-w-full rounded-lg border-0 bg-muted/60 py-0 pl-2.5 pr-1 text-sm text-muted-foreground shadow-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/40 dark:hover:bg-input/50 [&_svg]:!size-3.5";
 
 export function PaperActions({
   paper,
@@ -38,7 +40,13 @@ export function PaperActions({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tag, setTag] = useState("");
-  const [collectionId, setCollectionId] = useState("");
+  const [status, setStatus] = useState(paper.state.status);
+  const [rating, setRating] = useState<number | null>(paper.state.rating);
+
+  useEffect(() => {
+    setStatus(paper.state.status);
+    setRating(paper.state.rating);
+  }, [paper.state.status, paper.state.rating]);
 
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -47,8 +55,10 @@ export function PaperActions({
     try {
       await work();
       router.refresh();
+      return true;
     } catch (caught) {
       setError(caught instanceof LibraryApiError ? caught.message : t("actionFailed"));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -58,6 +68,34 @@ export function PaperActions({
     run(async () => {
       await patchJson(`/papers/${paper.id}/state`, patch);
     });
+
+  const changeStatus = async (next: string) => {
+    const previous = status;
+    setStatus(next as typeof status);
+    if (!(await updateState({ status: next }))) setStatus(previous);
+  };
+
+  const changeRating = async (next: number | null) => {
+    const previous = rating;
+    setRating(next);
+    if (!(await updateState({ rating: next }))) setRating(previous);
+  };
+
+  const statusItems = READING_STATUSES.map((item) => ({
+    value: item,
+    label: t(`status_${item}`),
+  }));
+  const ratingItems = [
+    { value: "none", label: t("noRating") },
+    ...[1, 2, 3, 4, 5].map((value) => ({
+      value: String(value),
+      label: "★".repeat(value),
+    })),
+  ];
+  const collectionItems = collections.map((collection) => ({
+    value: collection.id,
+    label: collection.name,
+  }));
 
   const addTag = () =>
     run(async () => {
@@ -76,7 +114,6 @@ export function PaperActions({
         method: "POST",
         body: JSON.stringify({ collectionIds: [id] }),
       });
-      setCollectionId("");
       setMessage(t("collectionAdded"));
     });
 
@@ -96,31 +133,43 @@ export function PaperActions({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="mr-0.5 hidden text-xs text-muted-foreground sm:inline">{t("readingGroup")}</span>
-          <select
-            value={paper.state.status}
-            disabled={busy}
-            onChange={(event) => void updateState({ status: event.target.value })}
-            className={controlClass}
-            aria-label={t("status")}
+          <Select
+            items={statusItems}
+            value={status}
+            onValueChange={(next) => {
+              if (next) void changeStatus(next);
+            }}
           >
-            {READING_STATUSES.map((status) => (
-              <option key={status} value={status}>{t(`status_${status}`)}</option>
-            ))}
-          </select>
-          <select
-            value={paper.state.rating ?? ""}
-            disabled={busy}
-            onChange={(event) =>
-              void updateState({ rating: event.target.value ? Number(event.target.value) : null })
-            }
-            className={controlClass}
-            aria-label={t("rating")}
+            <SelectTrigger disabled={busy} className={controlClass} aria-label={t("status")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start">
+              {statusItems.map((item) => (
+                <SelectItem key={item.value} value={item.value} label={item.label}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            items={ratingItems}
+            value={rating == null ? "none" : String(rating)}
+            onValueChange={(next) => {
+              if (!next) return;
+              void changeRating(next === "none" ? null : Number(next));
+            }}
           >
-            <option value="">{t("noRating")}</option>
-            {[1, 2, 3, 4, 5].map((value) => (
-              <option key={value} value={value}>{"★".repeat(value)}</option>
-            ))}
-          </select>
+            <SelectTrigger disabled={busy} className={controlClass} aria-label={t("rating")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start">
+              {ratingItems.map((item) => (
+                <SelectItem key={item.value} value={item.value} label={item.label}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <button
             type="button"
             disabled={busy}
@@ -141,23 +190,29 @@ export function PaperActions({
 
         <div className="flex flex-wrap items-center gap-1.5 sm:ml-auto">
           <span className="mr-0.5 hidden text-xs text-muted-foreground sm:inline">{t("organizeGroup")}</span>
-          <select
-            value={collectionId}
-            disabled={busy}
-            onChange={(event) => {
-              const id = event.target.value;
-              setCollectionId(id);
-              if (id) void addToCollection(id);
+          <Select
+            items={collectionItems}
+            value={null}
+            onValueChange={(next) => {
+              if (next) void addToCollection(next);
             }}
-            className={cn(controlClass, "w-32")}
-            aria-label={t("addToCollection")}
-            title={t("addToCollection")}
           >
-            <option value="">{t("addToCollection")}</option>
-            {collections.map((collection) => (
-              <option key={collection.id} value={collection.id}>{collection.name}</option>
-            ))}
-          </select>
+            <SelectTrigger
+              disabled={busy}
+              className={cn(controlClass, "w-32")}
+              aria-label={t("addToCollection")}
+              title={t("addToCollection")}
+            >
+              <SelectValue placeholder={t("addToCollection")} />
+            </SelectTrigger>
+            <SelectContent align="start" className="min-w-40">
+              {collectionItems.map((item) => (
+                <SelectItem key={item.value} value={item.value} label={item.label}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <input
             value={tag}
             onChange={(event) => setTag(event.target.value)}
