@@ -15,6 +15,8 @@ import type {
   PaperPage,
   PdfFile,
   Project,
+  ResearchWorkspace,
+  ResearchWorkspaceDetail,
   SavedView,
   TagNode,
   Token,
@@ -175,4 +177,17 @@ export function getReferences(paperId: string): Promise<CitationPage> {
 
 export function getCitations(paperId: string): Promise<CitationPage> {
   return request<CitationPage>(`/papers/${paperId}/citations`);
+}
+
+
+export function listWorkspaces(includeClosed = false): Promise<ResearchWorkspace[]> {
+  return request<{ items: ResearchWorkspace[] }>(
+    `/workspaces${query({ include_closed: includeClosed })}`,
+  ).then((page) => page.items);
+}
+
+export function getWorkspace(workspaceId: string): Promise<ResearchWorkspaceDetail> {
+  return request<ResearchWorkspaceDetail>(
+    `/workspaces/${encodeURIComponent(workspaceId)}${query({ limit: 500 })}`,
+  );
 }

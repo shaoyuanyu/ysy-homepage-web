@@ -37,6 +37,7 @@ export const PAPERDB_PROXY_ROOTS = new Set([
   "tokens",
   "venues",
   "views",
+  "workspaces",
 ]);
 
 /** 只允许这些响应头穿透代理。 */

@@ -86,6 +86,8 @@ export interface PaperSummary {
   counts: PaperCounts;
   tags: string[];
   collections: string[];
+  /** 调研工作区暂存：默认不出现在文献库列表里 */
+  staged?: boolean;
   createdAt: string;
   updatedAt: string;
   version: number;
@@ -356,4 +358,29 @@ export interface PdfImportCreated {
   created: boolean;
   title: string;
   warnings: string[];
+}
+
+
+export interface ResearchWorkspace {
+  id: string;
+  name: string;
+  description: string | null;
+  paperCount: number;
+  pendingCount: number;
+  createdAt: string;
+  closedAt: string | null;
+}
+
+export interface ResearchWorkspacePaper {
+  paperId: string;
+  citekey: string;
+  title: string;
+  year: number;
+  kind: PaperKind;
+  promoted: boolean;
+  note: string | null;
+}
+
+export interface ResearchWorkspaceDetail extends ResearchWorkspace {
+  papers: ResearchWorkspacePaper[];
 }

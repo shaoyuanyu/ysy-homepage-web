@@ -9,8 +9,16 @@ import {
   getTagTree,
   listProjects,
   listViews,
+  listWorkspaces,
 } from "@/lib/library/server";
-import type { CollectionNode, Meta, Project, SavedView, TagNode } from "@/lib/library/types";
+import type {
+  CollectionNode,
+  Meta,
+  Project,
+  ResearchWorkspace,
+  SavedView,
+  TagNode,
+} from "@/lib/library/types";
 
 export const dynamic = "force-dynamic";
 
@@ -33,12 +41,13 @@ export default async function LibraryLayout({ children }: { children: ReactNode 
     backendError = error instanceof PaperdbError ? error.message : "paperdb unreachable";
     return null;
   });
-  const [meta, collections, views, projects, tags] = await Promise.all([
+  const [meta, collections, views, projects, tags, workspaces] = await Promise.all([
     metaPromise,
     safe<CollectionNode[]>(getCollectionTree, []),
     safe<SavedView[]>(listViews, []),
     safe<Project[]>(listProjects, []),
     safe<TagNode[]>(getTagTree, []),
+    safe<ResearchWorkspace[]>(() => listWorkspaces(), []),
   ]);
   const metaValue = meta as Meta | null;
   return (
@@ -46,6 +55,7 @@ export default async function LibraryLayout({ children }: { children: ReactNode 
       collections={collections}
       views={views}
       projects={projects}
+      workspaces={workspaces}
       tags={tags}
       meta={metaValue}
       backendError={backendError}

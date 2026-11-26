@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   ChevronDown,
+  FlaskConical,
   FolderOpen,
   Import,
   Library,
@@ -21,6 +22,7 @@ import type {
   CollectionNode,
   Meta,
   Project,
+  ResearchWorkspace,
   SavedView,
   TagNode,
 } from "@/lib/library/types";
@@ -30,6 +32,7 @@ interface LibraryShellProps {
   collections: CollectionNode[];
   views: SavedView[];
   projects: Project[];
+  workspaces: ResearchWorkspace[];
   tags: TagNode[];
   meta: Meta | null;
   backendError: string | null;
@@ -123,6 +126,7 @@ function Sidebar({
   collections,
   views,
   projects,
+  workspaces,
   tags,
 }: Omit<LibraryShellProps, "meta" | "backendError" | "children">) {
   const t = useTranslations("library");
@@ -249,6 +253,44 @@ function Sidebar({
       </section>
 
       <section>
+        <SectionLabel
+          action={
+            <Link
+              href="/library/workspaces"
+              aria-label={t("manageWorkspaces")}
+              title={t("manageWorkspaces")}
+              className="rounded p-0.5 text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Plus className="size-3.5" />
+            </Link>
+          }
+        >
+          {t("researchWorkspaces")}
+        </SectionLabel>
+        {workspaces.length === 0 ? (
+          <p className="px-2.5 text-xs text-muted-foreground/70">{t("noWorkspaces")}</p>
+        ) : (
+          workspaces.map((workspace) => (
+            <Link
+              key={workspace.id}
+              href={`/library/workspaces/${workspace.id}`}
+              aria-current={
+                pathname === `/library/workspaces/${workspace.id}` ? "page" : undefined
+              }
+              className={cn(
+                navItem,
+                pathname === `/library/workspaces/${workspace.id}` && navItemActive,
+              )}
+            >
+              <FlaskConical className="size-4 shrink-0 opacity-70" />
+              <span className="truncate">{workspace.name}</span>
+              <Count>{workspace.pendingCount}</Count>
+            </Link>
+          ))
+        )}
+      </section>
+
+      <section>
         <SectionLabel>{t("tags")}</SectionLabel>
         {tags.length === 0 ? (
           <p className="px-2.5 text-xs text-muted-foreground/70">{t("noTags")}</p>
@@ -270,7 +312,7 @@ function Sidebar({
   );
 }
 
-export function LibraryShell({ collections, views, projects, tags, meta, backendError, children }: LibraryShellProps) {
+export function LibraryShell({ collections, views, projects, workspaces, tags, meta, backendError, children }: LibraryShellProps) {
   const t = useTranslations("library");
   const pathname = usePathname();
   const onSettings = pathname === "/library/settings";
@@ -351,7 +393,7 @@ export function LibraryShell({ collections, views, projects, tags, meta, backend
               入口由页头的「目录」按钮提供（下方 mobileOpen 面板）。 */}
           {!backendError && (
             <aside className="sticky top-20 hidden max-h-[calc(100svh-6rem)] w-52 shrink-0 overflow-y-auto xl:block">
-              <Sidebar collections={collections} views={views} projects={projects} tags={tags} />
+              <Sidebar collections={collections} views={views} projects={projects} workspaces={workspaces} tags={tags} />
             </aside>
           )}
 
@@ -360,7 +402,7 @@ export function LibraryShell({ collections, views, projects, tags, meta, backend
               id="library-sidebar-mobile"
               className="max-h-[60svh] w-full overflow-y-auto rounded-xl border bg-card p-1 xl:hidden"
             >
-              <Sidebar collections={collections} views={views} projects={projects} tags={tags} />
+              <Sidebar collections={collections} views={views} projects={projects} workspaces={workspaces} tags={tags} />
             </div>
           )}
 
