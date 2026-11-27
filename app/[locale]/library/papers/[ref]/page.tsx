@@ -14,6 +14,7 @@ import {
 
 import { CopyBibtexButton } from "@/components/library/copy-bibtex";
 import { PaperActions } from "@/components/library/paper-actions";
+import { PaperCollections } from "@/components/library/paper-collections";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Link } from "@/lib/i18n/navigation";
@@ -450,17 +451,11 @@ export default async function PaperPage({ params }: { params: Promise<{ ref: str
 
           <section className="rounded-xl border bg-library-surface p-3 text-xs">
             <h3 className="mb-2 text-sm font-semibold">{t("collections")}</h3>
-            {paper.collections.length === 0 ? (
-              <p className="text-muted-foreground">{t("uncollected")}</p>
-            ) : (
-              <div className="flex flex-wrap gap-1">
-                {paper.collections.map((id) => (
-                  <Link key={id} href={`/library?collection=${id}`} className="rounded bg-muted px-1.5 py-0.5 hover:underline">
-                    {collectionNames.get(id) ?? id.slice(0, 8)}
-                  </Link>
-                ))}
-              </div>
-            )}
+            <PaperCollections
+              paperId={paper.id}
+              collectionIds={paper.collections}
+              names={Object.fromEntries(collectionNames)}
+            />
           </section>
 
           <section className="rounded-xl border bg-library-surface p-3 text-xs">

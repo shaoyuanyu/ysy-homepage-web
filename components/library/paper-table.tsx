@@ -19,7 +19,7 @@ import { Link } from "@/lib/i18n/navigation";
 import { LibraryApiError, libraryApi } from "@/lib/library/client";
 import { authorLine, casLevel, ccfLevel, compactDate, venueShort } from "@/lib/library/format";
 import { READING_STATUSES } from "@/lib/library/constants";
-import type { PaperSummary } from "@/lib/library/types";
+import type { CollectionNode, PaperSummary } from "@/lib/library/types";
 import { cn } from "@/lib/utils";
 
 /** 状态点：未读是空心圈（默认态不该抢眼），其余状态才用实色。 */
@@ -451,6 +451,10 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
   const [tag, setTag] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 集合选项懒加载：只有真正打开批量操作时才请求，正常浏览列表不多一次往返。
+  const [collectionItems, setCollectionItems] = useState<
+    { value: string; label: string }[] | null
+  >(null);
   const allSelected = items.length > 0 && selected.size === items.length;
   const allStarred =
     selected.size > 0 &&
@@ -465,6 +469,30 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
   useEffect(() => {
     setSelected(new Set());
   }, [items]);
+
+  useEffect(() => {
+    if (selected.size === 0 || collectionItems !== null) return;
+    let cancelled = false;
+    libraryApi<CollectionNode[]>("/collections/tree")
+      .then((tree) => {
+        if (cancelled) return;
+        const flat: { value: string; label: string }[] = [];
+        const walk = (nodes: CollectionNode[], depth: number) => {
+          for (const node of nodes) {
+            flat.push({ value: node.id, label: `${"— ".repeat(depth)}${node.name}` });
+            walk(node.children, depth + 1);
+          }
+        };
+        walk(tree, 0);
+        setCollectionItems(flat);
+      })
+      .catch(() => {
+        if (!cancelled) setCollectionItems([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected.size, collectionItems]);
 
   const toggle = (id: string) => {
     setSelected((current) => {
@@ -575,6 +603,28 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
             <Star className={cn("size-3.5", allStarred && "fill-amber-400 text-amber-500")} />
             {t("starred")}
           </button>
+          <Select
+            items={collectionItems ?? []}
+            value={null}
+            onValueChange={(next) => {
+              if (next) void bulk({ addCollections: [next] });
+            }}
+          >
+            <SelectTrigger
+              disabled={busy || !collectionItems || collectionItems.length === 0}
+              aria-label={t("bulkAddCollection")}
+              className="h-7 w-fit gap-1 rounded-md border border-border bg-background px-2 py-0 text-xs shadow-none hover:bg-accent data-[size=default]:h-7 dark:bg-background dark:hover:bg-accent [&_svg]:!size-3.5"
+            >
+              <SelectValue placeholder={t("bulkAddCollection")} />
+            </SelectTrigger>
+            <SelectContent align="start" className="min-w-40">
+              {(collectionItems ?? []).map((item) => (
+                <SelectItem key={item.value} value={item.value} label={item.label}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <div className="flex min-w-0 items-center gap-1">
             <input
               value={tag}

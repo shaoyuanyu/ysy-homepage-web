@@ -4,7 +4,9 @@ import { useEffect, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   ChevronDown,
+  ChevronRight,
   FlaskConical,
+  Folder,
   FolderOpen,
   Import,
   Library,
@@ -66,33 +68,97 @@ function Count({ children }: { children: number }) {
   return <span className="ml-auto text-xs tabular-nums text-muted-foreground">{children}</span>;
 }
 
+/** 集合行：和顶部导航同一列宽（左侧 20px 图标位 + 6px 间距，文字与「全部文献」对齐）。
+ *  父集合有独立的下拉箭头（可折叠），子集合用左侧竖线串起来——只缩进不连线时，
+ *  第二级会像「飘」在相邻两项之间，层级不明显（2026-11-27 用户反馈）。 */
+const collectionRow =
+  "group/row relative flex items-center rounded-lg transition-colors hover:bg-accent hover:text-foreground";
+const collectionLink = "flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2.5 pl-1.5";
+const collectionChevron =
+  "ml-2 flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none";
+/** 竖线对齐父级箭头中心：箭头 margin 8px + size 20px / 2 = 18px */
+const collectionChildren = "ml-[18px] border-l border-foreground/15";
+
 function CollectionItems({
   nodes,
   activeId,
+  collapsedIds,
+  onToggle,
   depth = 0,
 }: {
   nodes: CollectionNode[];
   activeId: string | null;
+  collapsedIds: ReadonlySet<string>;
+  onToggle: (id: string) => void;
   depth?: number;
 }) {
+  const t = useTranslations("library");
   return (
     <>
-      {nodes.map((node) => (
-        <div key={node.id}>
-          <Link
-            href={`/library?collection=${node.id}`}
-            aria-current={activeId === node.id ? "page" : undefined}
-            title={node.name}
-            className={cn(navItem, depth > 0 && "ml-3", activeId === node.id && navItemActive)}
-          >
-            <span className="truncate">{node.name}</span>
-            <Count>{node.totalCount}</Count>
-          </Link>
-          {node.children.length > 0 && (
-            <CollectionItems nodes={node.children} activeId={activeId} depth={depth + 1} />
-          )}
-        </div>
-      ))}
+      {nodes.map((node) => {
+        const hasChildren = node.children.length > 0;
+        const expanded = hasChildren && !collapsedIds.has(node.id);
+        const active = activeId === node.id;
+        return (
+          <div key={node.id}>
+            <div
+              className={cn(
+                collectionRow,
+                depth > 0 ? "text-[13px]" : "text-sm",
+                !active && (depth > 0 ? "text-foreground/60" : "text-foreground/70"),
+                active && navItemActive,
+              )}
+            >
+              {hasChildren ? (
+                <button
+                  type="button"
+                  onClick={() => onToggle(node.id)}
+                  aria-expanded={expanded}
+                  aria-label={t(expanded ? "collapseCollection" : "expandCollection", {
+                    name: node.name,
+                  })}
+                  title={t(expanded ? "collapseCollection" : "expandCollection", {
+                    name: node.name,
+                  })}
+                  className={collectionChevron}
+                >
+                  <ChevronRight
+                    aria-hidden
+                    className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
+                  />
+                </button>
+              ) : (
+                <span
+                  aria-hidden
+                  className="ml-2 flex size-5 shrink-0 items-center justify-center text-muted-foreground/60"
+                >
+                  <Folder className="size-3.5" />
+                </span>
+              )}
+              <Link
+                href={`/library?collection=${node.id}`}
+                aria-current={active ? "page" : undefined}
+                title={node.name}
+                className={collectionLink}
+              >
+                <span className="truncate">{node.name}</span>
+                <Count>{node.totalCount}</Count>
+              </Link>
+            </div>
+            {expanded && (
+              <div className={collectionChildren}>
+                <CollectionItems
+                  nodes={node.children}
+                  activeId={activeId}
+                  collapsedIds={collapsedIds}
+                  onToggle={onToggle}
+                  depth={depth + 1}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })}
     </>
   );
 }
@@ -139,6 +205,17 @@ function Sidebar({
   const unfiled = searchParams.get("unfiled") === "1";
   const starred = searchParams.get("starred") === "1";
   const onAll = pathname === "/library" && !searchParams.toString();
+  const [collapsedCollections, setCollapsedCollections] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const toggleCollection = (id: string) => {
+    setCollapsedCollections((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   return (
     <nav className="flex flex-col gap-5 px-1 py-1 text-sm">
@@ -186,7 +263,12 @@ function Sidebar({
         {collections.length === 0 ? (
           <p className="px-2.5 text-xs text-muted-foreground/70">{t("noCollections")}</p>
         ) : (
-          <CollectionItems nodes={collections} activeId={activeCollection} />
+          <CollectionItems
+            nodes={collections}
+            activeId={activeCollection}
+            collapsedIds={collapsedCollections}
+            onToggle={toggleCollection}
+          />
         )}
       </section>
 

@@ -74,6 +74,7 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
   let page: PaperPage = { items: [], nextCursor: null, hasMore: false };
   let error: string | null = null;
   let heading: string = t("allPapers");
+  let activeCollection: CollectionNode | undefined;
 
   try {
     if (project) {
@@ -111,7 +112,8 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
       else if (q) heading = `${t("searchResults")}: ${q}`;
       else if (collection) {
         const tree = await getCollectionTree().catch(() => [] as CollectionNode[]);
-        heading = findCollection(tree, collection)?.name ?? t("collection");
+        activeCollection = findCollection(tree, collection);
+        heading = activeCollection?.name ?? t("collection");
       }
       if (status) heading = `${heading} · ${t(`status_${status}`)}`;
     }
@@ -156,15 +158,30 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
       {/* 列表页只有「标题 → 一张卡」两层：标题行不再套卡片，筛选与表格共用同一张
           卡片（中间一条分隔线），避免标题、筛选、表头三层圆角框互相打架。 */}
       <div className="mb-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span aria-hidden className="h-4 w-[3px] shrink-0 rounded-full bg-brand" />
-          <h2 className="truncate text-2xl font-semibold tracking-tight">{heading}</h2>
-          {/* 未筛选时库的总量已在页头统计里，标题旁再写一次「14 篇」是重复；
-              只有筛过/还有下一页时才在标题旁补本页数量。 */}
-          {(hasFilters || page.hasMore || cursor) && (
-            <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
-              {t("pageHint", { count: page.items.length })}
-            </span>
+        <div className="flex min-w-0 flex-col gap-1">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span aria-hidden className="h-4 w-[3px] shrink-0 rounded-full bg-brand" />
+            <h2 className="truncate text-2xl font-semibold tracking-tight">{heading}</h2>
+            {/* 未筛选时库的总量已在页头统计里，标题旁再写一次「14 篇」是重复；
+                只有筛过/还有下一页时才在标题旁补本页数量。 */}
+            {(hasFilters || page.hasMore || cursor) && (
+              <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
+                {t("pageHint", { count: page.items.length })}
+              </span>
+            )}
+            {activeCollection && (
+              <Link
+                href="/library/collections"
+                className="shrink-0 text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+              >
+                {t("manageCollections")}
+              </Link>
+            )}
+          </div>
+          {activeCollection?.description && (
+            <p className="min-w-0 truncate pl-[calc(0.1875rem+0.625rem)] text-xs text-muted-foreground sm:max-w-[52ch]">
+              {activeCollection.description}
+            </p>
           )}
         </div>
         <Link
