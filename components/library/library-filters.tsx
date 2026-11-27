@@ -5,10 +5,25 @@ import { useTranslations } from "next-intl";
 import { Search, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { READING_STATUSES } from "@/lib/library/constants";
+import { toast } from "@/components/ui/toast";
+import { useLibraryOrganize } from "@/components/library/library-organize-context";
+import { LibraryApiError, libraryApi } from "@/lib/library/client";
+import { PAPER_KINDS, READING_STATUSES } from "@/lib/library/constants";
+import { flattenCollections } from "@/lib/library/projects";
+import type { TagNode } from "@/lib/library/types";
 
-const kinds = ["journal", "conference", "preprint", "book", "book_chapter", "thesis", "tech_report"];
+const kinds = PAPER_KINDS;
 
 /** 筛选菜单：无边框、纯文字 + chevron，悬停才浮出底色。
  *  筛选栏里「选择」和「输入」用两种语言：搜索是唯一的填入式控件，两个筛选是
@@ -50,6 +65,142 @@ function FilterSelect({
   );
 }
 
+type ViewRule = {
+  field: string;
+  op: string;
+  value: string | number | boolean | string[];
+};
+
+/** 把当前 URL 筛选翻译成视图 filter DSL；项目/视图上下文没有对应字段，不保存。 */
+function filterFromSearch(params: URLSearchParams): ViewRule[] {
+  const rules: ViewRule[] = [];
+  const q = params.get("q")?.trim();
+  if (q) rules.push({ field: "q", op: "contains", value: q });
+  const status = params.get("status");
+  if (status) rules.push({ field: "status", op: "eq", value: status });
+  const kind = params.get("kind");
+  if (kind) rules.push({ field: "kind", op: "eq", value: kind });
+  const year = params.get("year");
+  if (year) rules.push({ field: "year", op: "eq", value: Number(year) });
+  const tag = params.get("tag");
+  if (tag) rules.push({ field: "tag", op: "eq", value: tag });
+  const collection = params.get("collection");
+  if (collection) rules.push({ field: "collection", op: "in", value: [collection] });
+  if (params.get("starred") === "1") rules.push({ field: "starred", op: "eq", value: true });
+  if (params.get("unfiled") === "1") rules.push({ field: "unfiled", op: "eq", value: true });
+  return rules;
+}
+
+function SaveViewButton({ rules }: { rules: ViewRule[] }) {
+  const t = useTranslations("library");
+  const router = useRouter();
+  const { collections, tags } = useLibraryOrganize();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const collectionName = (id: string) =>
+    flattenCollections(collections).find((item) => item.id === id)?.name ?? id.slice(0, 8);
+  const tagPath = (path: string) => {
+    const walk = (nodes: TagNode[]): string | undefined => {
+      for (const node of nodes) {
+        if (node.path === path) return node.path;
+        const found = walk(node.children);
+        if (found) return found;
+      }
+      return undefined;
+    };
+    return walk(tags) ?? path;
+  };
+  const ruleLabel = (rule: ViewRule) => {
+    const value = Array.isArray(rule.value) ? rule.value.join(", ") : String(rule.value);
+    if (rule.field === "q") return `${t("searchPlaceholder")}: ${value}`;
+    if (rule.field === "status") return `${t("status")}: ${t(`status_${value}`)}`;
+    if (rule.field === "kind") return `${t("kind")}: ${t(`kind_${value}`)}`;
+    if (rule.field === "collection")
+      return `${t("collections")}: ${Array.isArray(rule.value) ? rule.value.map(collectionName).join(", ") : value}`;
+    if (rule.field === "tag") return `${t("tags")}: ${tagPath(value)}`;
+    if (rule.field === "starred") return t("starred");
+    if (rule.field === "unfiled") return t("unfiled");
+    return `${rule.field}: ${value}`;
+  };
+
+  const save = async () => {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const view = await libraryApi<{ id: string }>("/views", {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          filter: { version: 1, match: "all", rules },
+        }),
+      });
+      toast.add({ title: t("viewSaved"), type: "success" });
+      setOpen(false);
+      setName("");
+      router.refresh();
+      router.push(`/library?view=${view.id}`);
+    } catch (caught) {
+      setError(caught instanceof LibraryApiError ? caught.message : t("actionFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (rules.length === 0) return null;
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="h-8 rounded-lg px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      >
+        {t("saveAsView")}
+      </button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("saveAsView")}</DialogTitle>
+            <DialogDescription>{t("saveAsViewHint")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder={t("viewName")}
+              aria-label={t("viewName")}
+              autoFocus
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void save();
+              }}
+            />
+            <div className="flex flex-wrap gap-1.5">
+              {rules.map((rule, index) => (
+                <span key={index} className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                  {ruleLabel(rule)}
+                </span>
+              ))}
+            </div>
+            {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={busy}>
+              {t("cancel")}
+            </Button>
+            <Button type="button" onClick={() => void save()} disabled={busy || !name.trim()}>
+              {t("save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 export function LibraryFilters() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -83,6 +234,7 @@ export function LibraryFilters() {
     if (q.trim()) next.set("q", q.trim());
     else next.delete("q");
     next.delete("cursor");
+    next.delete("trail");
     router.push(`/library${next.size ? `?${next.toString()}` : ""}`);
   };
 
@@ -91,8 +243,21 @@ export function LibraryFilters() {
     if (value) next.set(key, value);
     else next.delete(key);
     next.delete("cursor");
+    next.delete("trail");
     router.push(`/library${next.size ? `?${next.toString()}` : ""}`);
   };
+
+  // 集合/项目/视图/标签是「当前在看什么」，不是筛选条件：清除筛选不能把
+  // 用户从集合/项目里踢出去。q/status/kind/year/starred/unfiled 才是可清的筛选。
+  const filterKeys = ["q", "status", "kind", "year", "starred", "unfiled"];
+  const hasClearable = filterKeys.some((key) => searchParams.has(key));
+  const viewRules = filterFromSearch(searchParams);
+  const canSaveView = !searchParams.has("project") && !searchParams.has("view");
+  const clearHref = (() => {
+    const next = new URLSearchParams(searchParams.toString());
+    for (const key of [...filterKeys, "cursor", "trail"]) next.delete(key);
+    return `/library${next.size ? `?${next.toString()}` : ""}`;
+  })();
 
   // 已生效的筛选（URL 为准，不是输入框里的草稿）做成可单独移除的 chip
   const appliedQuery = searchParams.get("q")?.trim();
@@ -187,10 +352,22 @@ export function LibraryFilters() {
             ]}
             onChange={(value) => setParam("kind", value)}
           />
-          {searchParams.size > 0 && (
+          <FilterSelect
+            label={t("sort")}
+            value={searchParams.get("sort") ?? "added"}
+            items={[
+              { value: "added", label: t("sortAdded") },
+              { value: "year", label: t("sortYear") },
+              { value: "title", label: t("sortTitle") },
+              { value: "updated", label: t("sortUpdated") },
+            ]}
+            onChange={(value) => setParam("sort", value)}
+          />
+          {canSaveView && <SaveViewButton rules={viewRules} />}
+          {hasClearable && (
             <button
               type="button"
-              onClick={() => router.push("/library")}
+              onClick={() => router.push(clearHref)}
               className="h-8 rounded-lg px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
               {t("clearFilters")}

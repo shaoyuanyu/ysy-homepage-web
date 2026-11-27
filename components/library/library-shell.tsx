@@ -14,6 +14,7 @@ import {
   Plus,
   Settings2,
   Star,
+  Trash2,
 } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -237,6 +238,13 @@ function Sidebar({
           className={cn(navItem, starred && navItemActive)}
         >
           <Star className="size-4 shrink-0 opacity-70" /> {t("starred")}
+        </Link>
+        <Link
+          href="/library/trash"
+          aria-current={pathname === "/library/trash" ? "page" : undefined}
+          className={cn(navItem, pathname === "/library/trash" && navItemActive)}
+        >
+          <Trash2 className="size-4 shrink-0 opacity-70" /> {t("trash")}
         </Link>
         <Link
           href="/library/import"
@@ -505,7 +513,7 @@ export function LibraryShell({ collections, views, projects, workspaces, tags, m
           )}
 
           <div className="min-w-0 flex-1">
-            <LibraryOrganizeProvider collections={collections} projects={projects}>
+            <LibraryOrganizeProvider collections={collections} projects={projects} tags={tags}>
               {children}
             </LibraryOrganizeProvider>
           </div>

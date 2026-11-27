@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import { getTranslations } from "next-intl/server";
-import { ArrowLeft, ArrowRight, CloudOff, Upload } from "lucide-react";
+import { ArrowLeft, ArrowRight, CloudOff, Download, FileQuestion, Upload } from "lucide-react";
 
 import { LibraryFilters } from "@/components/library/library-filters";
 import { PaperTable } from "@/components/library/paper-table";
+import { ProjectAddPapersButton } from "@/components/library/project-add-papers";
 import { RetryButton } from "@/components/library/retry-button";
 import { buttonVariants } from "@/components/ui/button";
 import { READING_STATUSES } from "@/lib/library/constants";
@@ -16,7 +17,8 @@ import {
   getView,
   listPapers,
 } from "@/lib/library/server";
-import type { CollectionNode, PaperPage } from "@/lib/library/types";
+import type { CollectionNode, PaperPage, Project } from "@/lib/library/types";
+import { flattenCollections } from "@/lib/library/projects";
 
 export const dynamic = "force-dynamic";
 
@@ -68,19 +70,46 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
   const unfiled = one(params.unfiled) === "1";
   const kind = one(params.kind);
   const year = one(params.year);
+  const rawSort = one(params.sort);
+  const sort =
+    rawSort && ["added", "year", "title", "updated"].includes(rawSort)
+      ? rawSort
+      : "added";
   const cursor = one(params.cursor);
   const t = await getTranslations("library");
 
   let page: PaperPage = { items: [], nextCursor: null, hasMore: false };
   let error: string | null = null;
+  let notFound: "project" | "view" | null = null;
   let heading: string = t("allPapers");
   let activeCollection: CollectionNode | undefined;
+  let projectInfo: Project | null = null;
+  let projectCollectionNames: string[] = [];
 
   try {
     if (project) {
       const data = await getProject(project);
+      projectInfo = data;
       heading = data.name;
-      page = await getProjectPapers(project, 50);
+      if (data.collectionIds.length > 0) {
+        const tree = await getCollectionTree().catch(() => [] as CollectionNode[]);
+        const names = new Map(flattenCollections(tree).map((item) => [item.id, item.name]));
+        projectCollectionNames = data.collectionIds.map(
+          (id) => names.get(id) ?? id.slice(0, 8),
+        );
+      }
+      page = await getProjectPapers(project, {
+        q,
+        collection,
+        tag,
+        status,
+        kind,
+        starred: starred || undefined,
+        unfiled: unfiled || undefined,
+        year: year ? Number(year) : undefined,
+        sort,
+        cursor,
+      });
     } else if (view) {
       const data = await getView(view);
       heading = data.name;
@@ -92,6 +121,7 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
         starred: starred || undefined,
         unfiled: unfiled || undefined,
         year: year ? Number(year) : undefined,
+        sort,
         cursor,
       });
     } else {
@@ -104,6 +134,7 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
         starred: starred || undefined,
         unfiled: unfiled || undefined,
         year: year ? Number(year) : undefined,
+        sort,
         cursor,
       });
       if (unfiled) heading = t("unfiled");
@@ -118,18 +149,62 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
       if (status) heading = `${heading} · ${t(`status_${status}`)}`;
     }
   } catch (caught) {
-    error = caught instanceof PaperdbError ? caught.message : t("backendError");
+    if (caught instanceof PaperdbError && caught.status === 404) {
+      notFound = project ? "project" : view ? "view" : null;
+    }
+    if (!notFound) {
+      error = caught instanceof PaperdbError ? caught.message : t("backendError");
+    }
   }
 
   // 有关键字/筛选条件时，空结果不能提示「还没有文献」（会误导成库是空的）
   const hasFilters = Boolean(q || collection || tag || status || kind || year || starred || unfiled || view);
 
-  const nextParams = new URLSearchParams();
+  // cursor 分页只能向前；trail 记录走过的 cursor，才能让「上一页」真的回上一页。
+  // 只有当前页不是第一页时才有上一页，此时 trail 至少有一个元素。
+  const trail = (one(params.trail) ?? "").split(",").filter(Boolean);
+  const prevCursor = trail.length > 0 ? trail[trail.length - 1] : null;
+  const prevTrail = trail.slice(0, -1);
+
+  const baseParams = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     const item = one(value);
-    if (item && key !== "cursor") nextParams.set(key, item);
+    if (item && key !== "cursor" && key !== "trail") baseParams.set(key, item);
   }
-  if (page.nextCursor) nextParams.set("cursor", page.nextCursor);
+
+  const nextParams = new URLSearchParams(baseParams);
+  if (page.nextCursor) {
+    nextParams.set("cursor", page.nextCursor);
+    const nextTrail = cursor ? [...trail, cursor] : trail;
+    if (nextTrail.length > 0) nextParams.set("trail", nextTrail.join(","));
+  }
+
+  const prevParams = new URLSearchParams(baseParams);
+  if (prevCursor) {
+    prevParams.set("cursor", prevCursor);
+    if (prevTrail.length > 0) prevParams.set("trail", prevTrail.join(","));
+  }
+
+  if (notFound) {
+    return (
+      <div className="flex flex-col items-center justify-center rounded-xl border border-dashed px-6 py-16 text-center">
+        <FileQuestion className="size-8 text-muted-foreground/50" />
+        <p className="mt-3 text-sm font-medium">
+          {t(notFound === "project" ? "projectNotFound" : "viewNotFound")}
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t(notFound === "project" ? "projectNotFoundHint" : "viewNotFoundHint")}
+        </p>
+        <Link
+          href="/library"
+          data-slot="button"
+          className={buttonVariants({ variant: "outline", size: "sm", className: "mt-5" })}
+        >
+          <ArrowLeft data-icon="inline-start" /> {t("backToLibrary")}
+        </Link>
+      </div>
+    );
+  }
 
   // 后端不可用时不要渲染工具栏/「共 0 篇」/空列表：那会让「连不上」看起来像
   // 「文献库是空的」。只给一张带重试的错误态。
@@ -170,12 +245,20 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
               </span>
             )}
             {activeCollection && (
-              <Link
-                href="/library/collections"
-                className="shrink-0 text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
-              >
-                {t("manageCollections")}
-              </Link>
+              <>
+                <a
+                  href={`/api/library/collections/${activeCollection.id}/bibtex`}
+                  className="shrink-0 text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+                >
+                  {t("downloadBibtex")}
+                </a>
+                <Link
+                  href="/library/collections"
+                  className="shrink-0 text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+                >
+                  {t("manageCollections")}
+                </Link>
+              </>
             )}
           </div>
           {activeCollection?.description && (
@@ -183,14 +266,47 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
               {activeCollection.description}
             </p>
           )}
+          {projectInfo && (
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 pl-[calc(0.1875rem+0.625rem)] text-xs text-muted-foreground">
+              {projectInfo.description && (
+                <span className="min-w-0 max-w-[52ch] truncate" title={projectInfo.description}>
+                  {projectInfo.description}
+                </span>
+              )}
+              <span className="min-w-0">
+                {t("projectCollectionsLabel")}：
+                {projectCollectionNames.length > 0
+                  ? projectCollectionNames.join("、")
+                  : t("projectNoCollections")}
+              </span>
+              <Link
+                href="/library/projects"
+                className="shrink-0 underline-offset-4 transition-colors hover:text-foreground hover:underline"
+              >
+                {t("manageProjects")}
+              </Link>
+            </div>
+          )}
         </div>
-        <Link
-          href="/library/import"
-          data-slot="button"
-          className={buttonVariants({ variant: "brand", size: "sm" })}
-        >
-          <Upload data-icon="inline-start" /> {t("import")}
-        </Link>
+        <div className="flex items-center gap-2">
+          {projectInfo && (
+            <a
+              href={`/api/library/projects/${projectInfo.id}/bibtex`}
+              data-slot="button"
+              className={buttonVariants({ variant: "outline", size: "sm" })}
+            >
+              <Download data-icon="inline-start" /> BibTeX
+            </a>
+          )}
+          {projectInfo && <ProjectAddPapersButton projectId={projectInfo.id} />}
+          <Link
+            href="/library/import"
+            data-slot="button"
+            className={buttonVariants({ variant: "brand", size: "sm" })}
+          >
+            <Upload data-icon="inline-start" /> {t("import")}
+          </Link>
+        </div>
       </div>
 
       <div className="overflow-hidden rounded-2xl border bg-library-surface">
@@ -204,11 +320,7 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
         <div className="mt-4 flex items-center justify-between gap-3">
           {cursor ? (
             <Link
-              href={(() => {
-                const back = new URLSearchParams(nextParams);
-                back.delete("cursor");
-                return `/library${back.size ? `?${back.toString()}` : ""}`;
-              })()}
+              href={`/library${prevParams.size ? `?${prevParams.toString()}` : ""}`}
               data-slot="button"
               className={buttonVariants({ variant: "outline", size: "sm" })}
             >

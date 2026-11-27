@@ -3,11 +3,19 @@ import { getTranslations } from "next-intl/server";
 
 import { SettingsPanel } from "@/components/library/settings-panel";
 import {
+  getCollectionTree,
   getMeta,
   listExportTokens,
+  listProjects,
   listTokens,
 } from "@/lib/library/server";
-import type { ExportToken, Meta, Token } from "@/lib/library/types";
+import type {
+  CollectionNode,
+  ExportToken,
+  Meta,
+  Project,
+  Token,
+} from "@/lib/library/types";
 
 export const dynamic = "force-dynamic";
 
@@ -24,10 +32,12 @@ export async function generateMetadata({
 
 export default async function SettingsPage() {
   const t = await getTranslations("library");
-  const [meta, tokens, exports] = await Promise.all([
+  const [meta, tokens, exports, collections, projects] = await Promise.all([
     getMeta().catch(() => null),
     listTokens().catch(() => [] as Token[]),
     listExportTokens().catch(() => [] as ExportToken[]),
+    getCollectionTree().catch(() => [] as CollectionNode[]),
+    listProjects().catch(() => [] as Project[]),
   ]);
   return (
     <div className="space-y-6">
@@ -35,7 +45,13 @@ export default async function SettingsPage() {
         <h2 className="text-xl font-semibold tracking-tight">{t("settingsTitle")}</h2>
         <p className="text-sm text-muted-foreground">{t("settingsHint")}</p>
       </div>
-      <SettingsPanel meta={meta as Meta | null} tokens={tokens} exports={exports} />
+      <SettingsPanel
+        meta={meta as Meta | null}
+        tokens={tokens}
+        exports={exports}
+        collections={collections}
+        projects={projects}
+      />
     </div>
   );
 }

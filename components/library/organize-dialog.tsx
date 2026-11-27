@@ -3,15 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import {
-  Check,
-  Folder,
-  FolderCog,
-  Loader2,
-  Minus,
-  Search,
-  Target,
-} from "lucide-react";
+import { Folder, FolderCog, Loader2, Search, Target } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -32,41 +24,14 @@ import {
   projectMembership,
 } from "@/lib/library/projects";
 import type { CollectionNode, PaperSummary, Project } from "@/lib/library/types";
+import { CheckBoxVisual, type CheckState } from "@/components/library/tree-checkbox";
 import { cn } from "@/lib/utils";
 
 export type OrganizePaper = Pick<PaperSummary, "id" | "title" | "collections">;
 
-type CheckState = boolean | "mixed";
-
 interface ProjectChange {
   id: string;
   paperIds: string[];
-}
-
-function StateMark({ state }: { state: CheckState }) {
-  if (state === true) return <Check className="size-3" strokeWidth={3} aria-hidden />;
-  if (state === "mixed") return <Minus className="size-3" strokeWidth={3} aria-hidden />;
-  return null;
-}
-
-/** 勾选框视觉：list 里整行是 button，视觉方块只读。 */
-function CheckBoxVisual({ state, disabled }: { state: CheckState; disabled?: boolean }) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "flex size-4 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
-        state === true
-          ? "border-foreground bg-foreground text-background"
-          : state === "mixed"
-            ? "border-foreground bg-foreground/10 text-foreground"
-            : "border-muted-foreground/35 bg-transparent text-transparent",
-        disabled && "opacity-50",
-      )}
-    >
-      <StateMark state={state} />
-    </span>
-  );
 }
 
 /**
@@ -102,6 +67,11 @@ export function OrganizeDialog({
   const [query, setQuery] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [newCollectionOpen, setNewCollectionOpen] = useState(false);
+  const [newCollectionName, setNewCollectionName] = useState("");
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [creating, setCreating] = useState<"collection" | "project" | null>(null);
 
   // 关闭时清空草稿：下一次打开必然是干净状态；打开中不用 papers 引用做依赖，
   // 否则父组件一次普通 re-render（如输入标签）就会把正在勾的选项重置。
@@ -112,6 +82,10 @@ export function OrganizeDialog({
       setQuery("");
       setError(null);
       setSaving(false);
+      setNewCollectionOpen(false);
+      setNewCollectionName("");
+      setNewProjectOpen(false);
+      setNewProjectName("");
     }
   }, [open]);
 
@@ -228,6 +202,50 @@ export function OrganizeDialog({
     : projects;
   const hasViaMembership = projects.some((project) => projectMetrics(project.id).via > 0);
 
+  const createCollection = async () => {
+    const name = newCollectionName.trim();
+    if (!name || creating) return;
+    setCreating("collection");
+    setError(null);
+    try {
+      const created = await libraryApi<{ id: string }>("/collections", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+      setCollectionChanges((current) => new Map(current).set(created.id, true));
+      toast.add({ title: t("collectionCreated"), type: "success" });
+      setNewCollectionName("");
+      setNewCollectionOpen(false);
+      router.refresh();
+    } catch (caught) {
+      setError(caught instanceof LibraryApiError ? caught.message : t("actionFailed"));
+    } finally {
+      setCreating(null);
+    }
+  };
+
+  const createProject = async () => {
+    const name = newProjectName.trim();
+    if (!name || creating) return;
+    setCreating("project");
+    setError(null);
+    try {
+      const created = await libraryApi<{ id: string }>("/projects", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+      setProjectChanges((current) => new Map(current).set(created.id, true));
+      toast.add({ title: t("projectCreated"), type: "success" });
+      setNewProjectName("");
+      setNewProjectOpen(false);
+      router.refresh();
+    } catch (caught) {
+      setError(caught instanceof LibraryApiError ? caught.message : t("actionFailed"));
+    } finally {
+      setCreating(null);
+    }
+  };
+
   const save = async () => {
     if (!hasChanges || saving) return;
     setSaving(true);
@@ -310,13 +328,45 @@ export function OrganizeDialog({
                 <h3 className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                   <Folder className="size-3.5" /> {t("organizeCollections")}
                 </h3>
-                <Link
-                  href="/library/collections"
-                  className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-                >
-                  {t("manageCollections")}
-                </Link>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewCollectionOpen((value) => !value)}
+                    className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                  >
+                    {t("newCollection")}
+                  </button>
+                  <Link
+                    href="/library/collections"
+                    className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                  >
+                    {t("manageCollections")}
+                  </Link>
+                </div>
               </div>
+              {newCollectionOpen && (
+                <div className="mb-1.5 flex items-center gap-1">
+                  <Input
+                    value={newCollectionName}
+                    onChange={(event) => setNewCollectionName(event.target.value)}
+                    placeholder={t("collectionName")}
+                    aria-label={t("newCollection")}
+                    className="h-7 text-xs"
+                    autoFocus
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void createCollection();
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => void createCollection()}
+                    disabled={!newCollectionName.trim() || creating !== null}
+                  >
+                    {t("create")}
+                  </Button>
+                </div>
+              )}
               {collectionOptions.length === 0 ? (
                 <p className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
                   {t("organizeNoCollections")}
@@ -357,13 +407,45 @@ export function OrganizeDialog({
                 <h3 className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                   <Target className="size-3.5" /> {t("organizeProjects")}
                 </h3>
-                <Link
-                  href="/library/projects"
-                  className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-                >
-                  {t("manageProjects")}
-                </Link>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewProjectOpen((value) => !value)}
+                    className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                  >
+                    {t("newProject")}
+                  </button>
+                  <Link
+                    href="/library/projects"
+                    className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                  >
+                    {t("manageProjects")}
+                  </Link>
+                </div>
               </div>
+              {newProjectOpen && (
+                <div className="mb-1.5 flex items-center gap-1">
+                  <Input
+                    value={newProjectName}
+                    onChange={(event) => setNewProjectName(event.target.value)}
+                    placeholder={t("projectName")}
+                    aria-label={t("newProject")}
+                    className="h-7 text-xs"
+                    autoFocus
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void createProject();
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => void createProject()}
+                    disabled={!newProjectName.trim() || creating !== null}
+                  >
+                    {t("create")}
+                  </Button>
+                </div>
+              )}
               {projects.length === 0 ? (
                 <p className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
                   {t("organizeNoProjects")}

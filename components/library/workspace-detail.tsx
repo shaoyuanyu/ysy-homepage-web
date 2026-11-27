@@ -15,6 +15,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { PaperMeta, VenueCell } from "@/components/library/paper-table";
+import { RowCheckbox } from "@/components/library/row-checkbox";
+import { WorkspaceAddPapersButton } from "@/components/library/project-add-papers";
+import { WorkspaceEditDialog } from "@/components/library/workspace-edit-dialog";
 import { Link } from "@/lib/i18n/navigation";
 import { LibraryApiError, libraryApi } from "@/lib/library/client";
 import { compactDate } from "@/lib/library/format";
@@ -39,10 +42,24 @@ export function WorkspaceDetail({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [discardRefs, setDiscardRefs] = useState<string[] | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const pending = workspace.papers.filter((paper) => !paper.promoted);
   const closed = workspace.closedAt !== null;
   const pendingIds = pending.map((paper) => paper.paperId);
+  const selectedPending = pendingIds.filter((id) => selected.has(id));
+  const allSelected = pendingIds.length > 0 && selectedPending.length === pendingIds.length;
+  const toggle = (id: string) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const toggleAll = () => {
+    setSelected(allSelected ? new Set() : new Set(pendingIds));
+  };
   const summaryById = new Map(papers.map((paper) => [paper.id, paper]));
   const rows = workspace.papers.map((workspacePaper) => ({
     workspacePaper,
@@ -54,6 +71,7 @@ export function WorkspaceDetail({
     setError(null);
     try {
       await action();
+      setSelected(new Set());
       router.refresh();
     } catch (caught) {
       setError(caught instanceof LibraryApiError ? caught.message : t("workspaceActionFailed"));
@@ -165,26 +183,63 @@ export function WorkspaceDetail({
               })}
             </p>
           </div>
-          {!closed && (
-            <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => void promote(pendingIds)}
-                disabled={busy !== null || pendingIds.length === 0}
-              >
-                <Check /> {t("promoteAll")}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setDiscardRefs(pendingIds)}
-                disabled={busy !== null || pendingIds.length === 0}
-              >
-                <Trash2 /> {t("discardAll")}
-              </Button>
+          <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">
+            {!closed &&
+              (selectedPending.length > 0 ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void promote(selectedPending)}
+                    disabled={busy !== null}
+                  >
+                    <Check /> {t("promoteSelected", { count: selectedPending.length })}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setDiscardRefs(selectedPending)}
+                    disabled={busy !== null}
+                  >
+                    <Trash2 /> {t("discardSelected", { count: selectedPending.length })}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelected(new Set())}
+                    disabled={busy !== null}
+                  >
+                    {t("clearSelection")}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void promote(pendingIds)}
+                    disabled={busy !== null || pendingIds.length === 0}
+                  >
+                    <Check /> {t("promoteAll")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setDiscardRefs(pendingIds)}
+                    disabled={busy !== null || pendingIds.length === 0}
+                  >
+                    <Trash2 /> {t("discardAll")}
+                  </Button>
+                </>
+              ))}
+            {!closed && <WorkspaceAddPapersButton workspaceId={workspace.id} />}
+            <WorkspaceEditDialog workspace={workspace} />
+            {!closed && (
               <Button
                 type="button"
                 variant="ghost"
@@ -195,8 +250,8 @@ export function WorkspaceDetail({
               >
                 {t("closeWorkspace")}
               </Button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
         {error && <p className="text-xs text-destructive">{error}</p>}
       </div>
@@ -215,6 +270,13 @@ export function WorkspaceDetail({
               <table className="w-full min-w-[720px] border-collapse text-sm">
                 <thead className="border-b text-left text-xs text-muted-foreground">
                   <tr>
+                    <th className="w-8 px-2 py-2.5">
+                      <RowCheckbox
+                        checked={allSelected}
+                        onChange={toggleAll}
+                        label={t("selectAllPage")}
+                      />
+                    </th>
                     <th className="px-4 py-2.5 font-medium whitespace-nowrap">{t("paper")}</th>
                     <th className="w-[150px] px-3 py-2.5 font-medium whitespace-nowrap">
                       {t("venueColumn")}
@@ -241,6 +303,15 @@ export function WorkspaceDetail({
                       }}
                       className="group cursor-pointer border-b border-border/70 align-top transition-colors last:border-b-0 hover:bg-brand/[0.035] dark:hover:bg-brand/[0.06]"
                     >
+                      <td className="px-2 py-3">
+                        {!workspacePaper.promoted ? (
+                          <RowCheckbox
+                            checked={selected.has(workspacePaper.paperId)}
+                            onChange={() => toggle(workspacePaper.paperId)}
+                            label={`${t("select")} ${paper?.title ?? workspacePaper.title}`}
+                          />
+                        ) : null}
+                      </td>
                       <td className="px-4 py-3">
                         <Link
                           href={`/library/papers/${paper?.id ?? workspacePaper.citekey}`}
@@ -291,6 +362,16 @@ export function WorkspaceDetail({
             <ul className="divide-y md:hidden">
               {rows.map(({ workspacePaper, paper }) => (
                 <li key={workspacePaper.paperId} className="space-y-2 p-4">
+                  {!workspacePaper.promoted && (
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <RowCheckbox
+                        checked={selected.has(workspacePaper.paperId)}
+                        onChange={() => toggle(workspacePaper.paperId)}
+                        label={`${t("select")} ${paper?.title ?? workspacePaper.title}`}
+                      />
+                      {t("select")}
+                    </div>
+                  )}
                   <Link
                     href={`/library/papers/${paper?.id ?? workspacePaper.citekey}`}
                     className="block text-sm font-medium leading-[1.45] tracking-[-0.005em]"

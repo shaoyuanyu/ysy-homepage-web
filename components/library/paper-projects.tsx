@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { Target, X } from "lucide-react";
+import { Link2, X } from "lucide-react";
 
 import { toast } from "@/components/ui/toast";
 import { Link } from "@/lib/i18n/navigation";
@@ -95,12 +95,11 @@ export function PaperProjects({
               </button>
             ) : (
               <span
-                role="img"
-                aria-label={t("projectViaCollection")}
                 title={t("projectViaCollection")}
-                className="px-1 text-muted-foreground/70"
+                className="inline-flex items-center gap-0.5 px-1 text-xs text-muted-foreground/70"
               >
-                <Target className="size-3.5" aria-hidden />
+                <Link2 className="size-3" aria-hidden />
+                {t("organizeViaShort")}
               </span>
             )}
           </span>

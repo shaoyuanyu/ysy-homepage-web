@@ -1,46 +1,57 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { Plus, Target } from "lucide-react";
+import { Folder, Pencil, Plus, Target } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DeleteDialog } from "@/components/library/delete-dialog";
-import { RenameDialog } from "@/components/library/rename-dialog";
+import { ProjectCollectionsDialog } from "@/components/library/project-collections-dialog";
+import { ProjectEditDialog } from "@/components/library/project-edit-dialog";
+import { useLibraryOrganize } from "@/components/library/library-organize-context";
 import { Link } from "@/lib/i18n/navigation";
 import { LibraryApiError, libraryApi } from "@/lib/library/client";
+import { flattenCollections } from "@/lib/library/projects";
 import type { Project } from "@/lib/library/types";
 
 export function ProjectsPanel({ projects }: { projects: Project[] }) {
   const t = useTranslations("library");
   const router = useRouter();
+  const { collections } = useLibraryOrganize();
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Project | null>(null);
+  const [managing, setManaging] = useState<Project | null>(null);
+
+  const collectionNames = useMemo(
+    () => new Map(flattenCollections(collections).map((item) => [item.id, item.name])),
+    [collections],
+  );
 
   const create = async () => {
     if (!name.trim()) return;
     setBusy(true);
     setError(null);
     try {
-      await libraryApi("/projects", { method: "POST", body: JSON.stringify({ name: name.trim() }) });
+      await libraryApi("/projects", {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          ...(description.trim() ? { description: description.trim() } : {}),
+        }),
+      });
       setName("");
+      setDescription("");
       router.refresh();
     } catch (caught) {
       setError(caught instanceof LibraryApiError ? caught.message : t("actionFailed"));
     } finally {
       setBusy(false);
     }
-  };
-
-  const rename = async (id: string, next: string) => {
-    await libraryApi(`/projects/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ name: next }),
-    });
-    router.refresh();
   };
 
   const remove = async (id: string) => {
@@ -60,6 +71,14 @@ export function ProjectsPanel({ projects }: { projects: Project[] }) {
             onChange={(event) => setName(event.target.value)}
             placeholder={t("projectName")}
             aria-label={t("projectName")}
+          />
+          <textarea
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            placeholder={t("projectDescription")}
+            aria-label={t("projectDescription")}
+            rows={2}
+            className="w-full rounded-lg border-2 border-input bg-transparent p-2 text-sm leading-relaxed outline-none transition-colors placeholder:text-muted-foreground/60 focus-visible:ring-2 focus-visible:ring-ring/40 dark:bg-input/30"
           />
           <Button
             type="button"
@@ -87,32 +106,104 @@ export function ProjectsPanel({ projects }: { projects: Project[] }) {
           </div>
         ) : (
           <div className="divide-y text-sm">
-            {projects.map((project) => (
-              <div key={project.id} className="flex flex-wrap items-center gap-2 py-2.5 transition-colors hover:bg-accent/20">
-                <Target className="size-4 shrink-0 text-muted-foreground" />
-                <Link
-                  href={`/library?project=${project.id}`}
-                  className="min-w-0 truncate font-medium hover:underline hover:underline-offset-2"
+            {projects.map((project) => {
+              const linked = project.collectionIds
+                .map((id) => collectionNames.get(id) ?? id.slice(0, 8))
+                .filter(Boolean);
+              return (
+                <div
+                  key={project.id}
+                  className="flex flex-wrap items-start gap-2 py-3 transition-colors hover:bg-accent/20"
                 >
-                  {project.name}
-                </Link>
-                <span className="text-xs tabular-nums text-muted-foreground">
-                  {t("countPapers", { count: project.paperCount })}
-                </span>
-                <a href={`/library?project=${project.id}`} className="ml-auto text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">{t("open")}</a>
-                <span className="flex shrink-0 items-center gap-0.5">
-                  <RenameDialog value={project.name} onRename={(name) => rename(project.id, name)} />
-                  <DeleteDialog
-                    label={project.name}
-                    description={t("deleteProjectHint")}
-                    onDelete={() => remove(project.id)}
-                  />
-                </span>
-              </div>
-            ))}
+                  <Target className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <Link
+                        href={`/library?project=${project.id}`}
+                        className="min-w-0 truncate font-medium hover:underline hover:underline-offset-2"
+                      >
+                        {project.name}
+                      </Link>
+                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                        {t("countPapers", { count: project.paperCount })}
+                      </span>
+                    </div>
+                    {project.description && (
+                      <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground/80">
+                        {project.description}
+                      </p>
+                    )}
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                      {linked.length > 0 ? (
+                        linked.map((collectionName) => (
+                          <span key={collectionName} className="inline-flex items-center gap-1">
+                            <Folder className="size-3" aria-hidden />
+                            {collectionName}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-muted-foreground/60">{t("projectNoCollections")}</span>
+                      )}
+                    </div>
+                  </div>
+                  <span className="flex shrink-0 items-center gap-0.5">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setManaging(project)}
+                      className="h-7 px-2 text-xs font-normal text-muted-foreground"
+                    >
+                      <Folder /> {t("projectCollections")}
+                    </Button>
+                    <a
+                      href={`/library?project=${project.id}`}
+                      className="px-2 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                    >
+                      {t("open")}
+                    </a>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={t("editProject")}
+                      title={t("editProject")}
+                      onClick={() => setEditing(project)}
+                    >
+                      <Pencil />
+                    </Button>
+                    <DeleteDialog
+                      label={project.name}
+                      description={t("deleteProjectHint")}
+                      onDelete={() => remove(project.id)}
+                    />
+                  </span>
+                </div>
+              );
+            })}
           </div>
         )}
       </section>
+
+      {editing && (
+        <ProjectEditDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setEditing(null);
+          }}
+          project={editing}
+        />
+      )}
+      {managing && (
+        <ProjectCollectionsDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setManaging(null);
+          }}
+          project={managing}
+          collections={collections}
+        />
+      )}
     </div>
   );
 }

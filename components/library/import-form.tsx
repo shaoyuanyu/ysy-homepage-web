@@ -6,6 +6,9 @@ import { useTranslations } from "next-intl";
 import { CheckCircle2, CircleAlert, Loader2, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { flattenCollections } from "@/lib/library/projects";
 import { cn } from "@/lib/utils";
 import {
   LibraryApiError,
@@ -14,10 +17,12 @@ import {
   waitForJob,
 } from "@/lib/library/client";
 import type {
+  CollectionNode,
   ImportCreated,
   ImportItem,
   ImportJob,
   PdfImportCreated,
+  ResearchWorkspace,
 } from "@/lib/library/types";
 
 type Mode = "identifiers" | "bibtex" | "pdf";
@@ -26,9 +31,19 @@ function terminal(status: string): boolean {
   return status === "succeeded" || status === "failed" || status === "cancelled";
 }
 
-export function ImportForm() {
+export function ImportForm({
+  collections,
+  workspaces,
+}: {
+  collections: CollectionNode[];
+  workspaces: ResearchWorkspace[];
+}) {
   const t = useTranslations("library");
   const router = useRouter();
+  const collectionOptions = flattenCollections(collections);
+  const [targetCollection, setTargetCollection] = useState("");
+  const [targetWorkspace, setTargetWorkspace] = useState("");
+  const [tagsText, setTagsText] = useState("");
   const [mode, setMode] = useState<Mode>("identifiers");
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -55,9 +70,44 @@ export function ImportForm() {
     setError(t("importTimeout"));
   };
 
+  const defaultTags = tagsText
+    .split(/[,，\n]/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  const importOptions = () => ({
+    onDuplicate: "link",
+    defaultTags,
+    ...(targetCollection ? { defaultCollectionId: targetCollection } : {}),
+    ...(targetWorkspace ? { defaultWorkspaceId: targetWorkspace } : {}),
+  });
+
+  /** PDF 导入接口暂时没有 options：落点由前端在导入后补写。 */
+  const applyTargets = async (paperId: string) => {
+    if (defaultTags.length > 0) {
+      await libraryApi(`/papers/${paperId}/tags`, {
+        method: "POST",
+        body: JSON.stringify({ paths: defaultTags }),
+      });
+    }
+    if (targetCollection) {
+      await libraryApi(`/papers/${paperId}/collections`, {
+        method: "POST",
+        body: JSON.stringify({ collectionIds: [targetCollection] }),
+      });
+    }
+    if (targetWorkspace) {
+      await libraryApi(`/workspaces/${targetWorkspace}/papers`, {
+        method: "POST",
+        body: JSON.stringify({ paperRefs: [paperId] }),
+      });
+    }
+  };
+
   const submitBibtexFile = async (bibFile: File): Promise<ImportCreated> => {
     const form = new FormData();
     form.append("file", bibFile);
+    form.append("options", JSON.stringify(importOptions()));
     const response = await fetch("/api/library/imports/bibtex", {
       method: "POST",
       body: form,
@@ -84,6 +134,7 @@ export function ImportForm() {
         if (!pdfFile) throw new LibraryApiError(t("choosePdf"), 400);
         const result = await importPdf(pdfFile);
         setPdfResult(result);
+        await applyTargets(result.paperId);
         if (result.jobId) await waitForJob(result.jobId);
         router.refresh();
         return;
@@ -111,7 +162,7 @@ export function ImportForm() {
           method: "POST",
           body: JSON.stringify({
             items: values,
-            options: { onDuplicate: "link", defaultTags: [] },
+            options: importOptions(),
           }),
         });
       }
@@ -193,6 +244,89 @@ export function ImportForm() {
             <p className="mt-1.5 text-xs text-muted-foreground">{t("pdfHint")}</p>
           </div>
         )}
+
+        <div className="mt-4 rounded-lg border bg-muted/20 p-3">
+          <p className="text-xs font-medium">{t("importDestination")}</p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <label className="flex flex-col gap-1 text-xs">
+              <span className="text-muted-foreground">{t("importCollection")}</span>
+              <Select
+              items={[
+                { value: "__none__", label: t("importNone") },
+                ...collectionOptions.map((option) => ({
+                  value: option.id,
+                  label: `${"— ".repeat(option.depth)}${option.name}`,
+                })),
+              ]}
+              value={targetCollection || "__none__"}
+              onValueChange={(next) => {
+                const value = next === "__none__" || !next ? "" : next;
+                setTargetCollection(value);
+                if (value) setTargetWorkspace("");
+              }}
+            >
+              <SelectTrigger className="w-full" aria-label={t("importCollection")}>
+                <SelectValue placeholder={t("importCollection")} />
+              </SelectTrigger>
+              <SelectContent align="start" className="min-w-56">
+                <SelectItem value="__none__" label={t("importNone")}>
+                  {t("importNone")}
+                </SelectItem>
+                {collectionOptions.map((option) => (
+                  <SelectItem
+                    key={option.id}
+                    value={option.id}
+                    label={`${"— ".repeat(option.depth)}${option.name}`}
+                  >
+                    {`${"— ".repeat(option.depth)}${option.name}`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+              </Select>
+            </label>
+            <label className="flex flex-col gap-1 text-xs">
+              <span className="text-muted-foreground">{t("importWorkspace")}</span>
+              <Select
+              items={[
+                { value: "__none__", label: t("importNone") },
+                ...workspaces.map((workspace) => ({
+                  value: workspace.id,
+                  label: workspace.name,
+                })),
+              ]}
+              value={targetWorkspace || "__none__"}
+              onValueChange={(next) => {
+                const value = next === "__none__" || !next ? "" : next;
+                setTargetWorkspace(value);
+                if (value) setTargetCollection("");
+              }}
+            >
+              <SelectTrigger className="w-full" aria-label={t("importWorkspace")}>
+                <SelectValue placeholder={t("importWorkspace")} />
+              </SelectTrigger>
+              <SelectContent align="start" className="min-w-56">
+                <SelectItem value="__none__" label={t("importNone")}>
+                  {t("importNone")}
+                </SelectItem>
+                {workspaces.map((workspace) => (
+                  <SelectItem key={workspace.id} value={workspace.id} label={workspace.name}>
+                    {workspace.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+              </Select>
+            </label>
+          </div>
+          <Input
+            value={tagsText}
+            onChange={(event) => setTagsText(event.target.value)}
+            placeholder={t("importTags")}
+            aria-label={t("importTags")}
+            className="mt-2"
+          />
+          <p className="mt-1.5 text-xs text-muted-foreground">{t("importDestinationHint")}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground/70">{t("importWorkspaceHint")}</p>
+        </div>
 
         <div className="flex items-center gap-2 pt-3">
           <Button type="button" onClick={() => void submit()} disabled={busy}>

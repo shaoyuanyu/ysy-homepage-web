@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { FolderCog, Loader2, Star, Upload } from "lucide-react";
 
 import { OrganizeDialog } from "@/components/library/organize-dialog";
+import { useLibraryOrganize } from "@/components/library/library-organize-context";
+import { flattenTagPaths } from "@/lib/library/tags";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -38,6 +40,8 @@ export function PaperActions({
   hasFile: boolean;
 }) {
   const t = useTranslations("library");
+  const { tags } = useLibraryOrganize();
+  const tagPaths = useMemo(() => flattenTagPaths(tags), [tags]);
   const router = useRouter();
   const fileInput = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -188,9 +192,15 @@ export function PaperActions({
           >
             <FolderCog className="size-4" /> {t("organize")}
           </Button>
+          <datalist id="library-tag-options-detail">
+            {tagPaths.map((path) => (
+              <option key={path} value={path} />
+            ))}
+          </datalist>
           <input
             value={tag}
             onChange={(event) => setTag(event.target.value)}
+            list="library-tag-options-detail"
             onKeyDown={(event) => {
               // 组字中的 Enter 属于输入法（确认候选词），不能顺带添加标签——
               // 中文标签很常见，判据见 lib/utils/ime.ts

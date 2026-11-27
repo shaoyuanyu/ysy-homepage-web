@@ -93,18 +93,40 @@ export function listPapers(params: {
   unfiled?: boolean;
   includeStaged?: boolean;
   filter?: string;
+  sort?: string;
   limit?: number;
   cursor?: string;
 }): Promise<PaperPage> {
   return request<PaperPage>(`/papers${query(params)}`);
 }
 
+export function listTrash(limit = 100): Promise<PaperPage> {
+  return request<PaperPage>(`/papers/trash${query({ limit })}`);
+}
+
 export function getPaper(ref: string): Promise<PaperDetail> {
   return request<PaperDetail>(`/papers/${encodeURIComponent(ref)}`);
 }
 
-export function getProjectPapers(projectId: string, limit = 50): Promise<PaperPage> {
-  return request<PaperPage>(`/projects/${projectId}/papers${query({ limit })}`);
+export function getProjectPapers(
+  projectId: string,
+  params: {
+    q?: string;
+    collection?: string;
+    tag?: string;
+    status?: string;
+    year?: number;
+    kind?: string;
+    starred?: boolean;
+    unfiled?: boolean;
+    sort?: string;
+    limit?: number;
+    cursor?: string;
+  } = {},
+): Promise<PaperPage> {
+  return request<PaperPage>(
+    `/projects/${projectId}/papers${query({ limit: 50, ...params })}`,
+  );
 }
 
 export function getProject(projectId: string): Promise<Project> {

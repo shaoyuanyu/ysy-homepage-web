@@ -6,12 +6,16 @@ import { Activity, Check, Copy, Database, KeyRound, Link2, Trash2 } from "lucide
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { LibraryApiError, libraryApi } from "@/lib/library/client";
+import { flattenCollections } from "@/lib/library/projects";
 import type {
+  CollectionNode,
   ExportToken,
   ExportTokenCreated,
   Meta,
+  Project,
   Token,
   TokenCreated,
 } from "@/lib/library/types";
@@ -31,10 +35,14 @@ export function SettingsPanel({
   meta,
   tokens: initialTokens,
   exports: initialExports,
+  collections,
+  projects,
 }: {
   meta: Meta | null;
   tokens: Token[];
   exports: ExportToken[];
+  collections: CollectionNode[];
+  projects: Project[];
 }) {
   const t = useTranslations("library");
   const [tokens, setTokens] = useState(initialTokens);
@@ -44,6 +52,11 @@ export function SettingsPanel({
   const [created, setCreated] = useState<TokenCreated | null>(null);
   const [exportCreated, setExportCreated] = useState<ExportTokenCreated | null>(null);
   const [exportName, setExportName] = useState("Zotero / Overleaf");
+  const [exportScope, setExportScope] = useState<"library" | "collection" | "project">(
+    "library",
+  );
+  const [exportScopeId, setExportScopeId] = useState("");
+  const [exportAbstract, setExportAbstract] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -71,12 +84,14 @@ export function SettingsPanel({
   });
 
   const createExport = () => call(async () => {
+    if (exportScope !== "library" && !exportScopeId) return;
     const token = await libraryApi<ExportTokenCreated>("/export-tokens", {
       method: "POST",
       body: JSON.stringify({
         name: exportName,
-        scopeType: "library",
-        includeAbstract: true,
+        scopeType: exportScope,
+        ...(exportScope !== "library" ? { scopeId: exportScopeId } : {}),
+        includeAbstract: exportAbstract,
       }),
     });
     setExportCreated(token);
@@ -87,7 +102,7 @@ export function SettingsPanel({
         prefix: token.prefix,
         scopeType: token.scopeType,
         scopeId: token.scopeId,
-        includeAbstract: true,
+        includeAbstract: exportAbstract,
         createdAt: token.createdAt,
         lastAccessedAt: null,
         accessCount: 0,
@@ -111,6 +126,20 @@ export function SettingsPanel({
     await navigator.clipboard.writeText(value);
     setCopied(key);
     setTimeout(() => setCopied(null), 1600);
+  };
+
+  const collectionOptions = flattenCollections(collections);
+  const scopeLabel = (token: ExportToken) => {
+    if (token.scopeType === "collection") {
+      const name = collectionOptions.find((item) => item.id === token.scopeId)?.name;
+      return `${t("exportScopeCollection")}: ${name ?? token.scopeId?.slice(0, 8)}`;
+    }
+    if (token.scopeType === "project") {
+      const name = projects.find((item) => item.id === token.scopeId)?.name;
+      return `${t("exportScopeProject")}: ${name ?? token.scopeId?.slice(0, 8)}`;
+    }
+    if (token.scopeType === "paper") return t("exportScopePaper");
+    return t("exportScopeLibrary");
   };
 
   return (
@@ -243,14 +272,94 @@ export function SettingsPanel({
       <section className="rounded-xl border p-4">
         <h2 className="flex items-center gap-2 text-sm font-semibold"><Link2 className="size-4" /> {t("exportLinks")}</h2>
         <p className="mt-1 text-xs text-muted-foreground">{t("exportLinksHint")}</p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Input
-            value={exportName}
-            onChange={(event) => setExportName(event.target.value)}
-            className="w-56"
-            aria-label={t("createExportLink")}
-          />
-          <Button type="button" onClick={() => void createExport()} disabled={busy}>
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-muted-foreground">{t("tokenName")}</span>
+            <Input
+              value={exportName}
+              onChange={(event) => setExportName(event.target.value)}
+              className="w-48"
+              aria-label={t("createExportLink")}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-muted-foreground">{t("exportScope")}</span>
+            <Select
+              items={[
+                { value: "library", label: t("exportScopeLibrary") },
+                { value: "collection", label: t("exportScopeCollection") },
+                { value: "project", label: t("exportScopeProject") },
+              ]}
+              value={exportScope}
+              onValueChange={(next) => {
+                setExportScope((next as typeof exportScope) ?? "library");
+                setExportScopeId("");
+              }}
+            >
+              <SelectTrigger className="w-36" aria-label={t("exportScope")}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="library" label={t("exportScopeLibrary")}>
+                  {t("exportScopeLibrary")}
+                </SelectItem>
+                <SelectItem value="collection" label={t("exportScopeCollection")}>
+                  {t("exportScopeCollection")}
+                </SelectItem>
+                <SelectItem value="project" label={t("exportScopeProject")}>
+                  {t("exportScopeProject")}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
+          {exportScope !== "library" && (
+            <label className="flex flex-col gap-1 text-xs">
+              <span className="text-muted-foreground">{t("exportTarget")}</span>
+              <Select
+                items={
+                  exportScope === "collection"
+                    ? collectionOptions.map((option) => ({
+                        value: option.id,
+                        label: `${"— ".repeat(option.depth)}${option.name}`,
+                      }))
+                    : projects.map((project) => ({ value: project.id, label: project.name }))
+                }
+                value={exportScopeId || undefined}
+                onValueChange={(next) => setExportScopeId(next ?? "")}
+              >
+                <SelectTrigger className="w-48" aria-label={t("exportTarget")}>
+                  <SelectValue placeholder={t("exportTarget")} />
+                </SelectTrigger>
+                <SelectContent>
+                  {(exportScope === "collection"
+                    ? collectionOptions.map((option) => ({
+                        value: option.id,
+                        label: `${"— ".repeat(option.depth)}${option.name}`,
+                      }))
+                    : projects.map((project) => ({ value: project.id, label: project.name }))
+                  ).map((item) => (
+                    <SelectItem key={item.value} value={item.value} label={item.label}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+          )}
+          <label className="flex items-center gap-1.5 pb-2 text-xs">
+            <input
+              type="checkbox"
+              checked={exportAbstract}
+              onChange={(event) => setExportAbstract(event.target.checked)}
+              className="size-4 accent-foreground"
+            />
+            {t("exportIncludeAbstract")}
+          </label>
+          <Button
+            type="button"
+            onClick={() => void createExport()}
+            disabled={busy || (exportScope !== "library" && !exportScopeId)}
+          >
             {t("createExportLink")}
           </Button>
         </div>
@@ -275,7 +384,7 @@ export function SettingsPanel({
           {exportTokens.map((token) => (
             <div key={token.id} className="flex flex-wrap items-center gap-2 py-2">
               <span className="font-medium">{token.name}</span>
-              <span className="text-muted-foreground">{token.scopeType}</span>
+              <span className="text-muted-foreground">{scopeLabel(token)}</span>
               <span className="text-muted-foreground">{t("accessCount", { count: token.accessCount })}</span>
               <span className="ml-auto text-muted-foreground">{shortDate(token.createdAt)}</span>
               {token.revokedAt ? (

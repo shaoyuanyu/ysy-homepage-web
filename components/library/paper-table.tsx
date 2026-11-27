@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
-  Check,
   FileText,
   FlaskConical,
   FolderCog,
@@ -14,7 +13,14 @@ import {
   X,
 } from "lucide-react";
 
+import { RowCheckbox } from "@/components/library/row-checkbox";
 import { useLibraryOrganize } from "@/components/library/library-organize-context";
+import { flattenTagPaths } from "@/lib/library/tags";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { OrganizeDialog } from "@/components/library/organize-dialog";
 import { PaperMembershipLine } from "@/components/library/paper-membership-line";
 import { buttonVariants } from "@/components/ui/button";
@@ -39,38 +45,6 @@ const statusDot: Record<string, string> = {
   read: "bg-emerald-500",
   skimmed: "bg-violet-500",
 };
-
-/** 自绘复选框：原生 checkbox 在 macOS 上偏大、边框呆板，和这一版的细线条不搭。
- *  input 仍保留（sr-only），可见的方块只是它的 peer。 */
-function Checkbox({
-  checked,
-  onChange,
-  label,
-  className,
-}: {
-  checked: boolean;
-  onChange: () => void;
-  label: string;
-  className?: string;
-}) {
-  return (
-    <label className={cn("inline-flex cursor-pointer items-center justify-center p-1", className)}>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={onChange}
-        aria-label={label}
-        className="peer sr-only"
-      />
-      <span
-        aria-hidden
-        className="flex size-4 items-center justify-center rounded-[4px] border border-muted-foreground/35 bg-transparent text-transparent transition-colors peer-checked:border-foreground peer-checked:bg-foreground peer-checked:text-background peer-focus-visible:ring-2 peer-focus-visible:ring-ring/40 peer-hover:border-muted-foreground/60"
-      >
-        <Check className="size-3" strokeWidth={3} />
-      </span>
-    </label>
-  );
-}
 
 /** 论文的第二行：作者 + 一级主题 + 附件/批注 + 调研状态。
  *  信息都收在这一行里，不再为「文件」「标签」各开一列——表格的固定列越少，
@@ -462,7 +436,13 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
   const [error, setError] = useState<string | null>(null);
   // 归类弹窗的目标：批量条传当前选中的论文，行内入口传单篇。
   const [organizePapers, setOrganizePapers] = useState<PaperSummary[] | null>(null);
-  const { collections, projects } = useLibraryOrganize();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const returnTo = `${pathname}${searchParams.size ? `?${searchParams.toString()}` : ""}`;
+  const detailHref = (paperId: string) =>
+    `/library/papers/${paperId}?from=${encodeURIComponent(returnTo)}`;
+  const { collections, projects, tags } = useLibraryOrganize();
+  const tagPaths = useMemo(() => flattenTagPaths(tags), [tags]);
   const collectionSubtrees = useMemo(
     () => buildCollectionSubtrees(collections),
     [collections],
@@ -486,6 +466,17 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
   const allStarred =
     selected.size > 0 &&
     items.filter((item) => selected.has(item.id)).every((item) => item.state.starred);
+
+  // 批量移除标签只列出选中论文实际带的路径，避免让用户从全库标签里挑。
+  const selectedTagCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const paper of items) {
+      if (!selected.has(paper.id)) continue;
+      for (const path of paper.tags) counts.set(path, (counts.get(path) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [items, selected]);
+
 
   const selectedIds = useMemo(() => [...selected], [selected]);
   // 没人评分时整列收起：14 行「—」不提供任何信息，还会吃掉标题宽度。
@@ -617,10 +608,16 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
             <FolderCog className="size-3.5" /> {t("organize")}
           </button>
           <div className="flex min-w-0 items-center gap-1">
+            <datalist id="library-tag-options">
+              {tagPaths.map((path) => (
+                <option key={path} value={path} />
+              ))}
+            </datalist>
             <input
               value={tag}
               onChange={(event) => setTag(event.target.value)}
               placeholder={t("bulkTagPlaceholder")}
+              list="library-tag-options"
               className="h-7 w-32 rounded-md border border-border bg-background px-2 text-xs outline-none transition-colors placeholder:text-muted-foreground/60 focus-visible:ring-2 focus-visible:ring-ring/40 sm:w-40"
             />
             <button
@@ -632,6 +629,36 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
               {t("bulkAddTag")}
             </button>
           </div>
+          <Popover>
+            <PopoverTrigger
+              render={
+                <button
+                  type="button"
+                  disabled={busy || selectedTagCounts.length === 0}
+                  className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs transition-colors hover:bg-accent disabled:opacity-40"
+                />
+              }
+            >
+              {t("bulkRemoveTag")}
+            </PopoverTrigger>
+            <PopoverContent align="start" className="max-h-64 w-60 overflow-y-auto p-1">
+              <div className="space-y-0.5">
+                {selectedTagCounts.map(([path, count]) => (
+                  <button
+                    key={path}
+                    type="button"
+                    onClick={() => void bulk({ removeTags: [path] })}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs transition-colors hover:bg-accent"
+                  >
+                    <span className="min-w-0 flex-1 truncate" title={path}>
+                      {path.split("/").join(" › ")}
+                    </span>
+                    <span className="shrink-0 tabular-nums text-muted-foreground">{count}</span>
+                  </button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
           {busy && <span className="text-xs text-muted-foreground">…</span>}
           {error && <span className="basis-full text-xs text-destructive">{error}</span>}
         </div>
@@ -644,12 +671,12 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
             <tr>
               <th className="px-4 py-2.5 font-medium whitespace-nowrap">
                 <div className="flex items-center gap-2">
-                  <Checkbox
+                  <RowCheckbox
                     checked={allSelected}
                     onChange={() =>
                       setSelected(allSelected ? new Set() : new Set(items.map((item) => item.id)))
                     }
-                    label={t("selectAll")}
+                    label={t("selectAllPage")}
                     className="-ml-1"
                   />
                   <span>{t("paper")}</span>
@@ -680,7 +707,7 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
                   if ((event.target as HTMLElement).closest("a,button,input,select,label")) return;
                   // 拖选标题文字准备复制时不要跳转
                   if (window.getSelection()?.toString()) return;
-                  router.push(`/library/papers/${paper.id}`);
+                  router.push(detailHref(paper.id));
                 }}
                 className={cn(
                   "group/row cursor-pointer border-b border-border/70 align-top transition-colors last:border-b-0 hover:bg-brand/[0.035] dark:hover:bg-brand/[0.06]",
@@ -689,7 +716,7 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
               >
                 <td className="px-4 py-3">
                   <div className="flex min-w-0 items-start gap-2">
-                    <Checkbox
+                    <RowCheckbox
                       checked={selected.has(paper.id)}
                       onChange={() => toggle(paper.id)}
                       label={`${t("select")} ${paper.title}`}
@@ -698,7 +725,7 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
                     <div className="min-w-0 flex-1">
                       <div className="flex min-w-0 items-start gap-1">
                         <Link
-                          href={`/library/papers/${paper.id}`}
+                          href={detailHref(paper.id)}
                           title={paper.title}
                           className="line-clamp-2 min-w-0 flex-1 text-sm font-medium leading-[1.45] tracking-[-0.005em] transition-colors hover:text-foreground hover:underline hover:underline-offset-2"
                         >
@@ -746,7 +773,7 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
               selected.has(paper.id) && "bg-brand/[0.055]",
             )}
           >
-            <Checkbox
+            <RowCheckbox
               checked={selected.has(paper.id)}
               onChange={() => toggle(paper.id)}
               label={`${t("select")} ${paper.title}`}
@@ -755,7 +782,7 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
             <div className="min-w-0 flex-1">
               {/* 只有标题区是链接；状态/星标/标签放在链接外，手机上也能直接操作
                   （把交互控件放进 <a> 是非法嵌套，点了会同时触发导航） */}
-              <Link href={`/library/papers/${paper.id}`} className="block">
+              <Link href={detailHref(paper.id)} className="block">
                 <span className="block text-sm font-medium leading-[1.45] tracking-[-0.005em]">
                   {paper.title}
                 </span>

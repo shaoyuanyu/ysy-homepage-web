@@ -384,3 +384,9 @@ export interface ResearchWorkspacePaper {
 export interface ResearchWorkspaceDetail extends ResearchWorkspace {
   papers: ResearchWorkspacePaper[];
 }
+
+export interface DuplicateCandidate {
+  paper: PaperSummary;
+  score: number;
+  reasons: string[];
+}

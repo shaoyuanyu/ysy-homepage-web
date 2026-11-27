@@ -15,7 +15,11 @@ import {
 import { CopyBibtexButton } from "@/components/library/copy-bibtex";
 import { PaperActions } from "@/components/library/paper-actions";
 import { PaperCollections } from "@/components/library/paper-collections";
+import { DeletePaperButton } from "@/components/library/delete-paper-button";
+import { PaperDuplicatesDialog } from "@/components/library/paper-duplicates-dialog";
+import { PaperMetadataDialog } from "@/components/library/paper-metadata-dialog";
 import { PaperProjects } from "@/components/library/paper-projects";
+import { PaperTags } from "@/components/library/paper-tags";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Link } from "@/lib/i18n/navigation";
@@ -33,7 +37,6 @@ import {
   authorLine,
   bytesLabel,
   shortDate,
-  tagLabel,
   venueLine,
 } from "@/lib/library/format";
 import type { CollectionNode, PaperDetail, Project } from "@/lib/library/types";
@@ -103,8 +106,21 @@ export async function generateMetadata({
   }
 }
 
-export default async function PaperPage({ params }: { params: Promise<{ ref: string }> }) {
+export default async function PaperPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ ref: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { ref } = await params;
+  const query = await searchParams;
+  const rawFrom = Array.isArray(query.from) ? query.from[0] : query.from;
+  // 只接受站内列表路径，避免把 from 当成开放重定向。
+  const backTo =
+    rawFrom && rawFrom.startsWith("/library") && !rawFrom.startsWith("//")
+      ? rawFrom
+      : "/library";
   const t = await getTranslations("library");
   let paper: PaperDetail;
   try {
@@ -132,7 +148,7 @@ export default async function PaperPage({ params }: { params: Promise<{ ref: str
           </p>
         )}
         <Link
-          href="/library"
+          href={backTo}
           data-slot="button"
           className={buttonVariants({ variant: "outline", size: "sm", className: "mt-5" })}
         >
@@ -183,7 +199,7 @@ export default async function PaperPage({ params }: { params: Promise<{ ref: str
 
   return (
     <div className="min-w-0 space-y-4">
-      <Link href="/library" className="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
+      <Link href={backTo} className="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
         <ArrowLeft className="size-3.5" /> {t("backToLibrary")}
       </Link>
 
@@ -248,6 +264,7 @@ export default async function PaperPage({ params }: { params: Promise<{ ref: str
             >
               <Download data-icon="inline-start" /> {t("downloadBibtex")}
             </a>
+            <DeletePaperButton paperId={paper.id} title={paper.title} />
           </span>
         </div>
       </header>
@@ -431,7 +448,13 @@ export default async function PaperPage({ params }: { params: Promise<{ ref: str
 
         <aside className="space-y-4 lg:sticky lg:top-20 lg:self-start">
           <section className="rounded-xl border bg-library-surface p-3 text-xs">
-            <h3 className="mb-2 text-sm font-semibold">{t("metadata")}</h3>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold">{t("metadata")}</h3>
+              <div className="flex items-center gap-1">
+                <PaperDuplicatesDialog paperId={paper.id} paperTitle={paper.title} />
+                <PaperMetadataDialog paper={paper} />
+              </div>
+            </div>
             {/* 左标签 + 左对齐值：长期刊名在 260px 宽的侧栏里右对齐会碎成参差的锯齿，
                 左对齐 + 定宽标签列读起来才像一张信息表 */}
             <dl className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-x-3 gap-y-2">
@@ -461,17 +484,7 @@ export default async function PaperPage({ params }: { params: Promise<{ ref: str
 
           <section className="rounded-xl border bg-library-surface p-3 text-xs">
             <h3 className="mb-2 text-sm font-semibold">{t("tags")}</h3>
-            {paper.tags.length === 0 ? (
-              <p className="text-muted-foreground">{t("noTags")}</p>
-            ) : (
-              <div className="flex flex-wrap gap-1">
-                {paper.tags.map((path) => (
-                  <Link key={path} href={`/library?tag=${encodeURIComponent(path)}`} className="rounded bg-muted px-1.5 py-0.5 hover:underline">
-                    {tagLabel(path)}
-                  </Link>
-                ))}
-              </div>
-            )}
+            <PaperTags paperId={paper.id} tags={paper.tags} />
           </section>
 
           <section className="rounded-xl border bg-library-surface p-3 text-xs">

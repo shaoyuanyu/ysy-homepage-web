@@ -3,9 +3,9 @@ import { getTranslations } from "next-intl/server";
 import { History } from "lucide-react";
 
 import { ImportForm } from "@/components/library/import-form";
-import { listImports } from "@/lib/library/server";
+import { getCollectionTree, listImports, listWorkspaces } from "@/lib/library/server";
 import { shortDate } from "@/lib/library/format";
-import type { ImportJob } from "@/lib/library/types";
+import type { CollectionNode, ImportJob, ResearchWorkspace } from "@/lib/library/types";
 
 export const dynamic = "force-dynamic";
 
@@ -28,13 +28,17 @@ export default async function ImportPage() {
   } catch {
     imports = [];
   }
+  const [collections, workspaces] = await Promise.all([
+    getCollectionTree().catch(() => [] as CollectionNode[]),
+    listWorkspaces().catch(() => [] as ResearchWorkspace[]),
+  ]);
   return (
     <div className="space-y-6">
       <div className="space-y-1">
         <h2 className="text-xl font-semibold tracking-tight">{t("importTitle")}</h2>
         <p className="text-sm text-muted-foreground">{t("importHint")}</p>
       </div>
-      <ImportForm />
+      <ImportForm collections={collections} workspaces={workspaces} />
       <section className="rounded-xl border p-4">
         <div className="mb-3 flex items-center justify-between gap-2">
           <h3 className="flex items-center gap-2 text-sm font-semibold">

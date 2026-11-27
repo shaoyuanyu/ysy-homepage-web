@@ -8,3 +8,13 @@
  * 控件必须用这个常量拼选项，不要按 `ReadingStatus` 类型直接拼。
  */
 export const READING_STATUSES = ["unread", "queued", "reading", "read", "skimmed"] as const;
+
+/** paperdb `PaperKind` 的 UI 选项。⚠ 后端没有 `book`（只有 `book_chapter`）。 */
+export const PAPER_KINDS = [
+  "conference",
+  "journal",
+  "preprint",
+  "thesis",
+  "book_chapter",
+  "tech_report",
+] as const;

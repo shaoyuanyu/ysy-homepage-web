@@ -2,7 +2,7 @@
 
 import { createContext, useContext, type ReactNode } from "react";
 
-import type { CollectionNode, Project } from "@/lib/library/types";
+import type { CollectionNode, Project, TagNode } from "@/lib/library/types";
 
 /**
  * 文献库的“归类数据”上下文：集合树与项目列表在 layout 里已经加载过一次，
@@ -13,20 +13,23 @@ import type { CollectionNode, Project } from "@/lib/library/types";
 interface LibraryOrganizeValue {
   collections: CollectionNode[];
   projects: Project[];
+  tags: TagNode[];
 }
 
 const LibraryOrganizeContext = createContext<LibraryOrganizeValue>({
   collections: [],
   projects: [],
+  tags: [],
 });
 
 export function LibraryOrganizeProvider({
   collections,
   projects,
+  tags,
   children,
 }: LibraryOrganizeValue & { children: ReactNode }) {
   return (
-    <LibraryOrganizeContext.Provider value={{ collections, projects }}>
+    <LibraryOrganizeContext.Provider value={{ collections, projects, tags }}>
       {children}
     </LibraryOrganizeContext.Provider>
   );
