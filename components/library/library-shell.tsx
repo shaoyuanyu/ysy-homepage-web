@@ -321,8 +321,8 @@ export function LibraryShell({ collections, views, projects, workspaces, tags, m
   }));
   const [mobileOpen, setMobileOpen] = useState(false);
   const searchParams = useSearchParams();
-  // meta.counts.papers 把调研区论文也算进「N 篇文献」；页头给出「N 篇在调研区」，
-  // 既可一键进入各工作区，也说明列表行尾那些「调研中」从哪来。
+  // meta.counts.papers 只算已入库论文；页头另给「N 篇在调研区」并链到工作区，
+  // 这样列表（不含暂存）与总量口径一致，也不会让人以为论文丢了。
   const stagedTotal = workspaces.reduce((sum, workspace) => sum + workspace.pendingCount, 0);
 
   // 移动端「目录」面板在选中集合/标签/视图/项目后应自动收起：
@@ -348,7 +348,7 @@ export function LibraryShell({ collections, views, projects, workspaces, tags, m
               {meta
                 ? t("libraryStats", {
                     papers: meta.counts.papers ?? 0,
-                    pdfs: meta.storage.files ?? 0,
+                    pdfs: meta.counts.pdfs ?? 0,
                   })
                 : t("backendOffline")}
               {meta && stagedTotal > 0 && (

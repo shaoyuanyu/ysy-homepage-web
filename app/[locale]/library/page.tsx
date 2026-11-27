@@ -92,7 +92,6 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
         unfiled: unfiled || undefined,
         year: year ? Number(year) : undefined,
         cursor,
-        includeStaged: true,
       });
     } else {
       page = await listPapers({
@@ -105,7 +104,6 @@ export default async function LibraryPage({ searchParams }: { searchParams: Sear
         unfiled: unfiled || undefined,
         year: year ? Number(year) : undefined,
         cursor,
-        includeStaged: true,
       });
       if (unfiled) heading = t("unfiled");
       else if (starred) heading = t("starred");
