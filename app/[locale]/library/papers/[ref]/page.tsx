@@ -15,6 +15,7 @@ import {
 import { CopyBibtexButton } from "@/components/library/copy-bibtex";
 import { PaperActions } from "@/components/library/paper-actions";
 import { PaperCollections } from "@/components/library/paper-collections";
+import { PaperProjects } from "@/components/library/paper-projects";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Link } from "@/lib/i18n/navigation";
@@ -26,6 +27,7 @@ import {
   getPaper,
   getPaperFiles,
   getReferences,
+  listProjects,
 } from "@/lib/library/server";
 import {
   authorLine,
@@ -34,7 +36,12 @@ import {
   tagLabel,
   venueLine,
 } from "@/lib/library/format";
-import type { CollectionNode, PaperDetail } from "@/lib/library/types";
+import type { CollectionNode, PaperDetail, Project } from "@/lib/library/types";
+import {
+  buildCollectionSubtrees,
+  projectMembership,
+  type ProjectMembership,
+} from "@/lib/library/projects";
 
 export const dynamic = "force-dynamic";
 
@@ -135,15 +142,32 @@ export default async function PaperPage({ params }: { params: Promise<{ ref: str
     );
   }
 
-  const [files, annotations, collections, references, citations] = await Promise.all([
+  const [files, annotations, collections, projects, references, citations] = await Promise.all([
     getPaperFiles(paper.id).catch(() => []),
     getAnnotations(paper.id).catch(() => []),
     getCollectionTree().catch(() => [] as CollectionNode[]),
+    listProjects().catch(() => [] as Project[]),
     getReferences(paper.id).catch(() => ({ items: [], hasMore: false })),
     getCitations(paper.id).catch(() => ({ items: [], hasMore: false })),
   ]);
   const collectionMap = flatten(collections);
   const collectionNames = collectionMap;
+
+  // 项目归属 = 关联集合（含子集合）∪ 单独置顶；只有置顶的可从论文侧移除。
+  // 集合树用来把项目关联的父集合展开成子树，否则子集合里的论文会被误判为“未加入”。
+  const collectionSubtrees = buildCollectionSubtrees(collections);
+  const projectMemberships: ProjectMembership[] = [];
+  for (const project of projects) {
+    const membership = projectMembership(paper, project, collectionSubtrees);
+    if (membership.member) {
+      projectMemberships.push({
+        id: project.id,
+        name: project.name,
+        pinned: membership.pinned,
+        viaCollection: membership.viaCollection,
+      });
+    }
+  }
   // 文件/批注/参考文献/被引全空时，四张空卡片会占掉半屏——合并成一条紧凑清单
   const recordsEmpty =
     files.length === 0 &&
@@ -231,7 +255,8 @@ export default async function PaperPage({ params }: { params: Promise<{ ref: str
       <PaperActions
         paper={paper}
         hasFile={files.length > 0}
-        collections={[...collectionMap.entries()].map(([id, name]) => ({ id, name }))}
+        collections={collections}
+        projects={projects}
       />
 
       <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
@@ -456,6 +481,11 @@ export default async function PaperPage({ params }: { params: Promise<{ ref: str
               collectionIds={paper.collections}
               names={Object.fromEntries(collectionNames)}
             />
+          </section>
+
+          <section className="rounded-xl border bg-library-surface p-3 text-xs">
+            <h3 className="mb-2 text-sm font-semibold">{t("projects")}</h3>
+            <PaperProjects paperId={paper.id} memberships={projectMemberships} />
           </section>
 
           <section className="rounded-xl border bg-library-surface p-3 text-xs">

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { FolderTree, Plus } from "lucide-react";
+import { Plus, Target } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -74,14 +74,14 @@ export function ProjectsPanel({ projects }: { projects: Project[] }) {
       </section>
       <section className="rounded-xl border p-4">
         <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
-          <FolderTree className="size-4" /> {t("projects")}
+          <Target className="size-4" /> {t("projects")}
           <span className="text-xs font-normal tabular-nums text-muted-foreground">
             {projects.length}
           </span>
         </h3>
         {projects.length === 0 ? (
           <div className="flex flex-col items-center rounded-lg border border-dashed px-4 py-10 text-center">
-            <FolderTree className="size-5 text-muted-foreground/50" />
+            <Target className="size-5 text-muted-foreground/50" />
             <p className="mt-2 text-sm text-muted-foreground">{t("noProjects")}</p>
             <p className="mt-1 text-xs text-muted-foreground/70">{t("noProjectsHint")}</p>
           </div>
@@ -89,7 +89,7 @@ export function ProjectsPanel({ projects }: { projects: Project[] }) {
           <div className="divide-y text-sm">
             {projects.map((project) => (
               <div key={project.id} className="flex flex-wrap items-center gap-2 py-2.5 transition-colors hover:bg-accent/20">
-                <FolderTree className="size-4 shrink-0 text-muted-foreground" />
+                <Target className="size-4 shrink-0 text-muted-foreground" />
                 <Link
                   href={`/library?project=${project.id}`}
                   className="min-w-0 truncate font-medium hover:underline hover:underline-offset-2"

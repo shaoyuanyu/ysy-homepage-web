@@ -7,19 +7,28 @@ import {
   Check,
   FileText,
   FlaskConical,
+  FolderCog,
   MessageSquareText,
   Star,
   Upload,
   X,
 } from "lucide-react";
 
+import { useLibraryOrganize } from "@/components/library/library-organize-context";
+import { OrganizeDialog } from "@/components/library/organize-dialog";
+import { PaperMembershipLine } from "@/components/library/paper-membership-line";
 import { buttonVariants } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Link } from "@/lib/i18n/navigation";
 import { LibraryApiError, libraryApi } from "@/lib/library/client";
 import { authorLine, casLevel, ccfLevel, compactDate, venueShort } from "@/lib/library/format";
 import { READING_STATUSES } from "@/lib/library/constants";
-import type { CollectionNode, PaperSummary } from "@/lib/library/types";
+import {
+  buildCollectionSubtrees,
+  collectPaperMemberships,
+  flattenCollections,
+} from "@/lib/library/projects";
+import type { PaperSummary } from "@/lib/library/types";
 import { cn } from "@/lib/utils";
 
 /** 状态点：未读是空心圈（默认态不该抢眼），其余状态才用实色。 */
@@ -451,10 +460,28 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
   const [tag, setTag] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // 集合选项懒加载：只有真正打开批量操作时才请求，正常浏览列表不多一次往返。
-  const [collectionItems, setCollectionItems] = useState<
-    { value: string; label: string }[] | null
-  >(null);
+  // 归类弹窗的目标：批量条传当前选中的论文，行内入口传单篇。
+  const [organizePapers, setOrganizePapers] = useState<PaperSummary[] | null>(null);
+  const { collections, projects } = useLibraryOrganize();
+  const collectionSubtrees = useMemo(
+    () => buildCollectionSubtrees(collections),
+    [collections],
+  );
+  const collectionNames = useMemo(
+    () => new Map(flattenCollections(collections).map((option) => [option.id, option.name])),
+    [collections],
+  );
+  // 每行的集合/项目归属一次算好，避免 50 行各自重复遍历集合树。
+  const memberships = useMemo(
+    () =>
+      new Map(
+        items.map((paper) => [
+          paper.id,
+          collectPaperMemberships(paper, collectionNames, projects, collectionSubtrees),
+        ]),
+      ),
+    [items, collectionNames, projects, collectionSubtrees],
+  );
   const allSelected = items.length > 0 && selected.size === items.length;
   const allStarred =
     selected.size > 0 &&
@@ -469,30 +496,6 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
   useEffect(() => {
     setSelected(new Set());
   }, [items]);
-
-  useEffect(() => {
-    if (selected.size === 0 || collectionItems !== null) return;
-    let cancelled = false;
-    libraryApi<CollectionNode[]>("/collections/tree")
-      .then((tree) => {
-        if (cancelled) return;
-        const flat: { value: string; label: string }[] = [];
-        const walk = (nodes: CollectionNode[], depth: number) => {
-          for (const node of nodes) {
-            flat.push({ value: node.id, label: `${"— ".repeat(depth)}${node.name}` });
-            walk(node.children, depth + 1);
-          }
-        };
-        walk(tree, 0);
-        setCollectionItems(flat);
-      })
-      .catch(() => {
-        if (!cancelled) setCollectionItems([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selected.size, collectionItems]);
 
   const toggle = (id: string) => {
     setSelected((current) => {
@@ -603,28 +606,16 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
             <Star className={cn("size-3.5", allStarred && "fill-amber-400 text-amber-500")} />
             {t("starred")}
           </button>
-          <Select
-            items={collectionItems ?? []}
-            value={null}
-            onValueChange={(next) => {
-              if (next) void bulk({ addCollections: [next] });
-            }}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              setOrganizePapers(items.filter((paper) => selected.has(paper.id)))
+            }
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs transition-colors hover:bg-accent disabled:opacity-50"
           >
-            <SelectTrigger
-              disabled={busy || !collectionItems || collectionItems.length === 0}
-              aria-label={t("bulkAddCollection")}
-              className="h-7 w-fit gap-1 rounded-md border border-border bg-background px-2 py-0 text-xs shadow-none hover:bg-accent data-[size=default]:h-7 dark:bg-background dark:hover:bg-accent [&_svg]:!size-3.5"
-            >
-              <SelectValue placeholder={t("bulkAddCollection")} />
-            </SelectTrigger>
-            <SelectContent align="start" className="min-w-40">
-              {(collectionItems ?? []).map((item) => (
-                <SelectItem key={item.value} value={item.value} label={item.label}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            <FolderCog className="size-3.5" /> {t("organize")}
+          </button>
           <div className="flex min-w-0 items-center gap-1">
             <input
               value={tag}
@@ -716,6 +707,10 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
                         <StarToggle paper={paper} className="mt-px" />
                       </div>
                       <PaperMeta paper={paper} />
+                      <PaperMembershipLine
+                        memberships={memberships.get(paper.id) ?? []}
+                        onOrganize={() => setOrganizePapers([paper])}
+                      />
                     </div>
                   </div>
                 </td>
@@ -795,10 +790,24 @@ export function PaperTable({ items, filtered = false }: { items: PaperSummary[];
                 )}
               </div>
               <TopicTags tags={paper.tags} limit={2} linkable wrap className="mt-1.5" />
+              <PaperMembershipLine
+                memberships={memberships.get(paper.id) ?? []}
+                onOrganize={() => setOrganizePapers([paper])}
+              />
             </div>
           </li>
         ))}
       </ul>
+
+      <OrganizeDialog
+        open={organizePapers !== null}
+        onOpenChange={(open) => {
+          if (!open) setOrganizePapers(null);
+        }}
+        papers={organizePapers ?? []}
+        collections={collections}
+        projects={projects}
+      />
     </div>
   );
 }

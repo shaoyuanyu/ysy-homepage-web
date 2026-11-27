@@ -19,6 +19,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 
 import { buttonVariants } from "@/components/ui/button";
+import { LibraryOrganizeProvider } from "@/components/library/library-organize-context";
 import { Link } from "@/lib/i18n/navigation";
 import type {
   CollectionNode,
@@ -503,7 +504,11 @@ export function LibraryShell({ collections, views, projects, workspaces, tags, m
             </div>
           )}
 
-          <div className="min-w-0 flex-1">{children}</div>
+          <div className="min-w-0 flex-1">
+            <LibraryOrganizeProvider collections={collections} projects={projects}>
+              {children}
+            </LibraryOrganizeProvider>
+          </div>
         </div>
       </div>
     </QueryClientProvider>

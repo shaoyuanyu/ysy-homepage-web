@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { Loader2, Star, Upload } from "lucide-react";
+import { FolderCog, Loader2, Star, Upload } from "lucide-react";
 
+import { OrganizeDialog } from "@/components/library/organize-dialog";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -15,11 +16,11 @@ import {
   waitForJob,
 } from "@/lib/library/client";
 import { READING_STATUSES } from "@/lib/library/constants";
-import type { PaperDetail } from "@/lib/library/types";
+import type { CollectionNode, PaperDetail, Project } from "@/lib/library/types";
 import { cn } from "@/lib/utils";
 import { isImeComposing } from "@/lib/utils/ime";
 
-/** 属性选择器（状态/评分/集合）用无边框的 muted chip 风格：与列表筛选栏一致，
+/** 属性选择器（状态/评分）用无边框的 muted chip 风格：与列表筛选栏一致，
  *  文本框（标签路径）保留 2px 描边——「选择」和「输入」用两种视觉语言区分。
  *  弹层用 shadcn Select（Base UI），不再用系统原生下拉。 */
 const controlClass =
@@ -28,10 +29,12 @@ const controlClass =
 export function PaperActions({
   paper,
   collections,
+  projects,
   hasFile,
 }: {
   paper: PaperDetail;
-  collections: { id: string; name: string }[];
+  collections: CollectionNode[];
+  projects: Project[];
   hasFile: boolean;
 }) {
   const t = useTranslations("library");
@@ -41,6 +44,7 @@ export function PaperActions({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tag, setTag] = useState("");
+  const [organizeOpen, setOrganizeOpen] = useState(false);
   const [status, setStatus] = useState(paper.state.status);
   const [rating, setRating] = useState<number | null>(paper.state.rating);
 
@@ -93,11 +97,6 @@ export function PaperActions({
       label: "★".repeat(value),
     })),
   ];
-  const collectionItems = collections.map((collection) => ({
-    value: collection.id,
-    label: collection.name,
-  }));
-
   const addTag = () =>
     run(async () => {
       if (!tag.trim()) return;
@@ -106,16 +105,6 @@ export function PaperActions({
         body: JSON.stringify({ paths: [tag.trim()] }),
       });
       setTag("");
-    });
-
-  const addToCollection = (id: string) =>
-    run(async () => {
-      if (!id) return;
-      await libraryApi(`/papers/${paper.id}/collections`, {
-        method: "POST",
-        body: JSON.stringify({ collectionIds: [id] }),
-      });
-      setMessage(t("collectionAdded"));
     });
 
   const upload = (file: File) =>
@@ -191,29 +180,14 @@ export function PaperActions({
 
         <div className="flex flex-wrap items-center gap-1.5 sm:ml-auto">
           <span className="mr-0.5 hidden text-xs text-muted-foreground sm:inline">{t("organizeGroup")}</span>
-          <Select
-            items={collectionItems}
-            value={null}
-            onValueChange={(next) => {
-              if (next) void addToCollection(next);
-            }}
+          <Button
+            type="button"
+            variant="outline"
+            size="default"
+            onClick={() => setOrganizeOpen(true)}
           >
-            <SelectTrigger
-              disabled={busy}
-              className={cn(controlClass, "w-32")}
-              aria-label={t("addToCollection")}
-              title={t("addToCollection")}
-            >
-              <SelectValue placeholder={t("addToCollection")} />
-            </SelectTrigger>
-            <SelectContent align="start" className="min-w-40">
-              {collectionItems.map((item) => (
-                <SelectItem key={item.value} value={item.value} label={item.label}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            <FolderCog className="size-4" /> {t("organize")}
+          </Button>
           <input
             value={tag}
             onChange={(event) => setTag(event.target.value)}
@@ -256,6 +230,13 @@ export function PaperActions({
       </div>
       {message && <p className="mt-2 text-xs text-muted-foreground">{message}</p>}
       {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
+      <OrganizeDialog
+        open={organizeOpen}
+        onOpenChange={setOrganizeOpen}
+        papers={[paper]}
+        collections={collections}
+        projects={projects}
+      />
     </div>
   );
 }
