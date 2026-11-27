@@ -1625,6 +1625,97 @@ test.describe("Idea 速记（主人专属）", () => {
   });
 
   /**
+   * 输入法（IME）组字中的 Enter = 「确认候选词」，不能触发保存（2026-11-27 用户报障：
+   * 中文输入法候选词窗口里一回车，没打完的半句话就被存成一条速记）。
+   *
+   * 合成 keydown 覆盖两条判据，见 `lib/utils/ime.ts`：
+   * - `isComposing: true`（Chrome / Edge / Firefox）；
+   * - `keyCode: 229` + `isComposing: false`（Safari：compositionend 早于 keydown）。
+   * 后半段反向断言「组字结束后回车仍然保存」——不能为了修这个 bug 把回车保存关掉。
+   */
+  test("输入法组字中的 Enter 不保存速记，组字结束后回车仍保存", async ({ page }) => {
+    const code = new TOTP({ secret: totpSecret! }).generate();
+    await loginWithCode(page, code);
+    await gotoReady(page, "/ideas");
+
+    const marker = `E2E IME ${Date.now()}`;
+    const posts: string[] = [];
+    page.on("request", (req) => {
+      if (req.method() === "POST" && new URL(req.url()).pathname === "/api/ideas") {
+        posts.push(req.url());
+      }
+    });
+
+    let id: string | undefined;
+    try {
+      const box = page.getByLabel(/记录一个 Idea/);
+      await box.fill("zhinengti");
+
+      // 组字中（Chrome / Firefox）：isComposing = true
+      await box.evaluate((el) => {
+        el.focus();
+        el.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+            isComposing: true,
+          }),
+        );
+      });
+      // 组字中（Safari 形态）：到达时 compositionend 已经发过，isComposing 为 false，
+      // 只剩 keyCode 229
+      await box.evaluate((el) => {
+        const event = new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(event, "keyCode", { get: () => 229 });
+        el.dispatchEvent(event);
+      });
+
+      await page.waitForTimeout(300);
+      expect(posts, "候选词确认不应发 POST /api/ideas").toHaveLength(0);
+      await expect(box, "候选词确认不应清空输入框").toHaveValue("zhinengti");
+
+      // 组字结束后的正常回车：仍然保存（保留「回车保存」这条交互契约）
+      await box.fill(marker);
+      await box.press("Enter");
+      await expect(page.getByText(marker)).toBeVisible();
+      expect(posts, "正常回车应发一次 POST /api/ideas").toHaveLength(1);
+
+      const data = (await (await page.request.get("/api/ideas")).json()) as {
+        ideas: { id: string; content: string }[];
+      };
+      id = data.ideas.find((i) => i.content === marker)!.id;
+
+      // 行内编辑框同理：组字中的 Enter 不能结束编辑（否则这次编辑被静默丢掉）
+      const row = page.locator("li", { hasText: marker });
+      await row.getByRole("button", { name: "编辑" }).click();
+      const editBox = page.locator("textarea").last();
+      await editBox.fill("zhongwen");
+      await editBox.evaluate((el) => {
+        el.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+            isComposing: true,
+          }),
+        );
+      });
+      // 顶部输入框 + 行内编辑框：仍在编辑态
+      await expect(page.locator("textarea")).toHaveCount(2);
+      await expect(editBox).toHaveValue("zhongwen");
+      await page.locator("li").getByRole("button", { name: "取消" }).click();
+      await expect(page.locator("textarea")).toHaveCount(1);
+    } finally {
+      if (id) await page.request.delete(`/api/ideas/${id}`).catch(() => {});
+    }
+  });
+
+  /**
    * 失败回滚只能回滚**这一条**（2026-10-17 审计）。
    *
    * 旧实现每次操作前 `const prev = ideas` 保存整表快照，失败时 `setIdeas(prev)` ——

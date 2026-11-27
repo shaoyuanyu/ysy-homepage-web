@@ -22,6 +22,7 @@ import { signatureHtmlToMarkdown } from "@/lib/mail/signature-import";
 import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
 import { PREFERENCE_KEYS } from "@/lib/preferences/registry";
 import { useOwnerPreferences } from "@/lib/preferences/use-owner-preferences";
+import { isImeComposing } from "@/lib/utils/ime";
 import type { MailAccount } from "@/lib/mail/types";
 
 /**
@@ -117,6 +118,8 @@ export function SettingsClient() {
             inputMode="url"
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
+              // 输入法组字中的 Enter 是确认候选词，不能当「添加到白名单」（见 lib/utils/ime.ts）
+              if (isImeComposing(e.nativeEvent)) return;
               if (e.key === "Enter") {
                 e.preventDefault();
                 void addDomain();

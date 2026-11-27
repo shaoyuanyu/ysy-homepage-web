@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { BookUserIcon, XIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { isImeComposing } from "@/lib/utils/ime";
 import { fetchWithTimeout } from "@/lib/mail/fetch-timeout";
 import { formatMailbox, parseMailbox, splitAddressList } from "@/lib/mail/address";
 import { Input } from "@/components/ui/input";
@@ -165,6 +166,9 @@ export function RecipientInput({
 
   const onKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
+      // 组字中（候选词窗口）的 Enter / Tab / 方向键都归输入法：不能提交地址，
+      // 也不该移动联想高亮。判据见 lib/utils/ime.ts
+      if (isImeComposing(e.nativeEvent)) return;
       if (open && suggestions.length > 0) {
         if (e.key === "ArrowDown") {
           e.preventDefault();

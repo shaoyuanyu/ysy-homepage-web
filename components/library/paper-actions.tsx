@@ -17,6 +17,7 @@ import {
 import { READING_STATUSES } from "@/lib/library/constants";
 import type { PaperDetail } from "@/lib/library/types";
 import { cn } from "@/lib/utils";
+import { isImeComposing } from "@/lib/utils/ime";
 
 /** 属性选择器（状态/评分/集合）用无边框的 muted chip 风格：与列表筛选栏一致，
  *  文本框（标签路径）保留 2px 描边——「选择」和「输入」用两种视觉语言区分。
@@ -217,6 +218,9 @@ export function PaperActions({
             value={tag}
             onChange={(event) => setTag(event.target.value)}
             onKeyDown={(event) => {
+              // 组字中的 Enter 属于输入法（确认候选词），不能顺带添加标签——
+              // 中文标签很常见，判据见 lib/utils/ime.ts
+              if (isImeComposing(event.nativeEvent)) return;
               if (event.key === "Enter") void addTag();
             }}
             placeholder={t("addTagPlaceholder")}

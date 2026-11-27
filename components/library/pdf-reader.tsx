@@ -23,6 +23,7 @@ import { Link } from "@/lib/i18n/navigation";
 import { libraryApi, patchJson } from "@/lib/library/client";
 import type { Annotation, FulltextSearch, PaperDetail, PdfFile } from "@/lib/library/types";
 import { cn } from "@/lib/utils";
+import { isImeComposing } from "@/lib/utils/ime";
 
 type Tab = "annotations" | "search";
 
@@ -451,6 +452,8 @@ export function PdfReader({
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   onKeyDown={(event) => {
+                    // 中文检索词很常见：组字中按 Enter 是选候选词，不是发起搜索
+                    if (isImeComposing(event.nativeEvent)) return;
                     if (event.key === "Enter") void runSearch();
                   }}
                   placeholder={t("searchInPdf")}

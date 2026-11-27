@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { isImeComposing } from "@/lib/utils/ime";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -230,6 +231,10 @@ export function IdeasManager({ initialIdeas }: { initialIdeas: Idea[] }) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
+              // ⚠ 输入法候选词窗口里的 Enter 是「确认候选词」，不是「保存」
+              //   （判据与背景见 lib/utils/ime.ts）。先于下面的 Enter 分支返回，
+              //   也不 preventDefault——让输入法把这次按键吃掉。
+              if (isImeComposing(e.nativeEvent)) return;
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 void handleCreate();
@@ -342,6 +347,9 @@ export function IdeasManager({ initialIdeas }: { initialIdeas: Idea[] }) {
                     value={editingText}
                     onChange={(e) => setEditingText(e.target.value)}
                     onKeyDown={(e) => {
+                      // 组字中的 Enter / Escape 都归输入法：前者确认候选词、后者收起
+                      // 候选词窗口，不能顺带保存或取消编辑（见 lib/utils/ime.ts）
+                      if (isImeComposing(e.nativeEvent)) return;
                       if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();
                         void handleSaveEdit(idea);
